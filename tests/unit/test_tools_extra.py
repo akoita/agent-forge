@@ -182,6 +182,46 @@ class TestSearchCodebase:
         call_args = sandbox.exec.call_args[0][0]
         assert "--glob" in call_args
 
+    @pytest.mark.asyncio
+    async def test_rg_error(self) -> None:
+        """Exit code 2 = regex/rg error (not 'no matches')."""
+        sandbox = AsyncMock()
+        sandbox.exec.return_value = ExecResult(exit_code=2, stdout="", stderr="regex parse error")
+
+        tool = SearchCodebaseTool()
+        result = await tool.execute({"pattern": "[invalid"}, sandbox)
+
+        assert result.exit_code == 2
+        assert "regex parse error" in (result.error or "")
+
+    @pytest.mark.asyncio
+    async def test_malformed_json_lines(self) -> None:
+        """Malformed JSON lines in rg output should be skipped gracefully."""
+        sandbox = AsyncMock()
+        sandbox.exec.return_value = ExecResult(
+            exit_code=0,
+            stdout=f"NOT_JSON\n{_RG_MATCH_LINE}\nALSO_NOT_JSON\n",
+            stderr="",
+        )
+
+        tool = SearchCodebaseTool()
+        result = await tool.execute({"pattern": "def foo"}, sandbox)
+
+        assert result.exit_code == 0
+        matches = json.loads(result.output)
+        assert len(matches) == 1  # Only the valid match
+
+    @pytest.mark.asyncio
+    async def test_max_results_passed(self) -> None:
+        sandbox = AsyncMock()
+        sandbox.exec.return_value = ExecResult(exit_code=1, stdout="", stderr="")
+
+        tool = SearchCodebaseTool()
+        await tool.execute({"pattern": "test", "max_results": 5}, sandbox)
+
+        call_args = sandbox.exec.call_args[0][0]
+        assert "--max-count 5" in call_args
+
 
 # ---------------------------------------------------------------------------
 # EditFileTool

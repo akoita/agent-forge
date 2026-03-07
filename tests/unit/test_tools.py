@@ -215,6 +215,19 @@ class TestWriteFile:
         assert result.exit_code == 1
         assert "must be within" in (result.error or "")
 
+    @pytest.mark.asyncio
+    async def test_write_mkdir_failure(self) -> None:
+        sandbox = AsyncMock()
+        sandbox.exec.return_value = ExecResult(
+            exit_code=1, stdout="", stderr="read-only file system"
+        )
+
+        tool = WriteFileTool()
+        result = await tool.execute({"path": "deep/nested/file.py", "content": "code"}, sandbox)
+
+        assert result.exit_code == 1
+        assert "read-only" in (result.error or "")
+
 
 # ---------------------------------------------------------------------------
 # ListDirectoryTool
