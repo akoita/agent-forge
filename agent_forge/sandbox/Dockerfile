@@ -1,6 +1,3 @@
-# Agent Forge — Sandbox Base Image
-# Pre-built image with common development tools for sandboxed tool execution.
-
 FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -14,7 +11,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install common Python dev tools
 RUN pip install --no-cache-dir \
-    black \
     ruff \
     pytest \
     mypy
