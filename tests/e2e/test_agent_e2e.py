@@ -310,9 +310,10 @@ class TestAgentPersistence:
     @pytest.mark.asyncio
     async def test_agent_persistence_round_trip(
         self, llm: GeminiProvider, tools: ToolRegistry, sandbox: DockerSandbox, workspace: Path,
-        tmp_path: Path,
     ) -> None:
         """save_run + load_run produces identical state."""
+        import tempfile
+
         run = _make_run("Read hello.py", workspace)
         await sandbox.start(str(workspace))
         try:
@@ -321,10 +322,13 @@ class TestAgentPersistence:
             await sandbox.stop()
             await llm.close()
 
-        # Save and reload
-        persist_dir = tmp_path / "persist"
-        save_run(result, base_dir=persist_dir)
-        loaded = load_run(result.id, base_dir=persist_dir)
+        _skip_if_rate_limited(result)
+
+        # Use a fresh temp dir for persistence (not tmp_path, which may
+        # have ownership changes from the Docker sandbox bind-mount).
+        with tempfile.TemporaryDirectory() as persist_dir:
+            save_run(result, base_dir=persist_dir)
+            loaded = load_run(result.id, base_dir=persist_dir)
 
         assert loaded.id == result.id
         assert loaded.task == result.task
@@ -333,3 +337,4 @@ class TestAgentPersistence:
         assert loaded.total_tokens.total_tokens == result.total_tokens.total_tokens
         assert len(loaded.messages) == len(result.messages)
         assert len(loaded.tool_invocations) == len(result.tool_invocations)
+
