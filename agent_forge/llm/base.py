@@ -84,7 +84,7 @@ class LLMResponse:
 class LLMConfig:
     """Configuration for a single LLM request."""
 
-    model: str = "gemini-2.0-flash"
+    model: str = "gemini-3.1-flash-lite"
     temperature: float = 0.0
     max_tokens: int = 4096
     top_p: float = 1.0

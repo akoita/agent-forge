@@ -166,7 +166,7 @@ class TestRunFlagsE2E:
                 "--task", "Say hello",
                 "--repo", str(sample_repo),
                 "--max-iterations", "1",
-                "--model", "gemini-2.0-flash",
+                "--model", "gemini-3.1-flash-lite",
             ],
         )
         assert result.exit_code in (0, 1), f"Unexpected exit: {result.output}"

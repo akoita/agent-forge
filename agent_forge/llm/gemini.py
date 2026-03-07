@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -38,11 +39,12 @@ from agent_forge.llm.errors import (
 logger = logging.getLogger(__name__)
 
 _GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
-_DEFAULT_MODEL = "gemini-2.0-flash"
+_DEFAULT_MODEL = "gemini-3.1-flash-lite"
 
 # Retry config per spec § 7.2
-_MAX_RETRIES = 3
-_BACKOFF_BASE = 1.0  # seconds
+_MAX_RETRIES = 5
+_BACKOFF_BASE = 2.0  # seconds
+_BACKOFF_MAX = 30.0  # cap delay at 30s
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
 
 
@@ -276,6 +278,23 @@ class GeminiProvider(LLMProvider):
     # HTTP + Retry
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _compute_delay(attempt: int, resp: httpx.Response | None = None) -> float:
+        """Compute the retry delay, respecting Retry-After if present."""
+        if resp is not None:
+            retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+            if retry_after:
+                try:
+                    parsed: float = float(retry_after)
+                    return min(parsed, _BACKOFF_MAX)
+                except ValueError:
+                    pass
+        # Exponential backoff with jitter
+        delay: float = _BACKOFF_BASE * (2**attempt)
+        jitter = random.uniform(0, delay * 0.25)  # noqa: S311
+        capped: float = min(delay + jitter, _BACKOFF_MAX)
+        return capped
+
     async def _post_with_retry(
         self,
         url: str,
@@ -296,7 +315,7 @@ class GeminiProvider(LLMProvider):
                 )
                 if resp.status_code in _RETRYABLE_STATUS_CODES:
                     if attempt < _MAX_RETRIES:
-                        delay = _BACKOFF_BASE * (2**attempt)
+                        delay = self._compute_delay(attempt, resp)
                         logger.warning(
                             "Gemini API returned %d, retrying in %.1fs (attempt %d/%d)",
                             resp.status_code,

@@ -27,7 +27,7 @@ from agent_forge.llm.factory import create_provider
 from agent_forge.llm.gemini import GeminiProvider
 
 _GEMINI_URL = "https://generativelanguage.googleapis.com"
-_MODEL = "gemini-2.0-flash"
+_MODEL = "gemini-3.1-flash-lite"
 _GENERATE_URL = f"{_GEMINI_URL}/v1beta/models/{_MODEL}:generateContent"
 _STREAM_URL = f"{_GEMINI_URL}/v1beta/models/{_MODEL}:streamGenerateContent"
 
@@ -204,7 +204,7 @@ class TestGeminiErrors:
     @respx.mock
     @pytest.mark.asyncio
     async def test_rate_limit_exhausts_retries(self) -> None:
-        # All 4 attempts (1 initial + 3 retries) return 429
+        # All 6 attempts (1 initial + 5 retries) return 429
         respx.post(_GENERATE_URL).respond(429, json={"error": "rate limited"})
 
         provider = GeminiProvider(api_key="test-key")
@@ -214,8 +214,8 @@ class TestGeminiErrors:
         with pytest.raises(LLMRateLimitError, match="rate limit"):
             await provider.complete(messages, config=config)
 
-        # Should have made 4 attempts
-        assert len(respx.calls) == 4
+        # Should have made 6 attempts (1 initial + 5 retries)
+        assert len(respx.calls) == 6
 
     @respx.mock
     @pytest.mark.asyncio

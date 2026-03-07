@@ -94,7 +94,7 @@ Create an `agent-forge.toml` in your project root:
 [agent]
 max_iterations = 25
 default_provider = "gemini"
-default_model = "gemini-2.0-flash"
+default_model = "gemini-3.1-flash-lite"
 
 [sandbox]
 memory_limit = "512m"
