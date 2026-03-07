@@ -6,8 +6,8 @@ setup:                     ## Install dependencies
 build-sandbox:             ## Build the sandbox Docker image
 	docker build -t agent-forge-sandbox:latest -f agent_forge/sandbox/Dockerfile .
 
-test:                      ## Run all tests
-	pytest --cov=agent_forge --cov-report=term-missing
+test:                      ## Run all tests (excludes integration — use test-integration)
+	pytest --cov=agent_forge --cov-report=term-missing -m "not integration"
 
 test-unit:                 ## Run unit tests only
 	pytest tests/unit -v
