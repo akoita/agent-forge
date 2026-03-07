@@ -101,7 +101,7 @@ class GeminiProvider(LLMProvider):
                 params=params,
                 timeout=httpx.Timeout(cfg.timeout_seconds),
             ) as response:
-                self._check_status(response.status_code)
+                self._check_status(response)
                 async for line in response.aiter_lines():
                     if not line.startswith("data: "):
                         continue
@@ -188,14 +188,16 @@ class GeminiProvider(LLMProvider):
             elif msg.tool_calls:
                 # Assistant with tool calls → functionCall parts
                 for tc in msg.tool_calls:
-                    parts.append(
-                        {
-                            "functionCall": {
-                                "name": tc.name,
-                                "args": tc.arguments,
-                            }
+                    part: dict[str, Any] = {
+                        "functionCall": {
+                            "name": tc.name,
+                            "args": tc.arguments,
                         }
-                    )
+                    }
+                    # Gemini 3.x thought signatures — must be preserved
+                    if tc.thought_signature:
+                        part["thoughtSignature"] = tc.thought_signature
+                    parts.append(part)
                 if msg.content:
                     parts.append({"text": msg.content})
             elif msg.content:
@@ -238,6 +240,7 @@ class GeminiProvider(LLMProvider):
                         id=str(uuid.uuid4()),
                         name=fc.get("name", ""),
                         arguments=fc.get("args", {}),
+                        thought_signature=part.get("thoughtSignature"),
                     )
                 )
 
@@ -334,7 +337,7 @@ class GeminiProvider(LLMProvider):
                         f"Gemini API returned {resp.status_code} after {_MAX_RETRIES} retries"
                     )
 
-                self._check_status(resp.status_code)
+                self._check_status(resp)
 
                 try:
                     return resp.json()  # type: ignore[no-any-return]
@@ -369,11 +372,21 @@ class GeminiProvider(LLMProvider):
         raise LLMResponseError(msg)  # pragma: no cover
 
     @staticmethod
-    def _check_status(status_code: int) -> None:
+    def _check_status(resp: httpx.Response) -> None:
         """Raise specific errors for non-retryable status codes."""
+        status_code = resp.status_code
         if status_code == 401 or status_code == 403:  # noqa: PLR1714
             raise LLMAuthError(
                 f"Gemini authentication failed (HTTP {status_code}). Check your GEMINI_API_KEY."
             )
         if status_code >= 400:
-            raise LLMResponseError(f"Gemini API error (HTTP {status_code})")
+            # Include response body for debugging
+            try:
+                body = resp.json()
+                detail = body.get("error", {}).get("message", resp.text[:500])
+            except Exception:  # noqa: BLE001
+                detail = resp.text[:500]
+            logger.error("Gemini API error (HTTP %d): %s", status_code, detail)
+            raise LLMResponseError(
+                f"Gemini API error (HTTP {status_code}): {detail}"
+            )

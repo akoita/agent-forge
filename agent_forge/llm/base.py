@@ -31,6 +31,7 @@ class ToolCall:
     id: str
     name: str
     arguments: dict[str, object]
+    thought_signature: str | None = None  # Gemini 3.x thought signatures
 
 
 @dataclass
