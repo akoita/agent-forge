@@ -9,8 +9,18 @@ Public API
 .. autofunction:: get_trace_context
 .. autofunction:: clear_trace_context
 .. autofunction:: update_iteration
+.. autoclass:: CostTracker
+.. autoclass:: CostEntry
+.. autofunction:: print_run_summary
+.. autofunction:: save_summary
 """
 
+from agent_forge.observability.cost import (
+    CostEntry,
+    CostTracker,
+    print_run_summary,
+    save_summary,
+)
 from agent_forge.observability.logger import get_logger, setup_logging
 from agent_forge.observability.tracing import (
     TraceContext,
@@ -22,8 +32,12 @@ from agent_forge.observability.tracing import (
 
 __all__ = [
     "clear_trace_context",
+    "CostEntry",
+    "CostTracker",
     "get_logger",
     "get_trace_context",
+    "print_run_summary",
+    "save_summary",
     "set_trace_context",
     "setup_logging",
     "TraceContext",

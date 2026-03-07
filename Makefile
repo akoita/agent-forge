@@ -1,4 +1,7 @@
-.PHONY: setup build-sandbox test test-unit test-integration test-e2e lint format run clean
+.PHONY: setup build-sandbox test test-unit test-integration test-e2e lint format run clean update-prices
+
+update-prices:             ## Refresh vendored model pricing from LiteLLM
+	python scripts/update_prices.py
 
 setup:                     ## Install dependencies
 	pip install -e ".[dev,redis]"
