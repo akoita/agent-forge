@@ -88,10 +88,22 @@ class DockerSandbox(Sandbox):
         if not cfg.network_enabled:
             run_kwargs["network_mode"] = "none"
 
+        # Start as root so we can fix bind-mount permissions, then exec as 'agent'
+        run_kwargs["user"] = "root"
+
         try:
             self._container = await asyncio.to_thread(
                 lambda: self._client.containers.run(**run_kwargs)
             )
+
+            # Fix ownership of bind-mounted workspace (host UID may differ
+            # from container's 'agent' user).
+            await asyncio.to_thread(
+                self._container.exec_run,  # type: ignore[union-attr]
+                "chown -R agent:agent /workspace",
+                user="root",
+            )
+
             self._state = SandboxState.RUNNING
             logger.info(
                 "Sandbox started: container=%s, image=%s",
@@ -153,6 +165,7 @@ class DockerSandbox(Sandbox):
                     self._container.exec_run,
                     ["bash", "-c", command],
                     demux=True,
+                    user="agent",
                 ),
                 timeout=timeout_seconds,
             )
