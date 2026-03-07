@@ -3,6 +3,7 @@
 > A sandboxed AI coding agent runtime that autonomously modifies codebases through LLM-driven reasoning and isolated tool execution.
 
 [![CI](https://github.com/akoita/agent-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/akoita/agent-forge/actions/workflows/ci.yml)
+[![E2E Tests](https://github.com/akoita/agent-forge/actions/workflows/e2e-tests.yml/badge.svg)](https://github.com/akoita/agent-forge/actions/workflows/e2e-tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
@@ -13,36 +14,56 @@
 
 Agent Forge implements the **ReAct** (Reasoning + Acting) pattern: an agent receives a coding task, iteratively reasons about what to do via an LLM, invokes tools inside **ephemeral Docker containers**, and loops until the task is complete.
 
-```
-┌─────────────────────────────────────────────────┐
-│                   Agent Forge                    │
-├─────────────────┬───────────────────────────────┤
-│   Agent Core    │        Tool Registry          │
-│  (ReAct loop)   │  (file ops, shell, search)    │
-├─────────────────┼───────────────────────────────┤
-│   LLM Client    │     Sandbox Runtime           │
-│ (Gemini primary │  (Docker container per task)  │
-│  + OpenAI/etc.) │                               │
-├─────────────────┴───────────────────────────────┤
-│              Orchestration Layer                 │
-│  (task queue, state machine, event streaming)    │
-├─────────────────────────────────────────────────┤
-│              Observability                       │
-│  (structured logs, trace IDs, token tracking)    │
-└─────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    CLI["CLI<br/>(Click commands)"]
+    CLI -->|"agent-forge run"| Core
+
+    subgraph Core["Agent Core"]
+        Loop["ReAct Loop<br/>Observe → Reason → Act"]
+        State["State Machine<br/>(PENDING → RUNNING → ...)"]
+        Persist["Persistence<br/>(save/load runs)"]
+    end
+
+    Loop -->|"prompt + tools"| LLM
+    LLM -->|"function calls"| Loop
+    Loop -->|"execute tool"| Sandbox
+    Sandbox -->|"result"| Loop
+
+    subgraph LLM["LLM Provider"]
+        Gemini["Gemini 3.1<br/>(primary)"]
+    end
+
+    subgraph Sandbox["Docker Sandbox"]
+        Docker["Ephemeral Container<br/>(per-run, isolated)"]
+    end
+
+    subgraph Tools["Tool Registry"]
+        read_file
+        write_file
+        edit_file
+        list_directory
+        run_shell
+        search_codebase
+    end
+
+    Sandbox ---|"workspace<br/>bind-mount"| Tools
 ```
 
 ### Key Features
 
 - **🔒 Sandboxed Execution** — Every tool invocation runs in an ephemeral Docker container with resource limits — never on the host.
-- **🔌 Multi-Provider LLM** — Gemini (primary), OpenAI, and Anthropic via a unified adapter layer.
-- **📊 Production Observability** — Structured JSON logs, trace IDs, token/cost tracking on every run.
-- **⚡ Queue-Based Scaling** — Redis task queue for concurrent, isolated agent runs.
-- **🧩 Extensible** — Add new tools or LLM providers by implementing a simple interface.
+- **🧠 Gemini 3.1 Ready** — Full support for thought signatures, exponential backoff with jitter, and `Retry-After` header.
+- **🔌 Extensible LLM Layer** — Gemini adapter built, OpenAI and Anthropic interfaces defined for easy addition.
+- **📊 Observability** — Structured JSON logs, trace IDs, token/cost tracking on every run.
+- **💾 Run Persistence** — Every agent run is saved to disk with full conversation history and tool invocations.
+- **🧩 Extensible Tools** — Add new tools by implementing a simple `Tool` ABC and registering them.
 
 ---
 
 ## Quick Start
+
+> ✅ _Verified end-to-end with `gemini-3.1-flash-lite-preview` on 2026-03-07 — 17/17 E2E tests passing._
 
 ### Prerequisites
 
@@ -80,7 +101,14 @@ agent-forge status <run-id>
 
 # List recent runs
 agent-forge list
+
+# View resolved configuration
+agent-forge config
 ```
+
+### Demo
+
+<!-- demo recording will be embedded here -->
 
 ---
 
@@ -102,7 +130,7 @@ timeout_seconds = 300
 network_enabled = false
 ```
 
-See the [full specification](spec.md) for all configuration options.
+See the [Configuration Guide](docs/configuration.md) for full reference.
 
 ---
 
@@ -118,6 +146,9 @@ make test-unit
 # Run all tests (requires Docker)
 make test
 
+# Run e2e tests (requires GEMINI_API_KEY + Docker)
+make test-e2e
+
 # Lint & format
 make lint
 make format
@@ -127,12 +158,14 @@ make format
 
 ```
 agent_forge/
+├── agent/         # ReAct loop, state machine, prompts, persistence
 ├── llm/           # LLM provider adapters (Gemini, OpenAI, Anthropic)
 ├── tools/         # Built-in tools (read_file, write_file, run_shell, etc.)
 ├── sandbox/       # Docker sandbox management
-├── agent/         # ReAct loop, state machine, prompts
 ├── orchestration/ # Task queue, event bus, workers
-└── observability/ # Structured logging, tracing, cost tracking
+├── observability/ # Structured logging, tracing, cost tracking
+├── cli.py         # Click-based CLI entry point
+└── config.py      # Layered configuration system
 ```
 
 ---
@@ -151,8 +184,8 @@ agent_forge/
 
 | Phase | Focus                                                             | Status         |
 | ----- | ----------------------------------------------------------------- | -------------- |
-| **1** | Core Agent MVP — ReAct loop + Docker sandbox + CLI                | 🚧 In Progress |
-| **2** | Production Hardening — Observability, multi-provider, Redis queue | ⬜ Planned     |
+| **1** | Core Agent MVP — ReAct loop + Docker sandbox + CLI                | ✅ Complete    |
+| **2** | Production Hardening — Observability, multi-provider, Redis queue | 🚧 In Progress |
 | **3** | Git-Aware Agent & Plugin System                                   | ⬜ Planned     |
 | **4** | Web Dashboard & REST API                                          | ⬜ Planned     |
 | **5** | Multi-Agent Collaboration                                         | ⬜ Planned     |
