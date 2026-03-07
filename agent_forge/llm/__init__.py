@@ -1,5 +1,6 @@
 """LLM client layer — provider adapters and data models."""
 
+from agent_forge.llm.anthropic import AnthropicProvider
 from agent_forge.llm.base import (
     LLMConfig,
     LLMProvider,
@@ -21,9 +22,11 @@ from agent_forge.llm.errors import (
 )
 from agent_forge.llm.factory import create_provider
 from agent_forge.llm.gemini import GeminiProvider
+from agent_forge.llm.openai import OpenAIProvider
 
 __all__ = [
     "AgentForgeError",
+    "AnthropicProvider",
     "GeminiProvider",
     "LLMAuthError",
     "LLMConfig",
@@ -35,6 +38,7 @@ __all__ = [
     "LLMResponseError",
     "LLMTimeoutError",
     "Message",
+    "OpenAIProvider",
     "Role",
     "TokenUsage",
     "ToolCall",
