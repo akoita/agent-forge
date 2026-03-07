@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from agent_forge.llm.anthropic import AnthropicProvider
 from agent_forge.llm.gemini import GeminiProvider
+from agent_forge.llm.openai import OpenAIProvider
 
 if TYPE_CHECKING:
     from agent_forge.llm.base import LLMProvider
 
-_PROVIDERS: dict[str, type[GeminiProvider]] = {
+_PROVIDERS: dict[str, type[LLMProvider]] = {
     "gemini": GeminiProvider,
+    "openai": OpenAIProvider,
+    "anthropic": AnthropicProvider,
 }
 
 
@@ -22,7 +26,8 @@ def create_provider(
     """Create an LLM provider instance by name.
 
     Args:
-        name: Provider name (e.g. ``"gemini"``).
+        name: Provider name (e.g. ``"gemini"``, ``"openai"``,
+            ``"anthropic"``).
         api_key: API key for the provider.
         **kwargs: Additional keyword arguments forwarded to the provider
             constructor (e.g. ``base_url``).
@@ -39,4 +44,4 @@ def create_provider(
         msg = f"Unknown LLM provider '{name}'. Available: {available}"
         raise ValueError(msg)
 
-    return provider_cls(api_key=api_key, **kwargs)  # type: ignore[arg-type]
+    return provider_cls(api_key=api_key, **kwargs)  # type: ignore[call-arg]
