@@ -7,7 +7,9 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from agent_forge.agent.models import AgentRun, RunState, ToolInvocation
+from agent_forge.agent.persistence import save_run
 from agent_forge.agent.prompts import build_system_prompt
+from agent_forge.agent.state import transition
 from agent_forge.llm.base import LLMConfig, Message, Role
 
 if TYPE_CHECKING:
@@ -32,7 +34,7 @@ async def react_loop(
     - Token budget exceeded (→ TIMEOUT)
     - Unrecoverable error (→ FAILED)
     """
-    run.state = RunState.RUNNING
+    transition(run, RunState.RUNNING)
 
     # Build system prompt from task + tool definitions
     system_content = run.config.system_prompt or build_system_prompt(
@@ -63,14 +65,14 @@ async def react_loop(
             # 2. CHECK BUDGET
             if run.total_tokens.total_tokens > run.config.max_tokens_per_run:
                 logger.warning("Token budget exceeded: %d", run.total_tokens.total_tokens)
-                run.state = RunState.TIMEOUT
+                transition(run, RunState.TIMEOUT)
                 run.error = "Token budget exceeded"
                 break
 
             # 3. CHECK COMPLETION
             if response.finish_reason == "stop" and not response.tool_calls:
                 run.messages.append(Message(role=Role.ASSISTANT, content=response.content or ""))
-                run.state = RunState.COMPLETED
+                transition(run, RunState.COMPLETED)
                 break
 
             # 4. ACT — execute each tool call
@@ -88,15 +90,16 @@ async def react_loop(
         else:
             # Loop exhausted without breaking → max iterations
             logger.warning("Max iterations reached: %d", run.config.max_iterations)
-            run.state = RunState.TIMEOUT
+            transition(run, RunState.TIMEOUT)
             run.error = "Max iterations reached"
 
     except Exception as exc:
         logger.exception("Unrecoverable error during agent run")
-        run.state = RunState.FAILED
+        transition(run, RunState.FAILED)
         run.error = str(exc)
 
     run.completed_at = datetime.now(UTC)
+    save_run(run)
     return run
 
 

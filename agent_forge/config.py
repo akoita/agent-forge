@@ -25,6 +25,7 @@ PROJECT_CONFIG_FILENAME = "agent-forge.toml"
 USER_CONFIG_DIR = Path.home() / ".agent-forge"
 USER_CONFIG_PATH = USER_CONFIG_DIR / "config.toml"
 ENV_PREFIX = "AGENT_FORGE"
+DEFAULT_SANDBOX_IMAGE = "agent-forge-sandbox:latest"
 
 
 class AgentSettings(BaseModel):
@@ -41,7 +42,7 @@ class AgentSettings(BaseModel):
 class SandboxSettings(BaseModel):
     """Settings for the Docker sandbox runtime."""
 
-    image: str = "agent-forge-sandbox:latest"
+    image: str = DEFAULT_SANDBOX_IMAGE
     cpu_limit: float = 1.0
     memory_limit: str = "512m"
     timeout_seconds: int = 300
