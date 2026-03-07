@@ -2,6 +2,7 @@
 
 > A sandboxed AI coding agent runtime that autonomously modifies codebases through LLM-driven reasoning and isolated tool execution.
 
+[![CI](https://github.com/akoita/agent-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/akoita/agent-forge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
@@ -144,15 +145,15 @@ agent_forge/
 
 ## Roadmap
 
-| Phase | Focus | Status |
-|-------|-------|--------|
-| **1** | Core Agent MVP — ReAct loop + Docker sandbox + CLI | 🚧 In Progress |
-| **2** | Production Hardening — Observability, multi-provider, Redis queue | ⬜ Planned |
-| **3** | Git-Aware Agent & Plugin System | ⬜ Planned |
-| **4** | Web Dashboard & REST API | ⬜ Planned |
-| **5** | Multi-Agent Collaboration | ⬜ Planned |
-| **6** | Advanced Isolation & Scaling (microVMs, K8s) | ⬜ Planned |
-| **7** | Platform & Ecosystem (MCP, marketplace, IDE plugins) | ⬜ Planned |
+| Phase | Focus                                                             | Status         |
+| ----- | ----------------------------------------------------------------- | -------------- |
+| **1** | Core Agent MVP — ReAct loop + Docker sandbox + CLI                | 🚧 In Progress |
+| **2** | Production Hardening — Observability, multi-provider, Redis queue | ⬜ Planned     |
+| **3** | Git-Aware Agent & Plugin System                                   | ⬜ Planned     |
+| **4** | Web Dashboard & REST API                                          | ⬜ Planned     |
+| **5** | Multi-Agent Collaboration                                         | ⬜ Planned     |
+| **6** | Advanced Isolation & Scaling (microVMs, K8s)                      | ⬜ Planned     |
+| **7** | Platform & Ecosystem (MCP, marketplace, IDE plugins)              | ⬜ Planned     |
 
 See [spec.md § Roadmap](spec.md#12-roadmap) for detailed milestones.
 
