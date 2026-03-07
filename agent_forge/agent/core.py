@@ -10,7 +10,14 @@ from agent_forge.agent.persistence import save_run
 from agent_forge.agent.prompts import build_system_prompt
 from agent_forge.agent.state import transition
 from agent_forge.llm.base import LLMConfig, Message, Role
-from agent_forge.observability import get_logger, set_trace_context, update_iteration
+from agent_forge.observability import (
+    CostTracker,
+    get_logger,
+    print_run_summary,
+    save_summary,
+    set_trace_context,
+    update_iteration,
+)
 
 if TYPE_CHECKING:
     from agent_forge.llm.base import LLMProvider
@@ -36,6 +43,7 @@ async def react_loop(
     """
     transition(run, RunState.RUNNING)
     set_trace_context(run.id)
+    tracker = CostTracker(run_id=run.id)
 
     # Build system prompt from task + tool definitions
     system_content = run.config.system_prompt or build_system_prompt(
@@ -67,6 +75,7 @@ async def react_loop(
                 config=llm_config,
             )
             run.total_tokens = run.total_tokens + response.usage
+            tracker.record(response.usage, response.model)
 
             # 2. CHECK BUDGET
             if run.total_tokens.total_tokens > run.config.max_tokens_per_run:
@@ -112,6 +121,8 @@ async def react_loop(
         run.error = str(exc)
 
     run.completed_at = datetime.now(UTC)
+    print_run_summary(run, tracker)
+    save_summary(run, tracker)
     save_run(run)
     return run
 
