@@ -96,8 +96,15 @@ class TestToolRegistry:
         registry = create_default_registry()
         defs = registry.list_definitions()
         names = {d.name for d in defs}
-        assert names == {"read_file", "write_file", "list_directory"}
-        assert len(registry) == 3
+        assert names == {
+            "read_file",
+            "write_file",
+            "edit_file",
+            "list_directory",
+            "run_shell",
+            "search_codebase",
+        }
+        assert len(registry) == 6
 
     def test_to_definition(self) -> None:
         tool = ReadFileTool()
