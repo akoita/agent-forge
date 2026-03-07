@@ -139,7 +139,11 @@ agent_forge/
 
 ## Documentation
 
-- **[spec.md](spec.md)** — Full technical specification with interface contracts, data models, and architecture details.
+- **[Architecture](docs/architecture.md)** — System design, layer responsibilities, ReAct loop sequence.
+- **[Configuration](docs/configuration.md)** — Full config reference (TOML, env vars, CLI flags, precedence).
+- **[Testing](docs/testing.md)** — Running tests, writing new ones, CI workflows, coverage.
+- **[Extending](docs/extending.md)** — Adding tools, LLM providers, custom sandbox configs.
+- **[Technical Spec](spec.md)** — Full specification with interface contracts and data models.
 
 ---
 

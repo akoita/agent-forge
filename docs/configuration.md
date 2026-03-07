@@ -1,0 +1,138 @@
+# Configuration
+
+> Complete reference for all configuration options.
+
+## Precedence Order
+
+Configuration is resolved in layers (highest priority first):
+
+1. **CLI flags** — `--max-iterations 10`
+2. **Environment variables** — `AGENT_FORGE_AGENT_MAX_ITERATIONS=10`
+3. **Project config** — `./agent-forge.toml` in your repo root
+4. **User config** — `~/.agent-forge/config.toml`
+5. **Built-in defaults** — Pydantic model defaults
+
+## Config File Format
+
+Both project and user configs use TOML:
+
+```toml
+[agent]
+max_iterations = 25
+max_tokens_per_run = 200000
+default_provider = "gemini"
+default_model = "gemini-2.0-flash"
+temperature = 0.0
+system_prompt_path = ""
+
+[sandbox]
+image = "agent-forge-sandbox:latest"
+cpu_limit = 1.0
+memory_limit = "512m"
+timeout_seconds = 300
+network_enabled = false
+
+[queue]
+backend = "memory"              # "memory" or "redis"
+redis_url = "redis://localhost:6379/0"
+max_concurrent_runs = 4
+
+[logging]
+level = "INFO"
+format = "text"                 # "text" or "json"
+log_file = ""
+
+[providers.gemini]
+api_key_env = "GEMINI_API_KEY"
+default_model = "gemini-2.0-flash"
+
+[providers.openai]
+api_key_env = "OPENAI_API_KEY"
+default_model = "gpt-4o"
+
+[providers.anthropic]
+api_key_env = "ANTHROPIC_API_KEY"
+default_model = "claude-sonnet-4-20250514"
+```
+
+## Environment Variables
+
+### API Keys
+
+| Variable            | Provider      |
+| ------------------- | ------------- |
+| `GEMINI_API_KEY`    | Google Gemini |
+| `OPENAI_API_KEY`    | OpenAI        |
+| `ANTHROPIC_API_KEY` | Anthropic     |
+
+### Config Overrides
+
+Any setting can be overridden via environment variable using the pattern:
+
+```
+AGENT_FORGE_{SECTION}_{KEY}
+```
+
+Examples:
+
+```bash
+export AGENT_FORGE_AGENT_MAX_ITERATIONS=10
+export AGENT_FORGE_SANDBOX_MEMORY_LIMIT=1g
+export AGENT_FORGE_LOGGING_LEVEL=DEBUG
+```
+
+## CLI Flags
+
+```bash
+agent-forge run \
+  --task "Fix the bug in auth.py" \
+  --repo ./my-project \
+  --provider gemini \
+  --model gemini-2.0-flash \
+  --max-iterations 25
+
+agent-forge status <run-id>
+agent-forge list
+agent-forge config        # Show resolved configuration
+```
+
+## Common Setups
+
+### Minimal (Gemini)
+
+```bash
+export GEMINI_API_KEY="your-key"
+agent-forge run --task "Fix the health endpoint" --repo ./my-app
+```
+
+### OpenAI Provider
+
+```toml
+# agent-forge.toml
+[agent]
+default_provider = "openai"
+default_model = "gpt-4o"
+```
+
+```bash
+export OPENAI_API_KEY="sk-..."
+agent-forge run --task "Add input validation" --repo ./my-app
+```
+
+### Sandbox Tuning
+
+```toml
+[sandbox]
+memory_limit = "1g"
+timeout_seconds = 600
+network_enabled = true   # Allow network access (e.g. pip install)
+cpu_limit = 2.0
+```
+
+## Inspecting Config
+
+```bash
+agent-forge config
+```
+
+This displays the fully resolved configuration as syntax-highlighted JSON, showing which values came from defaults vs overrides.
