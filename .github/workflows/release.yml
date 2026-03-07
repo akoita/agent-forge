@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - "v*" # Trigger on version tags (e.g. v0.1.0, v1.2.3)
+      - "v*"
 
 permissions:
   contents: write
@@ -16,17 +16,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install python-semantic-release
-        run: pip install python-semantic-release>=9.0
-
-      - name: Generate changelog
-        run: semantic-release changelog --post
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
