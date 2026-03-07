@@ -16,28 +16,26 @@ Agent Forge implements the **ReAct** (Reasoning + Acting) pattern: an agent rece
 
 ```mermaid
 graph TD
-    CLI["CLI / API Layer<br/>(Click commands)"]
-    CLI --> Orch
-
-    subgraph Orch["Orchestration Layer"]
-        Queue["Task Queue<br/>(Redis / in-memory)"]
-        SM["State Machine"]
-        EB["Event Bus"]
-    end
-
-    Orch --> Core
+    CLI["CLI<br/>(Click commands)"]
+    CLI -->|"agent-forge run"| Core
 
     subgraph Core["Agent Core"]
         Loop["ReAct Loop<br/>Observe → Reason → Act"]
-        Loop --> LLM
-        Loop --> Tools
-        Loop --> Sandbox
+        State["State Machine<br/>(PENDING → RUNNING → ...)"]
+        Persist["Persistence<br/>(save/load runs)"]
     end
 
-    subgraph LLM["LLM Client"]
-        Gemini["Gemini API"]
-        OpenAI["OpenAI API"]
-        Anthropic["Anthropic API"]
+    Loop -->|"prompt + tools"| LLM
+    LLM -->|"function calls"| Loop
+    Loop -->|"execute tool"| Sandbox
+    Sandbox -->|"result"| Loop
+
+    subgraph LLM["LLM Provider"]
+        Gemini["Gemini 3.1<br/>(primary)"]
+    end
+
+    subgraph Sandbox["Docker Sandbox"]
+        Docker["Ephemeral Container<br/>(per-run, isolated)"]
     end
 
     subgraph Tools["Tool Registry"]
@@ -49,19 +47,17 @@ graph TD
         search_codebase
     end
 
-    subgraph Sandbox["Sandbox Runtime"]
-        Docker["Docker Container<br/>(ephemeral, per-run)"]
-    end
+    Sandbox ---|"workspace<br/>bind-mount"| Tools
 ```
 
 ### Key Features
 
 - **🔒 Sandboxed Execution** — Every tool invocation runs in an ephemeral Docker container with resource limits — never on the host.
-- **🔌 Multi-Provider LLM** — Gemini (primary), OpenAI, and Anthropic via a unified adapter layer.
-- **🧠 Gemini 3.1 Ready** — Full support for Gemini 3.1 thought signatures, exponential backoff with jitter, and `Retry-After` header.
-- **📊 Production Observability** — Structured JSON logs, trace IDs, token/cost tracking on every run.
-- **⚡ Queue-Based Scaling** — Redis task queue for concurrent, isolated agent runs.
-- **🧩 Extensible** — Add new tools or LLM providers by implementing a simple interface.
+- **🧠 Gemini 3.1 Ready** — Full support for thought signatures, exponential backoff with jitter, and `Retry-After` header.
+- **🔌 Extensible LLM Layer** — Gemini adapter built, OpenAI and Anthropic interfaces defined for easy addition.
+- **📊 Observability** — Structured JSON logs, trace IDs, token/cost tracking on every run.
+- **💾 Run Persistence** — Every agent run is saved to disk with full conversation history and tool invocations.
+- **🧩 Extensible Tools** — Add new tools by implementing a simple `Tool` ABC and registering them.
 
 ---
 
