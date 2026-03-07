@@ -1,4 +1,4 @@
-.PHONY: setup build-sandbox test test-unit test-integration lint format run clean
+.PHONY: setup build-sandbox test test-unit test-integration test-e2e lint format run clean
 
 setup:                     ## Install dependencies
 	pip install -e ".[dev,redis]"
@@ -6,14 +6,17 @@ setup:                     ## Install dependencies
 build-sandbox:             ## Build the sandbox Docker image
 	docker build -t agent-forge-sandbox:latest -f agent_forge/sandbox/Dockerfile .
 
-test:                      ## Run all tests (excludes integration — use test-integration)
-	pytest --cov=agent_forge --cov-report=term-missing -m "not integration"
+test:                      ## Run all tests (excludes integration + e2e)
+	pytest --cov=agent_forge --cov-report=term-missing -m "not integration and not e2e"
 
 test-unit:                 ## Run unit tests only
 	pytest tests/unit -v
 
 test-integration:          ## Run integration tests (requires Docker)
 	pytest tests/integration -v
+
+test-e2e:                  ## Run e2e tests (requires GEMINI_API_KEY + Docker)
+	pytest tests/e2e -v -m e2e
 
 lint:                      ## Run linters
 	ruff check agent_forge tests

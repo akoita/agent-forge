@@ -1,0 +1,31 @@
+name: E2E Tests
+
+on:
+  workflow_dispatch: # Manual trigger only — prevents automated API cost
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: E2E Tests (Real LLM)
+    if: github.actor == 'akoita' # Owner-only guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Build sandbox Docker image
+        run: make build-sandbox
+
+      - name: Run e2e tests
+        run: make test-e2e
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
