@@ -34,7 +34,7 @@ class AgentSettings(BaseModel):
     max_iterations: int = 25
     max_tokens_per_run: int = 200_000
     default_provider: str = "gemini"
-    default_model: str = "gemini-3.1-flash-lite"
+    default_model: str = "gemini-3.1-flash-lite-preview"
     temperature: float = 0.0
     system_prompt_path: str = ""
 
@@ -83,7 +83,7 @@ class ForgeConfig(BaseModel):
         default_factory=lambda: {
             "gemini": ProviderSettings(
                 api_key_env="GEMINI_API_KEY",
-                default_model="gemini-3.1-flash-lite",
+                default_model="gemini-3.1-flash-lite-preview",
             ),
             "openai": ProviderSettings(
                 api_key_env="OPENAI_API_KEY",

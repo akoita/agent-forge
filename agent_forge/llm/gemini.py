@@ -39,7 +39,7 @@ from agent_forge.llm.errors import (
 logger = logging.getLogger(__name__)
 
 _GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
-_DEFAULT_MODEL = "gemini-3.1-flash-lite"
+_DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
 
 # Retry config per spec § 7.2
 _MAX_RETRIES = 5

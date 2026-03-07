@@ -10,10 +10,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
+from typing import Any
 
 from agent_forge.agent.models import AgentConfig, AgentRun, RunState, ToolInvocation
 from agent_forge.config import USER_CONFIG_DIR
@@ -25,12 +23,12 @@ def _default_runs_dir() -> Path:
     return USER_CONFIG_DIR / "runs"
 
 
-def save_run(run: AgentRun, *, base_dir: Path | None = None) -> Path:
+def save_run(run: AgentRun, *, base_dir: Path | str | None = None) -> Path:
     """Persist an AgentRun to disk.
 
     Returns the run directory path.
     """
-    runs_dir = base_dir or _default_runs_dir()
+    runs_dir = Path(base_dir) if base_dir is not None else _default_runs_dir()
     run_dir = runs_dir / run.id
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -87,7 +85,7 @@ def save_run(run: AgentRun, *, base_dir: Path | None = None) -> Path:
     return run_dir
 
 
-def load_run(run_id: str, *, base_dir: Path | None = None) -> AgentRun:
+def load_run(run_id: str, *, base_dir: Path | str | None = None) -> AgentRun:
     """Load an AgentRun from disk.
 
     Raises FileNotFoundError if the run directory doesn't exist.
@@ -96,7 +94,7 @@ def load_run(run_id: str, *, base_dir: Path | None = None) -> AgentRun:
 
     from agent_forge.tools.base import ToolResult
 
-    runs_dir = base_dir or _default_runs_dir()
+    runs_dir = Path(base_dir) if base_dir is not None else _default_runs_dir()
     run_dir = runs_dir / run_id
 
     if not run_dir.exists():

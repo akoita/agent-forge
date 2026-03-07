@@ -27,7 +27,7 @@ from agent_forge.llm.factory import create_provider
 from agent_forge.llm.gemini import GeminiProvider
 
 _GEMINI_URL = "https://generativelanguage.googleapis.com"
-_MODEL = "gemini-3.1-flash-lite"
+_MODEL = "gemini-3.1-flash-lite-preview"
 _GENERATE_URL = f"{_GEMINI_URL}/v1beta/models/{_MODEL}:generateContent"
 _STREAM_URL = f"{_GEMINI_URL}/v1beta/models/{_MODEL}:streamGenerateContent"
 

@@ -64,7 +64,7 @@ class TestLLMConfig:
 
     def test_defaults(self) -> None:
         cfg = LLMConfig()
-        assert cfg.model == "gemini-3.1-flash-lite"
+        assert cfg.model == "gemini-3.1-flash-lite-preview"
         assert cfg.temperature == 0.0
         assert cfg.max_tokens == 4096
         assert cfg.top_p == 1.0
@@ -84,7 +84,7 @@ class TestLLMResponse:
         resp = LLMResponse(
             content="Hello!",
             usage=TokenUsage(10, 5, 15),
-            model="gemini-3.1-flash-lite",
+            model="gemini-3.1-flash-lite-preview",
             finish_reason="stop",
         )
         assert resp.content == "Hello!"
@@ -96,7 +96,7 @@ class TestLLMResponse:
         resp = LLMResponse(
             content=None,
             tool_calls=[tc],
-            model="gemini-3.1-flash-lite",
+            model="gemini-3.1-flash-lite-preview",
             finish_reason="tool_calls",
         )
         assert resp.content is None

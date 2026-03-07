@@ -44,7 +44,7 @@ def agent_config() -> AgentConfig:
     return AgentConfig(
         max_iterations=5,
         max_tokens_per_run=50_000,
-        model="gemini-3.1-flash-lite",
+        model="gemini-3.1-flash-lite-preview",
         provider="gemini",
         temperature=0.0,
     )
