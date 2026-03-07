@@ -2,27 +2,20 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    tags:
+      - "v*" # Trigger on version tags (e.g. v0.1.0, v1.2.3)
 
 permissions:
   contents: write
-  id-token: write
 
 jobs:
   release:
-    name: Semantic Release
+    name: Create Release
     runs-on: ubuntu-latest
-    # Only run on the main repo (skip forks)
-    if: github.repository == 'akoita/agent-forge'
-    concurrency:
-      group: release
-      cancel-in-progress: false
-
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,7 +25,13 @@ jobs:
       - name: Install python-semantic-release
         run: pip install python-semantic-release>=9.0
 
-      - name: Run Semantic Release
+      - name: Generate changelog
+        run: semantic-release changelog --post
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          draft: false
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-        run: semantic-release version
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
