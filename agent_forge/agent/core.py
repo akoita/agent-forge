@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -11,13 +10,14 @@ from agent_forge.agent.persistence import save_run
 from agent_forge.agent.prompts import build_system_prompt
 from agent_forge.agent.state import transition
 from agent_forge.llm.base import LLMConfig, Message, Role
+from agent_forge.observability import get_logger, set_trace_context, update_iteration
 
 if TYPE_CHECKING:
     from agent_forge.llm.base import LLMProvider
     from agent_forge.sandbox.base import Sandbox
     from agent_forge.tools.base import ToolRegistry
 
-logger = logging.getLogger(__name__)
+logger = get_logger("agent_core")
 
 
 async def react_loop(
@@ -35,6 +35,7 @@ async def react_loop(
     - Unrecoverable error (→ FAILED)
     """
     transition(run, RunState.RUNNING)
+    set_trace_context(run.id)
 
     # Build system prompt from task + tool definitions
     system_content = run.config.system_prompt or build_system_prompt(
@@ -52,7 +53,12 @@ async def react_loop(
     try:
         while run.iterations < run.config.max_iterations:
             run.iterations += 1
-            logger.info("Iteration %d/%d", run.iterations, run.config.max_iterations)
+            update_iteration(run.iterations)
+            logger.info(
+                "iteration_started",
+                iteration=run.iterations,
+                max_iterations=run.config.max_iterations,
+            )
 
             # 1. REASON — ask the LLM what to do next
             response = await llm.complete(
@@ -64,7 +70,11 @@ async def react_loop(
 
             # 2. CHECK BUDGET
             if run.total_tokens.total_tokens > run.config.max_tokens_per_run:
-                logger.warning("Token budget exceeded: %d", run.total_tokens.total_tokens)
+                logger.warning(
+                    "token_budget_exceeded",
+                    total_tokens=run.total_tokens.total_tokens,
+                    budget=run.config.max_tokens_per_run,
+                )
                 transition(run, RunState.TIMEOUT)
                 run.error = "Token budget exceeded"
                 break
@@ -89,12 +99,15 @@ async def react_loop(
 
         else:
             # Loop exhausted without breaking → max iterations
-            logger.warning("Max iterations reached: %d", run.config.max_iterations)
+            logger.warning(
+                "max_iterations_reached",
+                max_iterations=run.config.max_iterations,
+            )
             transition(run, RunState.TIMEOUT)
             run.error = "Max iterations reached"
 
     except Exception as exc:
-        logger.exception("Unrecoverable error during agent run")
+        logger.exception("unrecoverable_error", exc_info=exc)
         transition(run, RunState.FAILED)
         run.error = str(exc)
 
@@ -119,7 +132,7 @@ async def _execute_tool_call(
         tool = tools.get(tool_call.name)
     except KeyError:
         # Unknown tool — inject error and let LLM self-correct
-        logger.warning("Unknown tool requested: %s", tool_call.name)
+        logger.warning("unknown_tool_requested", tool_name=tool_call.name)
         error_result = ToolResult(
             output="",
             error=f"Unknown tool: '{tool_call.name}'. Available tools: "

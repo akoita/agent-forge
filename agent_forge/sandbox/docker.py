@@ -7,19 +7,19 @@ Implements security constraints per spec § 4.3.
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 from typing import TYPE_CHECKING, Any
 
 import docker
 from docker.errors import APIError, NotFound
 
+from agent_forge.observability import get_logger
 from agent_forge.sandbox.base import ExecResult, Sandbox, SandboxConfig, SandboxState
 
 if TYPE_CHECKING:
     from docker.models.containers import Container
 
-logger = logging.getLogger(__name__)
+logger = get_logger("sandbox")
 
 
 class DockerSandbox(Sandbox):
@@ -102,9 +102,9 @@ class DockerSandbox(Sandbox):
 
             self._state = SandboxState.RUNNING
             logger.info(
-                "Sandbox started: container=%s, image=%s",
-                self._container.short_id,  # type: ignore[union-attr]
-                cfg.image,
+                "sandbox_started",
+                container=self._container.short_id,  # type: ignore[union-attr]
+                image=cfg.image,
             )
         except (APIError, Exception) as exc:
             self._state = SandboxState.STOPPED
@@ -123,11 +123,11 @@ class DockerSandbox(Sandbox):
             # Container already removed (--rm flag)
             pass
         except APIError as exc:
-            logger.warning("Error stopping container: %s", exc)
+            logger.warning("container_stop_error", error=str(exc))
         finally:
             self._container = None
             self._state = SandboxState.STOPPED
-            logger.info("Sandbox stopped")
+            logger.info("sandbox_stopped")
 
     async def is_alive(self) -> bool:
         """Check if the sandbox container is still running."""

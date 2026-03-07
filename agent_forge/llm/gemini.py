@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import random
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -35,8 +34,9 @@ from agent_forge.llm.errors import (
     LLMResponseError,
     LLMTimeoutError,
 )
+from agent_forge.observability import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("gemini")
 
 _GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
 _DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
@@ -320,11 +320,11 @@ class GeminiProvider(LLMProvider):
                     if attempt < _MAX_RETRIES:
                         delay = self._compute_delay(attempt, resp)
                         logger.warning(
-                            "Gemini API returned %d, retrying in %.1fs (attempt %d/%d)",
-                            resp.status_code,
-                            delay,
-                            attempt + 1,
-                            _MAX_RETRIES,
+                            "gemini_retryable_error",
+                            status_code=resp.status_code,
+                            delay=round(delay, 1),
+                            attempt=attempt + 1,
+                            max_retries=_MAX_RETRIES,
                         )
                         await asyncio.sleep(delay)
                         continue
@@ -344,9 +344,9 @@ class GeminiProvider(LLMProvider):
                 except (json.JSONDecodeError, ValueError) as exc:
                     if attempt < _MAX_RETRIES:
                         logger.warning(
-                            "Malformed response from Gemini, retrying (attempt %d/%d)",
-                            attempt + 1,
-                            _MAX_RETRIES,
+                            "gemini_malformed_response",
+                            attempt=attempt + 1,
+                            max_retries=_MAX_RETRIES,
                         )
                         await asyncio.sleep(_BACKOFF_BASE)
                         continue
@@ -356,9 +356,9 @@ class GeminiProvider(LLMProvider):
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
                     logger.warning(
-                        "Gemini request timed out, retrying (attempt %d/%d)",
-                        attempt + 1,
-                        _MAX_RETRIES,
+                        "gemini_timeout",
+                        attempt=attempt + 1,
+                        max_retries=_MAX_RETRIES,
                     )
                     await asyncio.sleep(_BACKOFF_BASE)
                     continue
@@ -386,7 +386,7 @@ class GeminiProvider(LLMProvider):
                 detail = body.get("error", {}).get("message", resp.text[:500])
             except Exception:  # noqa: BLE001
                 detail = resp.text[:500]
-            logger.error("Gemini API error (HTTP %d): %s", status_code, detail)
+            logger.error("gemini_api_error", status_code=status_code, detail=detail)
             raise LLMResponseError(
                 f"Gemini API error (HTTP {status_code}): {detail}"
             )
