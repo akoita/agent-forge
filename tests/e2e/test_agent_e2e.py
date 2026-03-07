@@ -114,7 +114,7 @@ def _make_run(task: str, workspace: Path, **overrides: object) -> AgentRun:
     config_kwargs = {
         "max_iterations": 3,
         "max_tokens_per_run": 100_000,
-        "model": "gemini-2.0-flash",
+        "model": "gemini-3.1-flash-lite",
         "provider": "gemini",
         "temperature": 0.0,
     }

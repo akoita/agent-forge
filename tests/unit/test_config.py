@@ -163,7 +163,7 @@ class TestDefaults:
         assert cfg.agent.max_iterations == 25
         assert cfg.agent.max_tokens_per_run == 200_000
         assert cfg.agent.default_provider == "gemini"
-        assert cfg.agent.default_model == "gemini-2.0-flash"
+        assert cfg.agent.default_model == "gemini-3.1-flash-lite"
         assert cfg.agent.temperature == 0.0
         assert cfg.sandbox.image == "agent-forge-sandbox:latest"
         assert cfg.sandbox.memory_limit == "512m"
