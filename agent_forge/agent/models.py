@@ -30,7 +30,7 @@ class AgentConfig:
 
     max_iterations: int = 25
     max_tokens_per_run: int = 200_000
-    model: str = "gemini-3.1-flash-lite"
+    model: str = "gemini-3.1-flash-lite-preview"
     provider: str = "gemini"  # "gemini" | "openai" | "anthropic"
     temperature: float = 0.0
     system_prompt: str | None = None  # Override default system prompt

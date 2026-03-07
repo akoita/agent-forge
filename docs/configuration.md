@@ -21,7 +21,7 @@ Both project and user configs use TOML:
 max_iterations = 25
 max_tokens_per_run = 200000
 default_provider = "gemini"
-default_model = "gemini-3.1-flash-lite"
+default_model = "gemini-3.1-flash-lite-preview"
 temperature = 0.0
 system_prompt_path = ""
 
@@ -44,7 +44,7 @@ log_file = ""
 
 [providers.gemini]
 api_key_env = "GEMINI_API_KEY"
-default_model = "gemini-3.1-flash-lite"
+default_model = "gemini-3.1-flash-lite-preview"
 
 [providers.openai]
 api_key_env = "OPENAI_API_KEY"
@@ -88,7 +88,7 @@ agent-forge run \
   --task "Fix the bug in auth.py" \
   --repo ./my-project \
   --provider gemini \
-  --model gemini-3.1-flash-lite \
+  --model gemini-3.1-flash-lite-preview \
   --max-iterations 25
 
 agent-forge status <run-id>
