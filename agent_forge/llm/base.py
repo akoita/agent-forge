@@ -50,6 +50,14 @@ class TokenUsage:
     completion_tokens: int
     total_tokens: int
 
+    def __add__(self, other: TokenUsage) -> TokenUsage:
+        """Combine two TokenUsage instances."""
+        return TokenUsage(
+            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
+            completion_tokens=self.completion_tokens + other.completion_tokens,
+            total_tokens=self.total_tokens + other.total_tokens,
+        )
+
 
 @dataclass
 class Message:
