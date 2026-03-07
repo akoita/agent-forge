@@ -1,13 +1,35 @@
 """Sandbox base class — abstract interface for isolated execution environments.
 
-Defines the minimal contract that tools use to interact with the sandbox.
-Full Docker implementation is in sandbox/docker.py (issue #5).
+Defines the contract that tools use to interact with the sandbox,
+plus SandboxConfig and SandboxState.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+class SandboxState(Enum):
+    """Container lifecycle state."""
+
+    IDLE = "idle"
+    RUNNING = "running"
+    STOPPED = "stopped"
+
+
+@dataclass
+class SandboxConfig:
+    """Configuration for a sandbox container."""
+
+    image: str = "agent-forge-sandbox:latest"
+    workspace_path: str = "/workspace"
+    cpu_limit: float = 1.0
+    memory_limit: str = "512m"
+    timeout_seconds: int = 300
+    network_enabled: bool = False
+    env_vars: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -21,6 +43,16 @@ class ExecResult:
 
 class Sandbox(ABC):
     """Abstract base class for sandbox execution environments."""
+
+    @abstractmethod
+    async def start(self, repo_path: str, config: SandboxConfig | None = None) -> None:
+        """Create and start the sandbox container with the repo mounted.
+
+        Args:
+            repo_path: Local path to the repository to mount.
+            config: Sandbox configuration. Defaults to ``SandboxConfig()``.
+        """
+        ...
 
     @abstractmethod
     async def exec(
@@ -68,13 +100,8 @@ class Sandbox(ABC):
         ...
 
     @abstractmethod
-    async def start(self) -> None:
-        """Start the sandbox environment."""
-        ...
-
-    @abstractmethod
     async def stop(self) -> None:
-        """Stop and clean up the sandbox environment."""
+        """Stop and remove the sandbox container."""
         ...
 
     @abstractmethod
