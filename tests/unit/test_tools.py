@@ -96,8 +96,15 @@ class TestToolRegistry:
         registry = create_default_registry()
         defs = registry.list_definitions()
         names = {d.name for d in defs}
-        assert names == {"read_file", "write_file", "list_directory"}
-        assert len(registry) == 3
+        assert names == {
+            "read_file",
+            "write_file",
+            "edit_file",
+            "list_directory",
+            "run_shell",
+            "search_codebase",
+        }
+        assert len(registry) == 6
 
     def test_to_definition(self) -> None:
         tool = ReadFileTool()
@@ -207,6 +214,19 @@ class TestWriteFile:
         result = await tool.execute({"path": "/etc/crontab", "content": "bad"}, sandbox)
         assert result.exit_code == 1
         assert "must be within" in (result.error or "")
+
+    @pytest.mark.asyncio
+    async def test_write_mkdir_failure(self) -> None:
+        sandbox = AsyncMock()
+        sandbox.exec.return_value = ExecResult(
+            exit_code=1, stdout="", stderr="read-only file system"
+        )
+
+        tool = WriteFileTool()
+        result = await tool.execute({"path": "deep/nested/file.py", "content": "code"}, sandbox)
+
+        assert result.exit_code == 1
+        assert "read-only" in (result.error or "")
 
 
 # ---------------------------------------------------------------------------
