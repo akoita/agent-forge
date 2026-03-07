@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 import docker
@@ -38,6 +39,8 @@ class DockerSandbox(Sandbox):
         self._container: Container | None = None
         self._state = SandboxState.IDLE
         self._config = SandboxConfig()
+        self._host_uid = os.getuid()
+        self._host_gid = os.getgid()
 
     @property
     def state(self) -> SandboxState:
@@ -88,20 +91,13 @@ class DockerSandbox(Sandbox):
         if not cfg.network_enabled:
             run_kwargs["network_mode"] = "none"
 
-        # Start as root so we can fix bind-mount permissions, then exec as 'agent'
-        run_kwargs["user"] = "root"
+        # Run as the host user so files are owned by them (avoids PermissionError
+        # when the host reads workspace files after the container writes them).
+        run_kwargs["user"] = f"{self._host_uid}:{self._host_gid}"
 
         try:
             self._container = await asyncio.to_thread(
                 lambda: self._client.containers.run(**run_kwargs)
-            )
-
-            # Fix ownership of bind-mounted workspace (host UID may differ
-            # from container's 'agent' user).
-            await asyncio.to_thread(
-                self._container.exec_run,  # type: ignore[union-attr]
-                "chown -R agent:agent /workspace",
-                user="root",
             )
 
             self._state = SandboxState.RUNNING
@@ -165,7 +161,7 @@ class DockerSandbox(Sandbox):
                     self._container.exec_run,
                     ["bash", "-c", command],
                     demux=True,
-                    user="agent",
+                    user=f"{self._host_uid}:{self._host_gid}",
                 ),
                 timeout=timeout_seconds,
             )

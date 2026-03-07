@@ -6,6 +6,7 @@ exec, read_file, write_file, and error handling.
 
 from __future__ import annotations
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -63,7 +64,7 @@ class TestSandboxLifecycle:
             assert call_kwargs["pids_limit"] == 256
             assert "/tmp" in call_kwargs["tmpfs"]
             assert call_kwargs["network_mode"] == "none"
-            assert call_kwargs["user"] == "root"  # starts as root for chown
+            assert call_kwargs["user"] == f"{os.getuid()}:{os.getgid()}"
 
     @pytest.mark.asyncio
     async def test_start_with_custom_config(self, mock_docker_client: MagicMock) -> None:
@@ -146,10 +147,10 @@ class TestSandboxExec:
             assert result.exit_code == 0
             assert result.stdout == "hello"
             container = mock_docker_client.containers.run.return_value
-            # First exec_run call is chown during start(); second is our command
-            assert container.exec_run.call_count == 2
+            # No chown during start anymore; just our command
+            assert container.exec_run.call_count == 1
             container.exec_run.assert_called_with(
-                ["bash", "-c", "echo hello"], demux=True, user="agent",
+                ["bash", "-c", "echo hello"], demux=True, user=f"{os.getuid()}:{os.getgid()}",
             )
 
     @pytest.mark.asyncio
@@ -221,8 +222,8 @@ class TestSandboxFileOps:
 
             await sandbox.write_file("/workspace/new.py", "print('hi')")
             # Should have called exec at least twice (mkdir -p + write)
-            # 1 chown during start + 1 mkdir + 1 write = at least 3
-            assert container.exec_run.call_count >= 3
+            # No chown during start anymore; just mkdir + write = at least 2
+            assert container.exec_run.call_count >= 2
 
 
 # ---------------------------------------------------------------------------
