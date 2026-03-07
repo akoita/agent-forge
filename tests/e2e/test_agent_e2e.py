@@ -9,11 +9,15 @@ Requirements:
 
 Marked with @pytest.mark.e2e and excluded from default test suite.
 Run manually: make test-e2e
+
+Note: Tests include rate-limit resilience — if the LLM returns a rate
+limit error, the test is skipped rather than failed.
 """
 
 from __future__ import annotations
 
 import os
+import time
 from typing import TYPE_CHECKING
 
 import pytest
@@ -39,10 +43,34 @@ pytestmark = [
     ),
 ]
 
+# Rate-limit errors that should cause a skip, not a failure
+_RATE_LIMIT_MARKERS = ("rate limit", "429", "quota")
+
+
+def _is_rate_limited(run: AgentRun) -> bool:
+    """Check if a run failed due to rate limiting."""
+    if run.state != RunState.FAILED or not run.error:
+        return False
+    error_lower = run.error.lower()
+    return any(marker in error_lower for marker in _RATE_LIMIT_MARKERS)
+
+
+def _skip_if_rate_limited(run: AgentRun) -> None:
+    """Skip the test if the run failed due to rate limiting."""
+    if _is_rate_limited(run):
+        pytest.skip(f"Skipped due to API rate limit: {run.error}")
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _throttle_api_calls() -> None:
+    """Add a delay between tests to avoid API rate limits."""
+    yield  # type: ignore[misc]
+    time.sleep(2)
 
 
 @pytest.fixture
@@ -112,16 +140,16 @@ class TestAgentToolUsage:
     ) -> None:
         """Agent uses read_file tool to read a file in the sandbox."""
         run = _make_run("Read the file hello.py and tell me what it contains.", workspace)
-        sandbox.start(str(workspace))
+        await sandbox.start(str(workspace))
         try:
             result = await react_loop(run, llm, tools, sandbox)
         finally:
-            sandbox.stop()
+            await sandbox.stop()
             await llm.close()
 
+        _skip_if_rate_limited(result)
         assert result.state in (RunState.COMPLETED, RunState.TIMEOUT)
         assert result.iterations >= 1
-        # Agent should have used at least one tool
         if result.state == RunState.COMPLETED:
             assert len(result.tool_invocations) >= 1
 
@@ -134,15 +162,15 @@ class TestAgentToolUsage:
             "Create a file called 'output.txt' containing the text 'agent wrote this'.",
             workspace,
         )
-        sandbox.start(str(workspace))
+        await sandbox.start(str(workspace))
         try:
             result = await react_loop(run, llm, tools, sandbox)
         finally:
-            sandbox.stop()
+            await sandbox.stop()
             await llm.close()
 
+        _skip_if_rate_limited(result)
         assert result.state in (RunState.COMPLETED, RunState.TIMEOUT)
-        # Check the file was created in the workspace
         output_file = workspace / "output.txt"
         if output_file.exists():
             assert "agent wrote this" in output_file.read_text()
@@ -153,15 +181,15 @@ class TestAgentToolUsage:
     ) -> None:
         """Agent uses list_directory to explore workspace."""
         run = _make_run("List all files and directories in the workspace.", workspace)
-        sandbox.start(str(workspace))
+        await sandbox.start(str(workspace))
         try:
             result = await react_loop(run, llm, tools, sandbox)
         finally:
-            sandbox.stop()
+            await sandbox.stop()
             await llm.close()
 
+        _skip_if_rate_limited(result)
         assert result.state in (RunState.COMPLETED, RunState.TIMEOUT)
-        # Agent should have used list_directory
         tool_names = [inv.tool_name for inv in result.tool_invocations]
         assert any(name in ("list_directory", "run_shell") for name in tool_names)
 
@@ -171,13 +199,14 @@ class TestAgentToolUsage:
     ) -> None:
         """Agent uses run_shell to execute a command."""
         run = _make_run("Run 'echo hello' in the shell and report the output.", workspace)
-        sandbox.start(str(workspace))
+        await sandbox.start(str(workspace))
         try:
             result = await react_loop(run, llm, tools, sandbox)
         finally:
-            sandbox.stop()
+            await sandbox.stop()
             await llm.close()
 
+        _skip_if_rate_limited(result)
         assert result.state in (RunState.COMPLETED, RunState.TIMEOUT)
         assert result.iterations >= 1
 
@@ -192,15 +221,15 @@ class TestAgentToolUsage:
             workspace,
             max_iterations=5,
         )
-        sandbox.start(str(workspace))
+        await sandbox.start(str(workspace))
         try:
             result = await react_loop(run, llm, tools, sandbox)
         finally:
-            sandbox.stop()
+            await sandbox.stop()
             await llm.close()
 
+        _skip_if_rate_limited(result)
         assert result.state in (RunState.COMPLETED, RunState.TIMEOUT)
-        # Should have used multiple tools
         assert len(result.tool_invocations) >= 2
 
 
@@ -222,14 +251,14 @@ class TestAgentTermination:
             workspace,
             max_iterations=2,
         )
-        sandbox.start(str(workspace))
+        await sandbox.start(str(workspace))
         try:
             result = await react_loop(run, llm, tools, sandbox)
         finally:
-            sandbox.stop()
+            await sandbox.stop()
             await llm.close()
 
-        # With max_iterations=2, agent should timeout or complete quickly
+        _skip_if_rate_limited(result)
         assert result.state in (RunState.TIMEOUT, RunState.COMPLETED)
         assert result.iterations <= 2
 
@@ -239,13 +268,14 @@ class TestAgentTermination:
     ) -> None:
         """Token usage is tracked across iterations."""
         run = _make_run("Read hello.py", workspace)
-        sandbox.start(str(workspace))
+        await sandbox.start(str(workspace))
         try:
             result = await react_loop(run, llm, tools, sandbox)
         finally:
-            sandbox.stop()
+            await sandbox.stop()
             await llm.close()
 
+        _skip_if_rate_limited(result)
         assert result.total_tokens.total_tokens > 0
         assert result.total_tokens.prompt_tokens > 0
 
@@ -257,11 +287,11 @@ class TestAgentTermination:
         run = _make_run("Read hello.py and tell me what it contains.", workspace)
         assert run.state == RunState.PENDING
 
-        sandbox.start(str(workspace))
+        await sandbox.start(str(workspace))
         try:
             result = await react_loop(run, llm, tools, sandbox)
         finally:
-            sandbox.stop()
+            await sandbox.stop()
             await llm.close()
 
         # Must have moved past PENDING and RUNNING
@@ -284,11 +314,11 @@ class TestAgentPersistence:
     ) -> None:
         """save_run + load_run produces identical state."""
         run = _make_run("Read hello.py", workspace)
-        sandbox.start(str(workspace))
+        await sandbox.start(str(workspace))
         try:
             result = await react_loop(run, llm, tools, sandbox)
         finally:
-            sandbox.stop()
+            await sandbox.stop()
             await llm.close()
 
         # Save and reload
