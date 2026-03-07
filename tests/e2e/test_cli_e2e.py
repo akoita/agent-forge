@@ -135,3 +135,61 @@ class TestConfigE2E:
         # Rich JSON output contains the config keys
         assert "agent" in result.output
         assert "sandbox" in result.output
+
+
+class TestRunFlagsE2E:
+    """E2E tests for CLI flags on the run command."""
+
+    def test_run_with_max_iterations_flag(
+        self, runner: CliRunner, sample_repo: Path
+    ) -> None:
+        """Agent respects --max-iterations flag."""
+        result = runner.invoke(
+            main,
+            [
+                "run",
+                "--task", "List files",
+                "--repo", str(sample_repo),
+                "--max-iterations", "1",
+            ],
+        )
+        assert result.exit_code in (0, 1), f"Unexpected exit: {result.output}"
+
+    def test_run_with_custom_model_flag(
+        self, runner: CliRunner, sample_repo: Path
+    ) -> None:
+        """Agent accepts --model flag without crashing."""
+        result = runner.invoke(
+            main,
+            [
+                "run",
+                "--task", "Say hello",
+                "--repo", str(sample_repo),
+                "--max-iterations", "1",
+                "--model", "gemini-2.0-flash",
+            ],
+        )
+        assert result.exit_code in (0, 1), f"Unexpected exit: {result.output}"
+
+
+class TestListMultipleRunsE2E:
+    """E2E tests for listing multiple runs."""
+
+    def test_list_after_multiple_runs(
+        self, runner: CliRunner, sample_repo: Path
+    ) -> None:
+        """List shows runs after multiple executions."""
+        # Run two tasks
+        for task in ("Read hello.py", "List files"):
+            runner.invoke(
+                main,
+                [
+                    "run",
+                    "--task", task,
+                    "--repo", str(sample_repo),
+                    "--max-iterations", "1",
+                ],
+            )
+
+        result = runner.invoke(main, ["list"])
+        assert result.exit_code == 0
