@@ -44,10 +44,17 @@ When the user says "finish issue", "wrap up", or indicates the work is done, fol
 
 ## 6. Update documentation
 
-- Check if the change affects any existing docs (README, spec.md, docstrings)
-- If so, update them in the same branch — keep docs close to the code they describe
-- For new features or architectural changes, add documentation in the appropriate location
-- Skip this step if the change is trivial or purely internal refactoring
+- Review **all** documentation for relevance to the change:
+  - `README.md` — usage examples, feature list, project structure
+  - `spec.md` — technical specification, interface contracts
+  - `docs/` — architecture, configuration, extending, testing guides
+  - Inline docstrings in changed modules
+- For each doc, decide whether it needs to be **updated**, **created**, or **removed**:
+  - **Update** docs that describe changed behavior, CLI options, APIs, or architecture
+  - **Create** new docs when introducing a feature, pattern, or component that users/developers need to understand
+  - **Remove** or trim docs that describe deleted functionality or obsolete patterns
+- Keep docs close to the code they describe — commit doc changes in the same branch
+- Skip this step only if the change is trivial or purely internal refactoring with no user-facing impact
 
 ## 7. Clean commit(s)
 

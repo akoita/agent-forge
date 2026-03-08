@@ -37,12 +37,33 @@ def main() -> None:
 @click.option("--model", default=None, help="LLM model to use")
 @click.option("--provider", default=None, help="LLM provider (gemini, openai, anthropic)")
 @click.option("--max-iterations", default=None, type=int, help="Max ReAct loop iterations")
+@click.option(
+    "--queue",
+    "queue_backend",
+    default=None,
+    type=click.Choice(["memory", "redis"], case_sensitive=False),
+    help="Enable queue mode (memory or redis)",
+)
+@click.option(
+    "--redis-url",
+    default="redis://localhost:6379/0",
+    help="Redis URL when --queue=redis",
+)
+@click.option(
+    "--max-concurrent-runs",
+    default=0,
+    type=int,
+    help="Max concurrent tasks for queue worker (0=unlimited)",
+)
 def run(
     task: str,
     repo: str,
     model: str | None,
     provider: str | None,
     max_iterations: int | None,
+    queue_backend: str | None,
+    redis_url: str,
+    max_concurrent_runs: int,
 ) -> None:
     """Run an agent task on a repository."""
     # Build CLI overrides from provided flags
@@ -74,7 +95,17 @@ def run(
         )
         sys.exit(1)
 
-    asyncio.run(_run_agent(task, repo, cfg, provider_name, api_key))
+    if queue_backend is not None:
+        asyncio.run(
+            _run_agent_queued(
+                task, repo, cfg, provider_name, api_key,
+                queue_backend=queue_backend,
+                redis_url=redis_url,
+                max_concurrent_runs=max_concurrent_runs,
+            )
+        )
+    else:
+        asyncio.run(_run_agent(task, repo, cfg, provider_name, api_key))
 
 
 async def _run_agent(
@@ -84,14 +115,17 @@ async def _run_agent(
     provider_name: str,
     api_key: str,
 ) -> None:
-    """Execute the full agent pipeline."""
+    """Execute the full agent pipeline (direct mode).
+
+    Creates an ``EventBus`` so lifecycle events are emitted even in
+    direct mode — this enables observability subscribers.
+    """
     from agent_forge.agent.core import react_loop
     from agent_forge.agent.models import AgentConfig, AgentRun
-    from agent_forge.llm.gemini import GeminiProvider
+    from agent_forge.orchestration.events import EventBus
     from agent_forge.sandbox.docker import DockerSandbox
     from agent_forge.tools import create_default_registry
 
-    # Build agent config from resolved settings
     agent_config = AgentConfig(
         model=cfg.agent.default_model,
         max_iterations=cfg.agent.max_iterations,
@@ -100,25 +134,17 @@ async def _run_agent(
     )
 
     agent_run = AgentRun(task=task, repo_path=repo, config=agent_config)
-
-    # Create LLM provider
-    if provider_name == "gemini":
-        llm = GeminiProvider(api_key=api_key)
-    else:
-        err_console.print(
-            f"[red]Provider '{provider_name}' not yet implemented.[/red] "
-            "Only 'gemini' is available."
-        )
-        sys.exit(1)
-
-    # Create tools and sandbox
+    event_bus = EventBus()
+    llm = _create_llm(provider_name, api_key)
     tools = create_default_registry()
     sandbox = DockerSandbox()
 
     with console.status("[bold green]Agent running...", spinner="dots"):
         try:
             await sandbox.start(repo_path=repo)
-            result = await react_loop(agent_run, llm, tools, sandbox)
+            result = await react_loop(
+                agent_run, llm, tools, sandbox, event_bus=event_bus,
+            )
         except Exception as exc:  # noqa: BLE001 — top-level catch-all for CLI
             err_console.print(f"[red]Agent failed:[/red] {exc}")
             sys.exit(1)
@@ -126,8 +152,136 @@ async def _run_agent(
             await sandbox.stop()
             await llm.close()
 
-    # Display results
     _display_run_summary(result)
+
+
+async def _run_agent_queued(
+    task: str,
+    repo: str,
+    cfg: Any,
+    provider_name: str,
+    api_key: str,
+    *,
+    queue_backend: str,
+    redis_url: str,
+    max_concurrent_runs: int,
+) -> None:
+    """Execute the agent via queue → worker → react_loop.
+
+    Enqueues a :class:`Task`, starts a :class:`Worker`, and waits for
+    the task to complete or fail.
+    """
+    from agent_forge.agent.models import AgentConfig
+    from agent_forge.orchestration.events import EventBus
+    from agent_forge.orchestration.queue import InMemoryQueue, Task, TaskQueue, TaskStatus
+    from agent_forge.orchestration.worker import Worker
+
+    agent_config = AgentConfig(
+        model=cfg.agent.default_model,
+        max_iterations=cfg.agent.max_iterations,
+        max_tokens_per_run=cfg.agent.max_tokens_per_run,
+        temperature=cfg.agent.temperature,
+    )
+
+    event_bus = EventBus()
+
+    # Select queue backend
+    queue: TaskQueue
+    if queue_backend == "redis":
+        from agent_forge.orchestration.redis_queue import RedisQueue
+
+        queue = RedisQueue(
+            redis_url=redis_url,
+            max_concurrent_runs=max_concurrent_runs or 0,
+        )
+    else:
+        queue = InMemoryQueue()
+
+    # Build the task runner — this is what the Worker calls for each task
+    task_runner = _make_task_runner(cfg, provider_name, api_key, event_bus)
+
+    worker = Worker(queue=queue, event_bus=event_bus, task_runner=task_runner)
+
+    # Enqueue and run
+    queue_task = Task(
+        id="",
+        task_description=task,
+        repo_path=repo,
+        config=agent_config,
+    )
+
+    with console.status("[bold green]Agent running (queue mode)...", spinner="dots"):
+        try:
+            task_id = await queue.enqueue(queue_task)
+            console.print(f"[dim]Enqueued task {task_id}[/dim]")
+            await worker.start()
+
+            # Poll until the task completes or fails
+            while True:
+                status = await queue.get_status(task_id)
+                if status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+                    break
+                await asyncio.sleep(0.5)
+
+            if status == TaskStatus.FAILED:
+                err_console.print("[red]Task failed.[/red]")
+                sys.exit(1)
+            console.print("[green]Task completed.[/green]")
+        except Exception as exc:  # noqa: BLE001 — top-level catch-all
+            err_console.print(f"[red]Agent failed:[/red] {exc}")
+            sys.exit(1)
+        finally:
+            await worker.stop()
+            if hasattr(queue, "close"):
+                await queue.close()
+
+
+def _create_llm(provider_name: str, api_key: str) -> Any:
+    """Create an LLM provider instance by name."""
+    from agent_forge.llm.gemini import GeminiProvider
+
+    if provider_name == "gemini":
+        return GeminiProvider(api_key=api_key)
+    err_console.print(
+        f"[red]Provider '{provider_name}' not yet implemented.[/red] "
+        "Only 'gemini' is available."
+    )
+    sys.exit(1)
+
+
+def _make_task_runner(
+    _cfg: Any, provider_name: str, api_key: str, event_bus: Any,
+) -> Any:
+    """Build an async callable that the Worker invokes for each task.
+
+    Each invocation creates its own LLM client, sandbox, and tool
+    registry — resources are scoped to the single run.
+    """
+    from agent_forge.agent.core import react_loop
+    from agent_forge.agent.models import AgentRun
+    from agent_forge.sandbox.docker import DockerSandbox
+    from agent_forge.tools import create_default_registry
+
+    async def _runner(task: Any) -> None:
+        agent_run = AgentRun(
+            task=task.task_description,
+            repo_path=task.repo_path,
+            config=task.config,
+        )
+        llm = _create_llm(provider_name, api_key)
+        tools = create_default_registry()
+        sandbox = DockerSandbox()
+
+        try:
+            await sandbox.start(repo_path=task.repo_path)
+            await react_loop(
+                agent_run, llm, tools, sandbox, event_bus=event_bus,
+            )
+        finally:
+            await sandbox.stop()
+            await llm.close()
+
+    return _runner
 
 
 def _display_run_summary(run: Any) -> None:

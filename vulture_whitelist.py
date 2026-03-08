@@ -22,42 +22,28 @@ import agent_forge.orchestration  # noqa: E402
 
 agent_forge.orchestration.__getattr__
 
-# --- Dataclass fields used by external callers ---
-Task.task_description
-Task.repo_path
-Task.config
+# --- Dataclass fields accessed dynamically ---
 Task.priority
 Task.created_at
 
-# --- RedisQueue extended API (used by workers, not yet wired) ---
+# --- RedisQueue extended API (used by Worker._process_task) ---
 from agent_forge.orchestration.redis_queue import RedisQueue
 
 RedisQueue.complete
 RedisQueue.fail
 RedisQueue.size
-RedisQueue.close
 
-# --- Event/EventBus (used by react_loop, not yet wired in CLI — see #80) ---
-from agent_forge.orchestration.events import Event, EventBus, EventType
+# --- Event fields accessed dynamically ---
+from agent_forge.orchestration.events import Event, EventType
 
-Event.event_type
 Event.data
 Event.timestamp
-EventBus.subscribe
-EventBus.emit
-EventType.TASK_STARTED
-EventType.TASK_COMPLETED
-EventType.TASK_FAILED
+
+# --- EventType members used by Worker + react_loop ---
 EventType.TOOL_CALLED
-EventType.TOOL_RESULT
-EventType.ITERATION_START
-EventType.ITERATION_END
-
-# --- Worker (not yet wired in CLI — see #80) ---
-from agent_forge.orchestration.worker import Worker
-
-Worker.start
-Worker.stop
+EventType.TOOL_COMPLETED
+EventType.ITERATION_STARTED
+EventType.ITERATION_COMPLETED
 
 # --- CLI entry point ---
 import agent_forge.cli  # noqa: E402
