@@ -89,7 +89,10 @@ agent-forge run \
   --repo ./my-project \
   --provider gemini \
   --model gemini-3.1-flash-lite-preview \
-  --max-iterations 25
+  --max-iterations 25 \
+  --queue memory \                  # or "redis" (omit for direct mode)
+  --redis-url redis://localhost:6379/0 \   # only with --queue redis
+  --max-concurrent-runs 4           # worker concurrency limit
 
 agent-forge status <run-id>
 agent-forge list

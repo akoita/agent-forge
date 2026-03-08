@@ -91,10 +91,24 @@ export GEMINI_API_KEY="your-key-here"
 ### Usage
 
 ```bash
-# Run an agent task
+# Run an agent task (direct mode — default)
 agent-forge run \
   --task "Add input validation to the /api/users endpoint" \
   --repo ./path/to/your/repo
+
+# Run via queue → worker pipeline (in-memory)
+agent-forge run \
+  --task "Fix login bug" \
+  --repo ./my-app \
+  --queue memory
+
+# Run via Redis queue (requires Redis)
+agent-forge run \
+  --task "Refactor auth module" \
+  --repo ./my-app \
+  --queue redis \
+  --redis-url redis://localhost:6379/0 \
+  --max-concurrent-runs 4
 
 # Check run status
 agent-forge status <run-id>

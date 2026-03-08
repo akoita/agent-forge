@@ -62,6 +62,9 @@ graph TD
 ### CLI Layer (`agent_forge/cli.py`)
 
 - Click-based commands: `run`, `status`, `list`, `config`
+- Two execution modes for `run`:
+  - **Direct mode** (default) — CLI creates an `EventBus` and calls `react_loop()` directly
+  - **Queue mode** (`--queue memory|redis`) — CLI enqueues a `Task`, a `Worker` dequeues and runs it
 - Wires configuration, API keys, LLM providers, and sandbox
 - Rich terminal output (tables, panels, syntax-highlighted JSON)
 
@@ -115,8 +118,14 @@ Tools are registered in `ToolRegistry` and their schemas are passed to the LLM a
 
 ### Orchestration (`agent_forge/orchestration/`)
 
-- `queue.py` — Task queue (Redis or in-memory) for concurrent runs
-- `events.py` — In-process pub/sub event bus
+| Module           | Purpose                                                           |
+| ---------------- | ----------------------------------------------------------------- |
+| `queue.py`       | Task queue ABC + in-memory priority queue implementation          |
+| `redis_queue.py` | Redis-backed task queue (requires `redis` extra)                  |
+| `worker.py`      | Polls the queue, invokes the task runner, emits lifecycle events  |
+| `events.py`      | In-process async pub/sub event bus (run started/completed/failed) |
+
+The CLI wires these together: `CLI → TaskQueue.enqueue() → Worker.dequeue() → react_loop()`.
 
 ## ReAct Loop Sequence
 
