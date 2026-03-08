@@ -43,10 +43,12 @@ tests/
 │   └── sample_repo/         # Flask app fixture for agent testing
 │       ├── app.py
 │       ├── requirements.txt
-│       └── test_app.py
+│       ├── test_app.py
+│       └── utils.py
 ├── unit/                    # Fast, isolated, no external deps
 │   ├── test_agent_core.py   # ReAct loop with mocked LLM
 │   ├── test_cli.py          # CLI commands with CliRunner
+│   ├── test_cli_orchestration.py  # Orchestration config matrix
 │   ├── test_config.py       # Config loading + merging
 │   ├── test_llm_base.py     # LLM base classes
 │   ├── test_llm_gemini.py   # Gemini adapter (mocked HTTP)
@@ -58,7 +60,8 @@ tests/
 │   └── test_tools_integration.py  # Tools in real sandbox
 └── e2e/                     # Require Docker + API key
     ├── test_agent_e2e.py    # Full agent pipeline
-    └── test_cli_e2e.py      # CLI with real LLM
+    ├── test_cli_e2e.py      # CLI with real LLM
+    └── test_pipeline_e2e.py # Pipeline with mocked LLM (VCR)
 ```
 
 ## Shared Fixtures (`conftest.py`)
