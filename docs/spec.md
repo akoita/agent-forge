@@ -34,12 +34,12 @@
 
 ### Key differentiators
 
-| Differentiator              | What it means                                                              |
-| --------------------------- | -------------------------------------------------------------------------- |
-| **Sandboxed execution**     | Every tool invocation runs in an ephemeral Docker container — never on the host |
-| **Multi-provider LLM**      | Gemini (primary), OpenAI, Anthropic via a unified adapter layer            |
-| **Production observability** | Structured logs, trace IDs, token/cost tracking on every run              |
-| **Queue-based scaling**     | Redis + task queue for concurrent, isolated agent runs                     |
+| Differentiator               | What it means                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------------- |
+| **Sandboxed execution**      | Every tool invocation runs in an ephemeral Docker container — never on the host |
+| **Multi-provider LLM**       | Gemini (primary), OpenAI, Anthropic via a unified adapter layer                 |
+| **Production observability** | Structured logs, trace IDs, token/cost tracking on every run                    |
+| **Queue-based scaling**      | Redis + task queue for concurrent, isolated agent runs                          |
 
 ---
 
@@ -58,15 +58,15 @@
 
 Agent Forge is designed to evolve from a single-agent CLI tool into a **full-stack AI coding agent platform**. Every layer is architected with this trajectory in mind:
 
-| Dimension                 | Starting Point                        | Evolution Path                                                      |
-| ------------------------- | ------------------------------------- | ------------------------------------------------------------------- |
-| **Interface**             | CLI-first                             | → REST API → Real-time Web Dashboard → IDE plugins                  |
-| **Isolation**             | Docker containers                     | → Firecracker microVMs → Kubernetes pod sandboxes                   |
-| **Agent topology**        | Single agent, single task             | → Multi-agent collaboration → hierarchical delegation               |
-| **LLM strategy**          | Foundation model APIs as-is           | → Custom system prompts → fine-tuned routing → self-hosted models   |
-| **Multi-tenancy**         | Single-user local                     | → Auth + RBAC → team workspaces → SaaS billing                     |
-| **Tool ecosystem**        | Built-in tools only                   | → Plugin system → MCP server → community marketplace                |
-| **Memory**                | Stateless per-run                     | → Persistent memory → cross-run learning → vector-backed RAG        |
+| Dimension          | Starting Point              | Evolution Path                                                    |
+| ------------------ | --------------------------- | ----------------------------------------------------------------- |
+| **Interface**      | CLI-first                   | → REST API → Real-time Web Dashboard → IDE plugins                |
+| **Isolation**      | Docker containers           | → Firecracker microVMs → Kubernetes pod sandboxes                 |
+| **Agent topology** | Single agent, single task   | → Multi-agent collaboration → hierarchical delegation             |
+| **LLM strategy**   | Foundation model APIs as-is | → Custom system prompts → fine-tuned routing → self-hosted models |
+| **Multi-tenancy**  | Single-user local           | → Auth + RBAC → team workspaces → SaaS billing                    |
+| **Tool ecosystem** | Built-in tools only         | → Plugin system → MCP server → community marketplace              |
+| **Memory**         | Stateless per-run           | → Persistent memory → cross-run learning → vector-backed RAG      |
 
 Each step on these paths is captured as a concrete milestone in [§12. Roadmap](#12-roadmap).
 
@@ -245,11 +245,11 @@ class LLMProvider(ABC):
 
 #### Provider Implementations
 
-| Provider    | Module                        | Auth                             | Model Default              |
-| ----------- | ----------------------------- | -------------------------------- | -------------------------- |
-| **Gemini**  | `agent_forge.llm.gemini`      | `GEMINI_API_KEY` env var         | `gemini-2.0-flash`        |
-| **OpenAI**  | `agent_forge.llm.openai`      | `OPENAI_API_KEY` env var         | `gpt-4o`                   |
-| **Anthropic** | `agent_forge.llm.anthropic` | `ANTHROPIC_API_KEY` env var      | `claude-sonnet-4-20250514`  |
+| Provider      | Module                      | Auth                        | Model Default              |
+| ------------- | --------------------------- | --------------------------- | -------------------------- |
+| **Gemini**    | `agent_forge.llm.gemini`    | `GEMINI_API_KEY` env var    | `gemini-2.0-flash`         |
+| **OpenAI**    | `agent_forge.llm.openai`    | `OPENAI_API_KEY` env var    | `gpt-4o`                   |
+| **Anthropic** | `agent_forge.llm.anthropic` | `ANTHROPIC_API_KEY` env var | `claude-sonnet-4-20250514` |
 
 #### Provider-Specific Mapping Rules
 
@@ -259,13 +259,13 @@ class LLMProvider(ABC):
 
 #### Error Handling
 
-| Error Type        | Strategy                                                      |
-| ----------------- | ------------------------------------------------------------- |
-| Rate limit (429)  | Exponential backoff: 1s → 2s → 4s → 8s → 16s, max 3 retries |
-| Auth error (401)  | Fail immediately with clear message                           |
-| Timeout           | Cancel after `config.timeout_seconds`, retry once             |
-| Malformed response | Log raw response, retry once with same prompt                |
-| Context overflow  | Truncate oldest non-system messages, retry                    |
+| Error Type         | Strategy                                                    |
+| ------------------ | ----------------------------------------------------------- |
+| Rate limit (429)   | Exponential backoff: 1s → 2s → 4s → 8s → 16s, max 3 retries |
+| Auth error (401)   | Fail immediately with clear message                         |
+| Timeout            | Cancel after `config.timeout_seconds`, retry once           |
+| Malformed response | Log raw response, retry once with same prompt               |
+| Context overflow   | Truncate oldest non-system messages, retry                  |
 
 ---
 
@@ -326,57 +326,57 @@ class Tool(ABC):
 
 ##### `read_file`
 
-| Field       | Value                                                                 |
-| ----------- | --------------------------------------------------------------------- |
-| Description | Read the contents of a file at the given path                         |
-| Parameters  | `path` (string, required) — relative path within the workspace        |
-| Behavior    | Runs `cat <path>` inside sandbox. Returns file content or error.      |
+| Field       | Value                                                                               |
+| ----------- | ----------------------------------------------------------------------------------- |
+| Description | Read the contents of a file at the given path                                       |
+| Parameters  | `path` (string, required) — relative path within the workspace                      |
+| Behavior    | Runs `cat <path>` inside sandbox. Returns file content or error.                    |
 | Limits      | Max file size: 100 KB. Files larger than this return a truncated preview + warning. |
 
 ##### `write_file`
 
-| Field       | Value                                                                           |
-| ----------- | ------------------------------------------------------------------------------- |
-| Description | Create or overwrite a file at the given path with the provided content          |
-| Parameters  | `path` (string, required), `content` (string, required)                         |
-| Behavior    | Writes content to the specified path inside sandbox. Creates parent dirs.       |
-| Validation  | Path must be within `/workspace`. Reject paths containing `..` traversal.       |
+| Field       | Value                                                                     |
+| ----------- | ------------------------------------------------------------------------- |
+| Description | Create or overwrite a file at the given path with the provided content    |
+| Parameters  | `path` (string, required), `content` (string, required)                   |
+| Behavior    | Writes content to the specified path inside sandbox. Creates parent dirs. |
+| Validation  | Path must be within `/workspace`. Reject paths containing `..` traversal. |
 
 ##### `edit_file`
 
-| Field       | Value                                                                           |
-| ----------- | ------------------------------------------------------------------------------- |
-| Description | Apply a targeted edit to a file by replacing a specific text block              |
+| Field       | Value                                                                                   |
+| ----------- | --------------------------------------------------------------------------------------- |
+| Description | Apply a targeted edit to a file by replacing a specific text block                      |
 | Parameters  | `path` (string, required), `old_text` (string, required), `new_text` (string, required) |
-| Behavior    | Reads file, replaces first occurrence of `old_text` with `new_text`, writes back. |
-| Error       | If `old_text` not found, return error with message + file content preview.      |
+| Behavior    | Reads file, replaces first occurrence of `old_text` with `new_text`, writes back.       |
+| Error       | If `old_text` not found, return error with message + file content preview.              |
 
 ##### `run_shell`
 
-| Field       | Value                                                                                     |
-| ----------- | ----------------------------------------------------------------------------------------- |
-| Description | Execute a shell command inside the sandboxed workspace                                    |
-| Parameters  | `command` (string, required), `timeout_seconds` (int, optional, default 30)               |
-| Behavior    | Runs command via `bash -c` in sandbox. Captures stdout + stderr.                          |
-| Limits      | Hard timeout at `min(timeout_seconds, 120)`. Max output: 50 KB (truncate with warning).   |
-| Blocklist   | Reject commands matching: `rm -rf /`, `:(){ :|:& };:`, `mkfs`, `dd if=/dev/`, `shutdown` |
+| Field       | Value                                                                                   |
+| ----------- | --------------------------------------------------------------------------------------- | ------------------------------------------ |
+| Description | Execute a shell command inside the sandboxed workspace                                  |
+| Parameters  | `command` (string, required), `timeout_seconds` (int, optional, default 30)             |
+| Behavior    | Runs command via `bash -c` in sandbox. Captures stdout + stderr.                        |
+| Limits      | Hard timeout at `min(timeout_seconds, 120)`. Max output: 50 KB (truncate with warning). |
+| Blocklist   | Reject commands matching: `rm -rf /`, `:(){ :                                           | :& };:`, `mkfs`, `dd if=/dev/`, `shutdown` |
 
 ##### `search_codebase`
 
-| Field       | Value                                                                 |
-| ----------- | --------------------------------------------------------------------- |
-| Description | Search for a pattern across files in the workspace using ripgrep      |
+| Field       | Value                                                                                                   |
+| ----------- | ------------------------------------------------------------------------------------------------------- |
+| Description | Search for a pattern across files in the workspace using ripgrep                                        |
 | Parameters  | `pattern` (string, required), `file_glob` (string, optional), `max_results` (int, optional, default 20) |
-| Behavior    | Runs `rg --json` inside sandbox. Parses and formats results.          |
-| Output      | Returns list of `{file, line, content}` matches.                      |
+| Behavior    | Runs `rg --json` inside sandbox. Parses and formats results.                                            |
+| Output      | Returns list of `{file, line, content}` matches.                                                        |
 
 ##### `list_directory`
 
-| Field       | Value                                                                          |
-| ----------- | ------------------------------------------------------------------------------ |
-| Description | List files and directories at the given path                                   |
+| Field       | Value                                                                                                                                |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Description | List files and directories at the given path                                                                                         |
 | Parameters  | `path` (string, optional, default `/workspace`), `recursive` (bool, optional, default false), `max_depth` (int, optional, default 3) |
-| Behavior    | Runs `find` or `tree` inside sandbox.                                          |
+| Behavior    | Runs `find` or `tree` inside sandbox.                                                                                                |
 
 #### Tool Registry
 
@@ -504,17 +504,52 @@ USER agent
                               └──────────┘
 ```
 
-#### Security Constraints
+#### Sandbox Philosophy
 
-| Constraint            | Implementation                                                       |
-| --------------------- | -------------------------------------------------------------------- |
-| **No host network**   | `--network none` by default                                          |
-| **Read-only root FS** | `--read-only` with `/workspace` as a bind-mount (rw)                |
-| **No privileged**     | Never use `--privileged`                                             |
-| **Resource caps**     | `--cpus`, `--memory`, `--pids-limit 256`                            |
-| **No new privileges** | `--security-opt no-new-privileges`                                  |
-| **Tmpfs for temp**    | `--tmpfs /tmp:rw,noexec,nosuid,size=64m`                            |
-| **Auto-remove**       | `--rm` flag, plus cleanup on agent run completion                    |
+> **Sandboxing means isolation, not restriction.**
+
+The sandbox is an **isolation boundary** — it prevents agent actions from affecting the host system, other agents, or external services. However, _inside_ the sandbox, the agent should have access to all the compute resources it needs to complete its task.
+
+This follows the model established by platforms like [E2B](https://e2b.dev): each agent runs in its own isolated environment with full access to filesystem, network, package managers, and runtimes — the boundary is between the sandbox and the outside world, not between the agent and its own tools.
+
+**Core principles:**
+
+| Principle                     | Description                                                                                                                             |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **Isolation**                 | Each agent run gets its own ephemeral container. No shared state between runs.                                                          |
+| **Secure by default**         | New sandboxes start with restricted permissions (no network, read-only root).                                                           |
+| **Configurable capabilities** | Permissions are opt-in — operators explicitly grant network access, writable paths, and custom runtimes based on the task requirements. |
+| **Ephemeral**                 | Containers are created per-run and destroyed after completion. No persistence between runs.                                             |
+
+#### Permission Model
+
+Sandbox capabilities are configured through `SandboxConfig` and CLI flags. Each permission starts restricted and can be explicitly enabled:
+
+| Capability          | Default           | Opt-in via                           | Use case                          |
+| ------------------- | ----------------- | ------------------------------------ | --------------------------------- |
+| **Network access**  | ❌ Disabled       | `network_enabled=True` / `--network` | Install dependencies, fetch APIs  |
+| **Custom runtime**  | Python 3.12       | `image="..."` / `--sandbox-image`    | Node.js, Go, Rust, multi-runtime  |
+| **Writable paths**  | `/workspace` only | Future: `--writable-paths`           | Cache dirs (`~/.npm`, `~/.cache`) |
+| **Command timeout** | 120s              | Future: `--command-timeout`          | Long builds, `npm install`        |
+| **Tmpfs size**      | 64 MB (noexec)    | Future: `--tmpfs-size`               | Larger temporary storage          |
+
+> **Design decision:** We start restricted and let operators widen permissions, rather than starting open and asking them to lock down. This ensures that forgetting to configure is safe, not dangerous.
+
+#### Security Constraints (Defaults)
+
+These are the **default** security constraints applied to every sandbox. They represent the most restrictive baseline and can be selectively relaxed through the permission model above.
+
+| Constraint            | Implementation                                       |
+| --------------------- | ---------------------------------------------------- |
+| **No host network**   | `--network none` by default                          |
+| **Read-only root FS** | `--read-only` with `/workspace` as a bind-mount (rw) |
+| **No privileged**     | Never use `--privileged`                             |
+| **Resource caps**     | `--cpus`, `--memory`, `--pids-limit 256`             |
+| **No new privileges** | `--security-opt no-new-privileges`                   |
+| **Tmpfs for temp**    | `--tmpfs /tmp:rw,noexec,nosuid,size=64m`             |
+| **Auto-remove**       | `--rm` flag, plus cleanup on agent run completion    |
+
+> **Note:** `--privileged` and `no-new-privileges` are **hard constraints** that cannot be relaxed. All other constraints are configurable.
 
 ---
 
@@ -649,13 +684,13 @@ You can use the following tools to complete the task:
 
 #### Termination Conditions
 
-| Condition             | Action                         | State        |
-| --------------------- | ------------------------------ | ------------ |
-| LLM returns no tool calls and `finish_reason=stop` | Task complete | `COMPLETED`  |
-| `iterations >= max_iterations` | Force stop                    | `TIMEOUT`    |
-| `total_tokens >= max_tokens_per_run` | Budget exceeded           | `TIMEOUT`    |
-| Unrecoverable error   | Log error, stop                | `FAILED`     |
-| User cancellation     | Graceful stop                  | `CANCELLED`  |
+| Condition                                          | Action          | State       |
+| -------------------------------------------------- | --------------- | ----------- |
+| LLM returns no tool calls and `finish_reason=stop` | Task complete   | `COMPLETED` |
+| `iterations >= max_iterations`                     | Force stop      | `TIMEOUT`   |
+| `total_tokens >= max_tokens_per_run`               | Budget exceeded | `TIMEOUT`   |
+| Unrecoverable error                                | Log error, stop | `FAILED`    |
+| User cancellation                                  | Graceful stop   | `CANCELLED` |
 
 ---
 
@@ -708,10 +743,10 @@ class TaskQueue(ABC):
 
 ##### Queue Implementations
 
-| Implementation  | Module                              | Use Case                        |
-| --------------- | ----------------------------------- | ------------------------------- |
-| **InMemory**    | `agent_forge.queue.memory`          | Development, testing, single-process |
-| **Redis**       | `agent_forge.queue.redis`           | Production, multi-worker        |
+| Implementation | Module                     | Use Case                             |
+| -------------- | -------------------------- | ------------------------------------ |
+| **InMemory**   | `agent_forge.queue.memory` | Development, testing, single-process |
+| **Redis**      | `agent_forge.queue.redis`  | Production, multi-worker             |
 
 ##### State Machine
 
@@ -780,11 +815,11 @@ All log entries are JSON objects with a consistent schema:
 
 Logger configuration:
 
-| Destination     | Format        | Level   | When                |
-| --------------- | ------------- | ------- | ------------------- |
-| Console (stderr)| Colored text  | INFO    | Always              |
-| File            | JSON          | DEBUG   | Always              |
-| Structured sink | JSON          | INFO    | Optional (future)   |
+| Destination      | Format       | Level | When              |
+| ---------------- | ------------ | ----- | ----------------- |
+| Console (stderr) | Colored text | INFO  | Always            |
+| File             | JSON         | DEBUG | Always            |
+| Structured sink  | JSON         | INFO  | Optional (future) |
 
 #### Token & Cost Tracking
 
@@ -936,14 +971,14 @@ Configuration is resolved in the following order (highest priority first):
 
 Format: `AGENT_FORGE_{SECTION}_{KEY}` (uppercase, underscored).
 
-| Env Var                          | Config Path              |
-| -------------------------------- | ------------------------ |
+| Env Var                            | Config Path            |
+| ---------------------------------- | ---------------------- |
 | `AGENT_FORGE_AGENT_MAX_ITERATIONS` | `agent.max_iterations` |
 | `AGENT_FORGE_SANDBOX_MEMORY_LIMIT` | `sandbox.memory_limit` |
-| `AGENT_FORGE_QUEUE_BACKEND`       | `queue.backend`         |
-| `GEMINI_API_KEY`                  | (direct, not prefixed)   |
-| `OPENAI_API_KEY`                  | (direct, not prefixed)   |
-| `ANTHROPIC_API_KEY`               | (direct, not prefixed)   |
+| `AGENT_FORGE_QUEUE_BACKEND`        | `queue.backend`        |
+| `GEMINI_API_KEY`                   | (direct, not prefixed) |
+| `OPENAI_API_KEY`                   | (direct, not prefixed) |
+| `ANTHROPIC_API_KEY`                | (direct, not prefixed) |
 
 ---
 
@@ -994,11 +1029,11 @@ class InvalidStateTransitionError(AgentForgeError):
 
 ### 7.2 Retry Policies
 
-| Component     | Retry Strategy                                    | Max Retries | Backoff          |
-| ------------- | ------------------------------------------------- | ----------- | ---------------- |
-| LLM API calls | Retry on 429, 500, 502, 503, timeout             | 3           | Exponential (1s base) |
-| Tool execution | Retry on sandbox transient failure                | 1           | Fixed 2s         |
-| Sandbox start | Retry if Docker daemon is temporarily unavailable  | 2           | Fixed 5s         |
+| Component      | Retry Strategy                                    | Max Retries | Backoff               |
+| -------------- | ------------------------------------------------- | ----------- | --------------------- |
+| LLM API calls  | Retry on 429, 500, 502, 503, timeout              | 3           | Exponential (1s base) |
+| Tool execution | Retry on sandbox transient failure                | 1           | Fixed 2s              |
+| Sandbox start  | Retry if Docker daemon is temporarily unavailable | 2           | Fixed 5s              |
 
 ### 7.3 Graceful Degradation
 
@@ -1012,16 +1047,16 @@ class InvalidStateTransitionError(AgentForgeError):
 
 ### 8.1 Threat Model
 
-| Threat                       | Mitigation                                                       |
-| ---------------------------- | ---------------------------------------------------------------- |
-| **Host escape from sandbox** | No `--privileged`, `no-new-privileges`, read-only root FS        |
-| **Resource exhaustion**      | CPU/memory/PID limits on containers                              |
-| **Malicious LLM output**     | Command blocklist in `run_shell`, path validation in file tools  |
-| **Data exfiltration**        | `--network none` by default; network only enabled when explicit  |
-| **API key leakage**          | Keys only in env vars, never logged, never passed to sandbox     |
-| **Path traversal**           | All file operations validated to stay within `/workspace`        |
-| **Fork bomb**                | `--pids-limit 256`                                               |
-| **Disk exhaustion**          | Tmpfs size limits, workspace quota via Docker storage driver      |
+| Threat                       | Mitigation                                                      |
+| ---------------------------- | --------------------------------------------------------------- |
+| **Host escape from sandbox** | No `--privileged`, `no-new-privileges`, read-only root FS       |
+| **Resource exhaustion**      | CPU/memory/PID limits on containers                             |
+| **Malicious LLM output**     | Command blocklist in `run_shell`, path validation in file tools |
+| **Data exfiltration**        | `--network none` by default; network only enabled when explicit |
+| **API key leakage**          | Keys only in env vars, never logged, never passed to sandbox    |
+| **Path traversal**           | All file operations validated to stay within `/workspace`       |
+| **Fork bomb**                | `--pids-limit 256`                                              |
+| **Disk exhaustion**          | Tmpfs size limits, workspace quota via Docker storage driver    |
 
 ### 8.2 API Key Management
 
@@ -1036,11 +1071,11 @@ class InvalidStateTransitionError(AgentForgeError):
 
 ### 9.1 Test Layers
 
-| Layer              | Framework   | Target                          | Coverage Goal |
-| ------------------ | ----------- | ------------------------------- | ------------- |
-| **Unit tests**     | `pytest`    | Individual modules in isolation | 80%+          |
-| **Integration**    | `pytest`    | Module interactions, Docker     | Key flows     |
-| **End-to-end**     | `pytest`    | Full agent run on sample repo   | 3+ scenarios  |
+| Layer           | Framework | Target                          | Coverage Goal |
+| --------------- | --------- | ------------------------------- | ------------- |
+| **Unit tests**  | `pytest`  | Individual modules in isolation | 80%+          |
+| **Integration** | `pytest`  | Module interactions, Docker     | Key flows     |
+| **End-to-end**  | `pytest`  | Full agent run on sample repo   | 3+ scenarios  |
 
 ### 9.2 Unit Tests
 

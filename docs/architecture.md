@@ -155,5 +155,5 @@ stateDiagram-v2
     RUNNING --> FAILED : unrecoverable error
     RUNNING --> CANCELLED : user cancel
 
-For the full technical specification, see [spec.md](../spec.md).
+For the full technical specification, see [spec.md](spec.md).
 ```

@@ -202,4 +202,4 @@ image = "agent-forge-node:latest"
 network_enabled = true
 ```
 
-For the full interface contracts, see [spec.md](../spec.md) § 4.
+For the full interface contracts, see [spec.md](spec.md) § 4.
