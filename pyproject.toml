@@ -46,6 +46,8 @@ dev = [
     "respx>=0.21",
     "types-docker>=7.0",
     "python-semantic-release>=9.0",
+    "vulture>=2.11",
+    "radon>=6.0",
 ]
 
 [project.scripts]
@@ -62,16 +64,32 @@ line-length = 100
 
 [tool.ruff.lint]
 select = [
-    "E",   # pycodestyle errors
-    "W",   # pycodestyle warnings
-    "F",   # pyflakes
-    "I",   # isort
-    "N",   # pep8-naming
-    "UP",  # pyupgrade
-    "B",   # flake8-bugbear
-    "SIM", # flake8-simplify
-    "TCH", # flake8-type-checking
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "C901", # McCabe complexity
+    "S",    # flake8-bandit (security)
+    "PT",   # flake8-pytest-style
+    "RET",  # flake8-return
+    "ARG",  # flake8-unused-arguments
+    "ERA",  # flake8-eradicate (commented-out code)
+    "PIE",  # flake8-pie (misc)
+    "RUF",  # Ruff-specific rules
+    "BLE",  # flake8-blind-except
 ]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S108", "ARG001", "ARG002", "PT018", "RUF015"]
+"tests/fixtures/**" = ["S201"]  # sample Flask app uses debug=True by design
 
 [tool.mypy]
 python_version = "3.11"

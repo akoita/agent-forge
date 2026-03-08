@@ -70,7 +70,7 @@ class DockerSandbox(Sandbox):
         self._config = cfg
 
         security_opts: list[str] = ["no-new-privileges"]
-        tmpfs: dict[str, str] = {"/tmp": "rw,noexec,nosuid,size=64m"}
+        tmpfs: dict[str, str] = {"/tmp": "rw,noexec,nosuid,size=64m"}  # noqa: S108
 
         # Parse memory limit to bytes for Docker SDK
         mem_limit = cfg.memory_limit

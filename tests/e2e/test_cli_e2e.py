@@ -33,12 +33,12 @@ pytestmark = [
 ]
 
 
-@pytest.fixture()
+@pytest.fixture
 def runner() -> CliRunner:
     return CliRunner()
 
 
-@pytest.fixture()
+@pytest.fixture
 def sample_repo(tmp_path: Path) -> Path:
     """Create a minimal repo for the agent to work on."""
     (tmp_path / "hello.py").write_text("# placeholder\n")

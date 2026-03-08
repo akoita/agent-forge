@@ -179,6 +179,39 @@ def _section_header(title: str) -> str:
     return f"╠{'─' * _BOX_WIDTH}╣\n║ {title:<{_BOX_WIDTH - 1}}║"
 
 
+def _tool_summary_lines(run: AgentRun) -> list[str]:
+    """Build the 'Tool Invocations' section lines."""
+    if not run.tool_invocations:
+        return []
+    lines = [_section_header("Tool Invocations")]
+    tool_counts: Counter[str] = Counter()
+    tool_times: dict[str, list[int]] = {}
+    for inv in run.tool_invocations:
+        tool_counts[inv.tool_name] += 1
+        tool_times.setdefault(inv.tool_name, []).append(inv.duration_ms)
+    for name, count in tool_counts.most_common():
+        avg_ms = sum(tool_times[name]) // len(tool_times[name])
+        call_word = "call" if count == 1 else "calls"
+        lines.append(_row(f"  {name}:", f"{count} {call_word} (avg {avg_ms:,}ms)"))
+    return lines
+
+
+def _modified_files_lines(run: AgentRun) -> list[str]:
+    """Build the 'Files Modified' section lines."""
+    modified: list[str] = []
+    for inv in run.tool_invocations:
+        if inv.tool_name in ("write_file", "edit_file") and not inv.result.error:
+            path = inv.arguments.get("path") or inv.arguments.get("file_path")
+            if isinstance(path, str) and path not in modified:
+                modified.append(path)
+    if not modified:
+        return []
+    lines = [_section_header("Files Modified")]
+    for fpath in modified:
+        lines.append(_row("  M", fpath))
+    return lines
+
+
 def print_run_summary(
     run: AgentRun,
     tracker: CostTracker,
@@ -202,54 +235,29 @@ def print_run_summary(
     # Truncate task to fit the box
     task_display = run.task[:38] + "…" if len(run.task) > 39 else run.task
 
-    lines: list[str] = []
-    lines.append(f"╔{'═' * _BOX_WIDTH}╗")
-    lines.append(f"║{'Agent Forge — Run Summary':^{_BOX_WIDTH}}║")
-    lines.append(f"╠{'═' * _BOX_WIDTH}╣")
-    lines.append(_row("Run ID:", run.id))
-    lines.append(_row("Status:", status_str))
-    lines.append(_row("Task:", task_display))
-    lines.append(_row("Duration:", duration))
-    lines.append(_row("Iterations:", str(run.iterations)))
-    lines.append(_row("Model:", run.config.model))
+    lines: list[str] = [
+        f"╔{'═' * _BOX_WIDTH}╗",
+        f"║{'Agent Forge — Run Summary':^{_BOX_WIDTH}}║",
+        f"╠{'═' * _BOX_WIDTH}╣",
+        _row("Run ID:", run.id),
+        _row("Status:", status_str),
+        _row("Task:", task_display),
+        _row("Duration:", duration),
+        _row("Iterations:", str(run.iterations)),
+        _row("Model:", run.config.model),
+        # Token usage
+        _section_header("Token Usage"),
+        _row("  Prompt:", f"{s['total_prompt_tokens']:,} tokens"),
+        _row("  Completion:", f"{s['total_completion_tokens']:,} tokens"),
+        _row("  Total:", f"{s['total_tokens']:,} tokens"),
+        _row("  Est. Cost:", f"${s['total_cost_usd']:.4f}"),
+    ]
 
-    # Token usage section
-    lines.append(_section_header("Token Usage"))
-    lines.append(_row("  Prompt:", f"{s['total_prompt_tokens']:,} tokens"))
-    lines.append(_row("  Completion:", f"{s['total_completion_tokens']:,} tokens"))
-    lines.append(_row("  Total:", f"{s['total_tokens']:,} tokens"))
-    lines.append(_row("  Est. Cost:", f"${s['total_cost_usd']:.4f}"))
-
-    # Tool invocations section
-    if run.tool_invocations:
-        lines.append(_section_header("Tool Invocations"))
-        tool_counts: Counter[str] = Counter()
-        tool_times: dict[str, list[int]] = {}
-        for inv in run.tool_invocations:
-            tool_counts[inv.tool_name] += 1
-            tool_times.setdefault(inv.tool_name, []).append(inv.duration_ms)
-        for name, count in tool_counts.most_common():
-            avg_ms = sum(tool_times[name]) // len(tool_times[name])
-            call_word = "call" if count == 1 else "calls"
-            lines.append(
-                _row(f"  {name}:", f"{count} {call_word} (avg {avg_ms:,}ms)")
-            )
-
-    # Files modified section — extract from write_file tool invocations
-    modified_files: list[str] = []
-    for inv in run.tool_invocations:
-        if inv.tool_name in ("write_file", "edit_file") and not inv.result.error:
-            path = inv.arguments.get("path") or inv.arguments.get("file_path")
-            if isinstance(path, str) and path not in modified_files:
-                modified_files.append(path)
-    if modified_files:
-        lines.append(_section_header("Files Modified"))
-        for fpath in modified_files:
-            lines.append(_row("  M", fpath))
-
+    lines.extend(_tool_summary_lines(run))
+    lines.extend(_modified_files_lines(run))
     lines.append(f"╚{'═' * _BOX_WIDTH}╝")
-    output = "\n".join(lines)
 
+    output = "\n".join(lines)
     print(output, file=file)
     return output
 

@@ -116,7 +116,7 @@ class Worker:
             )
             logger.info("task_completed", task_id=task.id)
 
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             task.status = TaskStatus.FAILED
 
             await self._event_bus.publish(
