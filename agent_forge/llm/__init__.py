@@ -13,12 +13,20 @@ from agent_forge.llm.base import (
 )
 from agent_forge.llm.errors import (
     AgentForgeError,
+    InvalidStateTransitionError,
     LLMAuthError,
     LLMContextOverflowError,
     LLMError,
     LLMRateLimitError,
     LLMResponseError,
     LLMTimeoutError,
+    SandboxError,
+    SandboxStartupError,
+    SandboxTimeoutError,
+    ToolError,
+    ToolExecutionError,
+    ToolNotFoundError,
+    ToolTimeoutError,
 )
 from agent_forge.llm.factory import create_provider
 from agent_forge.llm.gemini import GeminiProvider
@@ -28,6 +36,7 @@ __all__ = [
     "AgentForgeError",
     "AnthropicProvider",
     "GeminiProvider",
+    "InvalidStateTransitionError",
     "LLMAuthError",
     "LLMConfig",
     "LLMContextOverflowError",
@@ -40,8 +49,15 @@ __all__ = [
     "Message",
     "OpenAIProvider",
     "Role",
+    "SandboxError",
+    "SandboxStartupError",
+    "SandboxTimeoutError",
     "TokenUsage",
     "ToolCall",
     "ToolDefinition",
+    "ToolError",
+    "ToolExecutionError",
+    "ToolNotFoundError",
+    "ToolTimeoutError",
     "create_provider",
 ]

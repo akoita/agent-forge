@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 import docker
 from docker.errors import APIError, NotFound
 
+from agent_forge.llm.errors import SandboxStartupError
 from agent_forge.observability import get_logger
 from agent_forge.sandbox.base import ExecResult, Sandbox, SandboxConfig, SandboxState
 
@@ -20,6 +21,10 @@ if TYPE_CHECKING:
     from docker.models.containers import Container
 
 logger = get_logger("sandbox")
+
+# Retry policy for sandbox start (spec § 7.2)
+_START_MAX_RETRIES = 2
+_START_RETRY_DELAY_S = 5.0
 
 
 class DockerSandbox(Sandbox):
@@ -52,7 +57,11 @@ class DockerSandbox(Sandbox):
     # ------------------------------------------------------------------
 
     async def start(self, repo_path: str, config: SandboxConfig | None = None) -> None:
-        """Create and start the sandbox container."""
+        """Create and start the sandbox container.
+
+        Retries up to 2 times with a 5s delay if the Docker daemon is
+        temporarily unavailable (spec § 7.2).
+        """
         if self._state == SandboxState.RUNNING:
             msg = "Sandbox is already running"
             raise RuntimeError(msg)
@@ -95,21 +104,38 @@ class DockerSandbox(Sandbox):
         # when the host reads workspace files after the container writes them).
         run_kwargs["user"] = f"{self._host_uid}:{self._host_gid}"
 
-        try:
-            self._container = await asyncio.to_thread(
-                lambda: self._client.containers.run(**run_kwargs)
-            )
+        last_exc: Exception | None = None
+        for attempt in range(_START_MAX_RETRIES + 1):
+            try:
+                self._container = await asyncio.to_thread(
+                    lambda: self._client.containers.run(**run_kwargs)
+                )
 
-            self._state = SandboxState.RUNNING
-            logger.info(
-                "sandbox_started",
-                container=self._container.short_id,  # type: ignore[union-attr]
-                image=cfg.image,
-            )
-        except (APIError, Exception) as exc:
-            self._state = SandboxState.STOPPED
-            msg = f"Failed to start sandbox container: {exc}"
-            raise RuntimeError(msg) from exc
+                self._state = SandboxState.RUNNING
+                logger.info(
+                    "sandbox_started",
+                    container=self._container.short_id,  # type: ignore[union-attr]
+                    image=cfg.image,
+                    attempt=attempt + 1,
+                )
+                return
+            except (APIError, Exception) as exc:  # noqa: BLE001
+                last_exc = exc
+                if attempt < _START_MAX_RETRIES:
+                    logger.warning(
+                        "sandbox_start_retry",
+                        attempt=attempt + 1,
+                        delay_s=_START_RETRY_DELAY_S,
+                        error=str(exc),
+                    )
+                    await asyncio.sleep(_START_RETRY_DELAY_S)
+
+        self._state = SandboxState.STOPPED
+        msg = (
+            f"Failed to start sandbox container after "
+            f"{_START_MAX_RETRIES + 1} attempts: {last_exc}"
+        )
+        raise SandboxStartupError(msg) from last_exc
 
     async def stop(self) -> None:
         """Stop and remove the sandbox container."""

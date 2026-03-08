@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -10,6 +11,7 @@ from agent_forge.agent.persistence import save_run
 from agent_forge.agent.prompts import build_system_prompt
 from agent_forge.agent.state import transition
 from agent_forge.llm.base import LLMConfig, Message, Role
+from agent_forge.llm.errors import ToolExecutionError
 from agent_forge.observability import (
     CostTracker,
     get_logger,
@@ -23,9 +25,13 @@ from agent_forge.orchestration.events import Event, EventBus, EventType
 if TYPE_CHECKING:
     from agent_forge.llm.base import LLMProvider
     from agent_forge.sandbox.base import Sandbox
-    from agent_forge.tools.base import ToolRegistry
+    from agent_forge.tools.base import ToolRegistry, ToolResult
 
 logger = get_logger("agent_core")
+
+# Retry policy for tool execution (spec § 7.2)
+_TOOL_MAX_RETRIES = 1
+_TOOL_RETRY_DELAY_S = 2.0
 
 
 async def react_loop(
@@ -122,7 +128,9 @@ async def react_loop(
             )
 
             for tool_call in response.tool_calls:
-                await _execute_tool_call(run, tools, sandbox, tool_call, event_bus=event_bus)
+                await _execute_tool_call(
+                    run, tools, sandbox, tool_call, event_bus=event_bus,
+                )
 
             await _emit(event_bus, EventType.ITERATION_COMPLETED, run.id, {
                 "iteration": run.iterations,
@@ -167,7 +175,13 @@ async def _execute_tool_call(
     *,
     event_bus: EventBus | None = None,
 ) -> None:
-    """Execute a single tool call and append the result to conversation history."""
+    """Execute a single tool call and append the result to conversation history.
+
+    Implements retry policies from spec § 7.2 and § 7.3:
+    - Unknown tool → inject error listing available tools (no retry)
+    - Sandbox transient failure → retry once after 2s
+    - Sandbox dies mid-run → attempt one restart
+    """
     from agent_forge.llm.base import ToolCall
     from agent_forge.tools.base import ToolResult
 
@@ -184,7 +198,7 @@ async def _execute_tool_call(
     try:
         tool = tools.get(tool_call.name)
     except KeyError:
-        # Unknown tool — inject error and let LLM self-correct
+        # Unknown tool — inject error and let LLM self-correct (spec § 7.3)
         logger.warning("unknown_tool_requested", tool_name=tool_call.name)
         error_result = ToolResult(
             output="",
@@ -216,7 +230,8 @@ async def _execute_tool_call(
         })
         return
 
-    result = await tool.execute(dict(tool_call.arguments), sandbox)
+    # Execute with retry on transient sandbox failures (spec § 7.2)
+    result = await _execute_with_retry(tool, tool_call, sandbox, run, event_bus)
     duration_ms = result.execution_time_ms
 
     run.tool_invocations.append(
@@ -248,6 +263,71 @@ async def _execute_tool_call(
         "duration_ms": duration_ms,
         "has_error": result.error is not None,
     })
+
+
+async def _execute_with_retry(
+    tool: object,
+    tool_call: object,
+    sandbox: Sandbox,
+    run: AgentRun,
+    event_bus: EventBus | None,
+) -> ToolResult:
+    """Execute a tool with retry on transient sandbox failures.
+
+    Retry policy (spec § 7.2): 1 retry, fixed 2s delay.
+    Sandbox restart (spec § 7.3): if sandbox dies, attempt one restart.
+    """
+    from agent_forge.tools.base import ToolResult
+
+    for attempt in range(_TOOL_MAX_RETRIES + 1):
+        try:
+            # Check if sandbox is alive; attempt restart if dead (spec § 7.3)
+            if not await sandbox.is_alive():
+                logger.warning("sandbox_dead_mid_run", task_id=run.id)
+                try:
+                    await sandbox.stop()
+                    await sandbox.start(run.repo_path)
+                    logger.info("sandbox_restarted", task_id=run.id)
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "sandbox_restart_failed", task_id=run.id,
+                    )
+                    return ToolResult(
+                        output="",
+                        error="Sandbox died and could not be restarted",
+                        exit_code=1,
+                    )
+
+            return await tool.execute(  # type: ignore[attr-defined, no-any-return]
+                dict(tool_call.arguments),  # type: ignore[attr-defined]
+                sandbox,
+            )
+
+        except ToolExecutionError as exc:
+            if attempt < _TOOL_MAX_RETRIES:
+                logger.warning(
+                    "tool_execution_retry",
+                    tool_name=tool_call.name,  # type: ignore[attr-defined]
+                    attempt=attempt + 1,
+                    delay_s=_TOOL_RETRY_DELAY_S,
+                    error=str(exc),
+                )
+                await asyncio.sleep(_TOOL_RETRY_DELAY_S)
+            else:
+                logger.exception(
+                    "tool_execution_failed",
+                    tool_name=tool_call.name,  # type: ignore[attr-defined]
+                )
+                return ToolResult(
+                    output="",
+                    error=f"Tool execution failed after retry: {exc}",
+                    exit_code=1,
+                )
+
+    # Should not reach here, but satisfy type checker
+    return ToolResult(  # pragma: no cover
+        output="", error="Unexpected retry exhaustion", exit_code=1,
+    )
 
 
 async def _emit(
