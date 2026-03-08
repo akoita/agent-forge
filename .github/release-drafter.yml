@@ -1,0 +1,103 @@
+# Release Drafter configuration
+# Auto-categorizes PRs into structured release notes based on labels.
+# See: https://github.com/release-drafter/release-drafter
+
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+
+template: |
+  ## 🎯 What's New in v$RESOLVED_VERSION
+
+  $CHANGES
+
+  **Full Changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
+
+categories:
+  - title: "🚀 Features"
+    labels:
+      - "enhancement"
+      - "feature"
+  - title: "🐛 Bug Fixes"
+    labels:
+      - "bug"
+      - "fix"
+  - title: "🧪 Testing"
+    labels:
+      - "testing"
+      - "test"
+  - title: "📖 Documentation"
+    labels:
+      - "documentation"
+  - title: "🔧 Infrastructure & CI"
+    labels:
+      - "ci"
+      - "infrastructure"
+      - "devops"
+  - title: "🔒 Security"
+    labels:
+      - "security"
+  - title: "🏗️ Refactoring"
+    labels:
+      - "refactor"
+  - title: "📦 Dependencies"
+    labels:
+      - "dependencies"
+
+  # If a PR has no matching label, put it here
+  - title: "🔀 Other Changes"
+    labels:
+      - "*"
+
+# Exclude these labels from release notes entirely
+exclude-labels:
+  - "skip-changelog"
+  - "duplicate"
+  - "wontfix"
+
+# Auto-label PRs based on file paths and branch names
+autolabeler:
+  - label: "documentation"
+    files:
+      - "docs/**"
+      - "*.md"
+    branch:
+      - "/docs?/"
+  - label: "testing"
+    files:
+      - "tests/**"
+    branch:
+      - "/test/"
+  - label: "ci"
+    files:
+      - ".github/**"
+      - "Makefile"
+  - label: "enhancement"
+    branch:
+      - "/feat/"
+      - "/feature/"
+  - label: "bug"
+    branch:
+      - "/fix/"
+      - "/bugfix/"
+
+# Version resolution — bumps based on labels
+version-resolver:
+  major:
+    labels:
+      - "breaking"
+  minor:
+    labels:
+      - "enhancement"
+      - "feature"
+  patch:
+    labels:
+      - "bug"
+      - "fix"
+      - "documentation"
+      - "testing"
+      - "ci"
+  default: patch
+
+# PR title formatting in release notes
+change-template: "- $TITLE (#$NUMBER)"
+change-title-escapes: '\<*_&@'
