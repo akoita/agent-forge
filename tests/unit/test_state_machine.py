@@ -133,9 +133,9 @@ class TestInvalidStateTransitionError:
     """Error carries current and target state."""
 
     def test_attributes(self) -> None:
-        err = InvalidStateTransitionError(RunState.COMPLETED, RunState.RUNNING)
-        assert err.current == RunState.COMPLETED
-        assert err.target == RunState.RUNNING
+        err = InvalidStateTransitionError(
+            "Invalid state transition: completed → running",
+        )
         assert "completed → running" in str(err)
 
 

@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from agent_forge.agent.models import RunState
+from agent_forge.llm.errors import InvalidStateTransitionError
+
+__all__ = ["InvalidStateTransitionError", "transition"]
 
 if TYPE_CHECKING:
     from agent_forge.agent.models import AgentRun
@@ -28,17 +31,6 @@ VALID_TRANSITIONS: dict[RunState, set[RunState]] = {
 }
 
 
-class InvalidStateTransitionError(Exception):
-    """Raised when an invalid state transition is attempted."""
-
-    def __init__(self, current: RunState, target: RunState) -> None:
-        self.current = current
-        self.target = target
-        super().__init__(
-            f"Invalid state transition: {current.value} → {target.value}"
-        )
-
-
 def transition(run: AgentRun, new_state: RunState) -> None:
     """Validate and apply a state transition on an AgentRun.
 
@@ -46,5 +38,6 @@ def transition(run: AgentRun, new_state: RunState) -> None:
     """
     allowed = VALID_TRANSITIONS.get(run.state, set())
     if new_state not in allowed:
-        raise InvalidStateTransitionError(run.state, new_state)
+        msg = f"Invalid state transition: {run.state.value} → {new_state.value}"
+        raise InvalidStateTransitionError(msg)
     run.state = new_state
