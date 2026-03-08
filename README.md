@@ -122,7 +122,22 @@ agent-forge config
 
 ### Demo
 
-<!-- demo recording will be embedded here -->
+<p align="center">
+  <img src="assets/demo.svg" alt="Agent Forge demo — fixing a health endpoint bug" width="800">
+</p>
+
+<details>
+<summary>Run the demo locally</summary>
+
+```bash
+# Watch the simulated demo
+bash scripts/demo.sh
+
+# Record a new asciinema cast
+bash scripts/record-demo.sh
+```
+
+</details>
 
 ---
 
@@ -190,7 +205,7 @@ agent_forge/
 - **[Configuration](docs/configuration.md)** — Full config reference (TOML, env vars, CLI flags, precedence).
 - **[Testing](docs/testing.md)** — Running tests, writing new ones, CI workflows, coverage.
 - **[Extending](docs/extending.md)** — Adding tools, LLM providers, custom sandbox configs.
-- **[Technical Spec](spec.md)** — Full specification with interface contracts and data models.
+- **[Technical Spec](docs/spec.md)** — Full specification with interface contracts and data models.
 
 ---
 
@@ -206,7 +221,7 @@ agent_forge/
 | **6** | Advanced Isolation & Scaling (microVMs, K8s)                      | ⬜ Planned     |
 | **7** | Platform & Ecosystem (MCP, marketplace, IDE plugins)              | ⬜ Planned     |
 
-See [spec.md § Roadmap](spec.md#12-roadmap) for detailed milestones.
+See [spec.md § Roadmap](docs/spec.md#12-roadmap) for detailed milestones.
 
 ---
 
