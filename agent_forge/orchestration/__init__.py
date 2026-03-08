@@ -14,8 +14,19 @@ __all__ = [
     "EventBus",
     "EventType",
     "InMemoryQueue",
+    "RedisQueue",
     "Task",
     "TaskQueue",
     "TaskStatus",
     "Worker",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """Lazy-import RedisQueue to avoid hard dependency on redis."""
+    if name == "RedisQueue":
+        from agent_forge.orchestration.redis_queue import RedisQueue
+
+        return RedisQueue
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
