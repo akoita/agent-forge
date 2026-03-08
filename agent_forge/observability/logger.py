@@ -54,7 +54,7 @@ def _redact_value(value: Any) -> Any:
 
 
 def redact_secrets(
-    logger: Any, method_name: str, event_dict: dict[str, Any]
+    _logger: Any, _method_name: str, event_dict: dict[str, Any]
 ) -> dict[str, Any]:
     """structlog processor that redacts API key patterns from all values."""
     return {key: _redact_value(val) for key, val in event_dict.items()}
@@ -82,7 +82,7 @@ def setup_logging(
         log_file: Path to a JSON-lines log file.  Empty string ⇒ no file.
         console_format: ``"text"`` for colored console, ``"json"`` for JSON.
     """
-    global _CONFIGURED  # noqa: PLW0603
+    global _CONFIGURED
     if _CONFIGURED:
         return
     _CONFIGURED = True
@@ -173,7 +173,7 @@ def get_logger(component: str) -> Any:
 
 def reset_logging() -> None:
     """Reset logging configuration. Intended **only** for tests."""
-    global _CONFIGURED  # noqa: PLW0603
+    global _CONFIGURED
     _CONFIGURED = False
     root = logging.getLogger()
     root.handlers.clear()

@@ -119,7 +119,7 @@ async def _run_agent(
         try:
             await sandbox.start(repo_path=repo)
             result = await react_loop(agent_run, llm, tools, sandbox)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — top-level catch-all for CLI
             err_console.print(f"[red]Agent failed:[/red] {exc}")
             sys.exit(1)
         finally:

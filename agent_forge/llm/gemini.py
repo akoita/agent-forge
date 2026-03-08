@@ -375,7 +375,7 @@ class GeminiProvider(LLMProvider):
     def _check_status(resp: httpx.Response) -> None:
         """Raise specific errors for non-retryable status codes."""
         status_code = resp.status_code
-        if status_code == 401 or status_code == 403:  # noqa: PLR1714
+        if status_code == 401 or status_code == 403:
             raise LLMAuthError(
                 f"Gemini authentication failed (HTTP {status_code}). Check your GEMINI_API_KEY."
             )

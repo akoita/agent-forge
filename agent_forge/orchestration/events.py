@@ -31,7 +31,7 @@ class EventType(Enum):
     ITERATION_COMPLETED = "iteration.completed"
     TOOL_CALLED = "tool.called"
     TOOL_COMPLETED = "tool.completed"
-    TOKEN_USAGE = "token.usage"
+    TOKEN_USAGE = "token.usage"  # noqa: S105 — not a password
 
 
 @dataclass
@@ -67,7 +67,7 @@ class EventBus:
         for sub_id, handler in handlers:
             try:
                 await handler(event)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception(
                     "event_handler_error",
                     subscription_id=sub_id,

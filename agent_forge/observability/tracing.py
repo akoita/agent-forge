@@ -70,7 +70,7 @@ def update_iteration(iteration: int) -> TraceContext | None:
 
 
 def inject_trace_context(
-    logger: Any, method_name: str, event_dict: dict[str, Any]
+    _logger: Any, _method_name: str, event_dict: dict[str, Any]
 ) -> dict[str, Any]:
     """structlog processor that injects ``run_id`` and ``iteration``.
 

@@ -270,7 +270,7 @@ async def _execute_with_retry(
     tool_call: object,
     sandbox: Sandbox,
     run: AgentRun,
-    event_bus: EventBus | None,
+    event_bus: EventBus | None,  # noqa: ARG001 — will be used when #80 wires events
 ) -> ToolResult:
     """Execute a tool with retry on transient sandbox failures.
 
@@ -288,7 +288,7 @@ async def _execute_with_retry(
                     await sandbox.stop()
                     await sandbox.start(run.repo_path)
                     logger.info("sandbox_restarted", task_id=run.id)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.exception(
                         "sandbox_restart_failed", task_id=run.id,
                     )
