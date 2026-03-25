@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -47,6 +49,73 @@ class TestRunCommand:
         assert result.exit_code != 0
         assert "Unknown provider" in result.output
 
+    def test_run_json_output_and_report_file(self, tmp_path: Path) -> None:
+        """Run can emit a machine-readable result payload."""
+        from datetime import UTC, datetime
+
+        from agent_forge.agent.models import AgentConfig, AgentRun, RunState
+
+        async def fake_run(
+            task: str,
+            repo: str,
+            cfg: object,
+            provider_name: str,
+            api_key: str,
+        ) -> AgentRun:
+            run = AgentRun(task=task, repo_path=repo, config=AgentConfig())
+            run.state = RunState.COMPLETED
+            run.iterations = 2
+            run.completed_at = datetime.now(UTC)
+            return run
+
+        runner = _runner()
+        env = dict(os.environ)
+        env["GEMINI_API_KEY"] = "test-key"
+        report_file = tmp_path / "report.json"
+        with patch("agent_forge.cli._run_agent", side_effect=fake_run), patch(
+            "agent_forge.cli.USER_CONFIG_DIR", tmp_path
+        ):
+            result = runner.invoke(
+                main,
+                [
+                    "run",
+                    "--task", "Fix a bug",
+                    "--repo", "/tmp/fake-repo",
+                    "--output-format", "json",
+                    "--report-file", str(report_file),
+                ],
+                env=env,
+            )
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["schema_version"] == "agent-forge-run-result-v1"
+        assert payload["state"] == "completed"
+        assert payload["artifacts"]["summary_json"].endswith("/summary.json")
+
+        file_payload = json.loads(report_file.read_text())
+        assert file_payload["run_id"] == payload["run_id"]
+        assert file_payload["task"] == "Fix a bug"
+
+    def test_run_json_output_rejected_for_queue_mode(self) -> None:
+        """Queue mode should fail clearly until machine output is supported there."""
+        runner = _runner()
+        env = dict(os.environ)
+        env["GEMINI_API_KEY"] = "test-key"
+        result = runner.invoke(
+            main,
+            [
+                "run",
+                "--task", "Fix a bug",
+                "--repo", "/tmp/fake-repo",
+                "--queue", "memory",
+                "--output-format", "json",
+            ],
+            env=env,
+        )
+        assert result.exit_code != 0
+        assert "not supported in queue mode yet" in result.output
+
 
 class TestStatusCommand:
     """Tests for the `status` command."""
@@ -76,6 +145,31 @@ class TestStatusCommand:
             result = runner.invoke(main, ["status", run.id])
 
         assert result.exit_code == 0
+
+    def test_status_existing_run_json(self, tmp_path: Path) -> None:
+        """Status can emit a machine-readable result payload."""
+        from datetime import UTC, datetime
+
+        from agent_forge.agent.models import AgentConfig, AgentRun, RunState
+        from agent_forge.agent.persistence import save_run
+
+        run = AgentRun(task="Test task", repo_path="/tmp/repo", config=AgentConfig())
+        run.state = RunState.COMPLETED
+        run.iterations = 5
+        run.completed_at = datetime.now(UTC)
+        save_run(run, base_dir=tmp_path)
+
+        runner = _runner()
+        with patch("agent_forge.agent.persistence._default_runs_dir", return_value=tmp_path), patch(
+            "agent_forge.cli.USER_CONFIG_DIR", tmp_path.parent
+        ):
+            result = runner.invoke(main, ["status", run.id, "--output-format", "json"])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["schema_version"] == "agent-forge-run-result-v1"
+        assert payload["run_id"] == run.id
+        assert payload["state"] == "completed"
 
 
 class TestListCommand:
