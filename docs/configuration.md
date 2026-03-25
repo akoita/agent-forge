@@ -42,6 +42,17 @@ level = "INFO"
 format = "text"                 # "text" or "json"
 log_file = ""
 
+[service]
+host = "127.0.0.1"
+port = 8000
+root_dir = "~/.agent-forge/service"
+healthcheck_path = "/healthz"
+auth_enabled = false
+api_key_header = "X-Agent-Forge-API-Key"
+clients_path = "~/.agent-forge/service/clients.toml"
+allow_local_path_sources = false
+max_source_size_bytes = 50_000_000
+
 [providers.gemini]
 api_key_env = "GEMINI_API_KEY"
 default_model = "gemini-3.1-flash-lite-preview"
@@ -79,7 +90,12 @@ Examples:
 export AGENT_FORGE_AGENT_MAX_ITERATIONS=10
 export AGENT_FORGE_SANDBOX_MEMORY_LIMIT=1g
 export AGENT_FORGE_LOGGING_LEVEL=DEBUG
+export AGENT_FORGE_SERVICE_AUTH_ENABLED=true
+export AGENT_FORGE_SERVICE_PORT=8000
 ```
+
+For hosted-mode client policy and deployment-specific settings, see the
+[Hosted Service Guide](hosted-service.md).
 
 ## CLI Flags
 

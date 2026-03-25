@@ -118,6 +118,9 @@ agent-forge list
 
 # View resolved configuration
 agent-forge config
+
+# Run the hosted service
+agent-forge serve --host 127.0.0.1 --port 8000
 ```
 
 ### Demo
@@ -160,6 +163,8 @@ network_enabled = false
 ```
 
 See the [Configuration Guide](docs/configuration.md) for full reference.
+For hosted deployments, auth, and operations, see the
+[Hosted Service Guide](docs/hosted-service.md).
 
 ---
 
@@ -203,6 +208,7 @@ agent_forge/
 
 - **[Architecture](docs/architecture.md)** — System design, layer responsibilities, ReAct loop sequence.
 - **[Configuration](docs/configuration.md)** — Full config reference (TOML, env vars, CLI flags, precedence).
+- **[Hosted Service](docs/hosted-service.md)** — Hosted architecture, trust boundaries, local-dev, and operations.
 - **[Testing](docs/testing.md)** — Running tests, writing new ones, CI workflows, coverage.
 - **[Extending](docs/extending.md)** — Adding tools, LLM providers, custom sandbox configs.
 - **[Technical Spec](docs/spec.md)** — Full specification with interface contracts and data models.
