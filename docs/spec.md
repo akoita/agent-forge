@@ -972,6 +972,11 @@ Hosted mode also appends JSONL audit events under
 `<service.root_dir>/audit/events.jsonl` for accepted runs, policy denials, and
 run completion or failure.
 
+The hosted API also ships with a Proof-of-Audit compatibility harness in
+`agent_forge.service.client`, including a client helper that submits the
+versioned request contract, polls `/v1/runs/{run_id}`, retrieves the stable
+report artifact, and preserves machine-readable failure codes for regressions.
+
 ### 5.1 Configuration File Schema
 
 Agent Forge uses a TOML configuration file (`agent-forge.toml`):
