@@ -951,6 +951,26 @@ Hosted deployments read a dedicated `service` config section:
 - `service.port`
 - `service.root_dir`
 - `service.healthcheck_path`
+- `service.auth_enabled`
+- `service.api_key_header`
+- `service.clients_path`
+- `service.allow_local_path_sources`
+- `service.max_source_size_bytes`
+
+When `service.auth_enabled` is enabled, the hosted API requires an API key on
+all `/v1/runs` endpoints. Client identities and execution policy limits are
+loaded from `service.clients_path`, which maps each external `service_id` to:
+
+- an API key environment variable name
+- allowed hosted profiles
+- allowed source kinds
+- max active runs
+- max runs per day
+- whether `local_path` inputs are allowed for that client
+
+Hosted mode also appends JSONL audit events under
+`<service.root_dir>/audit/events.jsonl` for accepted runs, policy denials, and
+run completion or failure.
 
 ### 5.1 Configuration File Schema
 
@@ -982,9 +1002,20 @@ level = "INFO"                   # DEBUG, INFO, WARNING, ERROR
 format = "text"                  # "text" or "json"
 log_file = ""                    # Optional path for JSON log file
 
+[service]
+host = "127.0.0.1"
+port = 8000
+root_dir = "~/.agent-forge/service"
+healthcheck_path = "/healthz"
+auth_enabled = false
+api_key_header = "X-Agent-Forge-API-Key"
+clients_path = "~/.agent-forge/service/clients.toml"
+allow_local_path_sources = false
+max_source_size_bytes = 50_000_000
+
 [providers.gemini]
 api_key_env = "GEMINI_API_KEY"
-default_model = "gemini-2.0-flash"
+default_model = "gemini-3.1-flash-lite-preview"
 
 [providers.openai]
 api_key_env = "OPENAI_API_KEY"
@@ -1030,6 +1061,8 @@ Format: `AGENT_FORGE_{SECTION}_{KEY}` (uppercase, underscored).
 | `AGENT_FORGE_AGENT_MAX_ITERATIONS` | `agent.max_iterations` |
 | `AGENT_FORGE_SANDBOX_MEMORY_LIMIT` | `sandbox.memory_limit` |
 | `AGENT_FORGE_QUEUE_BACKEND`        | `queue.backend`        |
+| `AGENT_FORGE_SERVICE_AUTH_ENABLED` | `service.auth_enabled` |
+| `AGENT_FORGE_SERVICE_PORT`         | `service.port`         |
 | `GEMINI_API_KEY`                   | (direct, not prefixed) |
 | `OPENAI_API_KEY`                   | (direct, not prefixed) |
 | `ANTHROPIC_API_KEY`                | (direct, not prefixed) |

@@ -122,6 +122,11 @@ class TestEnvOverrides:
         result = _collect_env_overrides()
         assert result == {"service": {"port": 8123}}
 
+    def test_service_auth_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AGENT_FORGE_SERVICE_AUTH_ENABLED", "true")
+        result = _collect_env_overrides()
+        assert result == {"service": {"auth_enabled": True}}
+
 
 # ---------------------------------------------------------------------------
 # CLI Override Mapping
@@ -180,6 +185,10 @@ class TestDefaults:
         assert cfg.logging.format == "text"
         assert cfg.service.host == "127.0.0.1"
         assert cfg.service.port == 8000
+        assert cfg.service.auth_enabled is False
+        assert cfg.service.api_key_header == "X-Agent-Forge-API-Key"
+        assert cfg.service.allow_local_path_sources is False
+        assert cfg.service.max_source_size_bytes == 50_000_000
 
     def test_default_providers(self, tmp_path: Path) -> None:
         cfg = load_config(

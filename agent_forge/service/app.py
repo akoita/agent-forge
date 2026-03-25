@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import shutil
@@ -12,10 +13,10 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 
 from agent_forge.agent.core import react_loop
 from agent_forge.agent.models import AgentConfig, AgentRun
@@ -41,6 +42,7 @@ from agent_forge.service.models import (
     SeverityLevel,
     TargetRef,
 )
+from agent_forge.service.security import ServiceClientPolicy, load_client_registry
 from agent_forge.tools import create_default_registry
 
 _REPORT_RELATIVE_PATH = Path(".agent-forge/report.json")
@@ -83,6 +85,8 @@ class HostedRunService:
         self._queue = InMemoryQueue()
         self._event_bus = EventBus()
         self._records: dict[str, HostedRunRecord] = {}
+        self._client_policies: dict[str, ServiceClientPolicy] = {}
+        self._audit_log_path = self._service_root / "audit" / "events.jsonl"
         self._worker = Worker(
             queue=self._queue,
             event_bus=self._event_bus,
@@ -93,15 +97,29 @@ class HostedRunService:
     async def start(self) -> None:
         """Start the background worker for hosted runs."""
         self._service_root.mkdir(parents=True, exist_ok=True)
+        clients_path = Path(self._config.service.clients_path).expanduser()
+        self._client_policies = load_client_registry(clients_path)
         await self._worker.start()
 
     async def stop(self) -> None:
         """Stop the background worker for hosted runs."""
         await self._worker.stop()
 
-    async def create_run(self, request: RunRequest) -> RunStatus:
+    async def create_run(
+        self,
+        request: RunRequest,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> RunStatus:
         """Accept a new hosted run request and enqueue it."""
+        client_service_id, client_policy = self._authenticate_headers(headers)
+        self._authorize_submission(
+            request=request,
+            client_service_id=client_service_id,
+            client_policy=client_policy,
+        )
         self._validate_request(request)
+        self._enforce_quotas(client_service_id)
         run_id = f"run_{uuid.uuid4().hex[:16]}"
         workspace_dir = self._materialize_source(run_id, request)
         prompt = self._build_task_prompt(request)
@@ -118,6 +136,13 @@ class HostedRunService:
             created_at=datetime.now(UTC),
         )
         self._records[run_id] = record
+        self._append_audit_event(
+            event="run.accepted",
+            client_service_id=request.client.service_id,
+            run_id=run_id,
+            request_id=request.client.request_id,
+            detail=request.profile.id,
+        )
         await self._queue.enqueue(
             Task(
                 id=run_id,
@@ -128,17 +153,31 @@ class HostedRunService:
         )
         return self._build_status(record, status="accepted")
 
-    async def get_status(self, run_id: str) -> RunStatus:
+    async def get_status(
+        self,
+        run_id: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> RunStatus:
         """Return the current lifecycle document for a run."""
+        client_service_id, _ = self._authenticate_headers(headers)
         record = self._records.get(run_id)
         if record is None:
             raise KeyError(run_id)
+        self._authorize_run_access(record, client_service_id=client_service_id)
         queue_status = await self._queue.get_status(run_id)
         return self._build_status(record, status=self._map_status(queue_status))
 
-    def get_report(self, run_id: str) -> ProofOfAuditReport:
+    def get_report(
+        self,
+        run_id: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> ProofOfAuditReport:
         """Return the machine report for a completed run."""
+        client_service_id, _ = self._authenticate_headers(headers)
         record = self._require_record(run_id)
+        self._authorize_run_access(record, client_service_id=client_service_id)
         if record.error is not None:
             raise RuntimeError("run_failed")
         if not record.report_path.exists():
@@ -159,9 +198,16 @@ class HostedRunService:
             payload["stats"] = self._compute_stats(payload.get("findings", []))
         return ProofOfAuditReport.model_validate(payload)
 
-    def get_logs(self, run_id: str) -> LogsResponse:
+    def get_logs(
+        self,
+        run_id: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> LogsResponse:
         """Return the persisted artifact references for a run."""
+        client_service_id, _ = self._authenticate_headers(headers)
         record = self._require_record(run_id)
+        self._authorize_run_access(record, client_service_id=client_service_id)
         artifacts = {
             "run_dir": str(record.run_dir),
             "run_json": str(record.run_dir / "run.json"),
@@ -171,6 +217,232 @@ class HostedRunService:
             "report_json": str(record.report_path),
         }
         return LogsResponse(run_id=run_id, logs_url=None, inline=None, artifacts=artifacts)
+
+    def _authenticate_headers(
+        self,
+        headers: dict[str, str] | None,
+    ) -> tuple[str | None, ServiceClientPolicy | None]:
+        if not self._config.service.auth_enabled:
+            return None, None
+
+        header_name = self._config.service.api_key_header
+        normalized_headers = {key.lower(): value for key, value in (headers or {}).items()}
+        provided_key = normalized_headers.get(header_name.lower())
+        if not provided_key:
+            self._deny(
+                status_code=401,
+                code="unauthorized",
+                message=f"missing service API key header: {header_name}",
+            )
+
+        for client_service_id, policy in self._client_policies.items():
+            expected_key = os.environ.get(policy.api_key_env, "")
+            if expected_key and hmac.compare_digest(provided_key, expected_key):
+                return client_service_id, policy
+
+        self._deny(
+            status_code=401,
+            code="unauthorized",
+            message="invalid service API key",
+        )
+        raise AssertionError("unreachable")
+
+    def _authorize_submission(
+        self,
+        *,
+        request: RunRequest,
+        client_service_id: str | None,
+        client_policy: ServiceClientPolicy | None,
+    ) -> None:
+        if client_service_id is None or client_policy is None:
+            return
+
+        if request.client.service_id != client_service_id:
+            self._append_audit_event(
+                event="run.denied",
+                client_service_id=client_service_id,
+                request_id=request.client.request_id,
+                detail="client service_id does not match authenticated API key",
+            )
+            self._deny(
+                status_code=403,
+                code="unauthorized",
+                message="request client does not match authenticated service client",
+            )
+
+        if request.profile.id not in client_policy.allowed_profiles:
+            self._append_audit_event(
+                event="run.denied",
+                client_service_id=client_service_id,
+                request_id=request.client.request_id,
+                detail=f"profile not allowed: {request.profile.id}",
+            )
+            self._deny(
+                status_code=403,
+                code="policy_denied",
+                message=f"profile not allowed for client: {request.profile.id}",
+            )
+
+        if request.source.kind not in client_policy.allowed_source_kinds:
+            self._append_audit_event(
+                event="run.denied",
+                client_service_id=client_service_id,
+                request_id=request.client.request_id,
+                detail=f"source kind not allowed: {request.source.kind}",
+            )
+            self._deny(
+                status_code=403,
+                code="policy_denied",
+                message=f"source kind not allowed for client: {request.source.kind}",
+            )
+
+        local_path_allowed = (
+            self._config.service.allow_local_path_sources and client_policy.allow_local_path
+        )
+        if request.source.kind == "local_path" and not local_path_allowed:
+            self._append_audit_event(
+                event="run.denied",
+                client_service_id=client_service_id,
+                request_id=request.client.request_id,
+                detail="local_path sources disabled by service policy",
+            )
+            self._deny(
+                status_code=403,
+                code="policy_denied",
+                message="local_path sources are disabled for hosted clients",
+            )
+
+        source_size_bytes = self._source_size_bytes(request.source.uri)
+        if source_size_bytes > self._config.service.max_source_size_bytes:
+            self._append_audit_event(
+                event="run.denied",
+                client_service_id=client_service_id,
+                request_id=request.client.request_id,
+                detail=f"source exceeds max size: {source_size_bytes}",
+            )
+            self._deny(
+                status_code=403,
+                code="policy_denied",
+                message="source exceeds configured size limit",
+            )
+
+    def _authorize_run_access(
+        self,
+        record: HostedRunRecord,
+        *,
+        client_service_id: str | None,
+    ) -> None:
+        if client_service_id is None:
+            return
+        if record.request.client.service_id == client_service_id:
+            return
+        self._append_audit_event(
+            event="run.denied",
+            client_service_id=client_service_id,
+            run_id=record.run_id,
+            request_id=record.request.client.request_id,
+            detail="attempted to access another client's run",
+        )
+        self._deny(
+            status_code=403,
+            code="policy_denied",
+            message="run does not belong to authenticated client",
+        )
+
+    def _enforce_quotas(self, client_service_id: str | None) -> None:
+        if client_service_id is None:
+            return
+        policy = self._client_policies.get(client_service_id)
+        if policy is None:
+            self._deny(
+                status_code=401,
+                code="unauthorized",
+                message=f"no client policy configured for: {client_service_id}",
+            )
+
+        now = datetime.now(UTC)
+        active_runs = 0
+        daily_runs = 0
+        for record in self._records.values():
+            if record.request.client.service_id != client_service_id:
+                continue
+            if record.completed_at is None:
+                active_runs += 1
+            if (now - record.created_at).total_seconds() <= 86_400:
+                daily_runs += 1
+
+        if active_runs >= policy.max_active_runs:
+            self._append_audit_event(
+                event="run.denied",
+                client_service_id=client_service_id,
+                detail=f"max active runs exceeded: {active_runs}",
+            )
+            self._deny(
+                status_code=429,
+                code="quota_exceeded",
+                message="client has reached the active run limit",
+            )
+
+        if daily_runs >= policy.max_runs_per_day:
+            self._append_audit_event(
+                event="run.denied",
+                client_service_id=client_service_id,
+                detail=f"max daily runs exceeded: {daily_runs}",
+            )
+            self._deny(
+                status_code=429,
+                code="quota_exceeded",
+                message="client has reached the daily run limit",
+            )
+
+    def _source_size_bytes(self, source_uri: str) -> int:
+        path = self._local_path_from_uri(source_uri)
+        if path.is_dir():
+            return sum(
+                child.stat().st_size
+                for child in path.rglob("*")
+                if child.is_file()
+            )
+        return path.stat().st_size
+
+    def _append_audit_event(
+        self,
+        *,
+        event: str,
+        client_service_id: str | None,
+        run_id: str | None = None,
+        request_id: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        payload = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "event": event,
+            "client_service_id": client_service_id,
+            "run_id": run_id,
+            "request_id": request_id,
+            "detail": detail,
+        }
+        self._audit_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._audit_log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload) + "\n")
+
+    def _deny(
+        self,
+        *,
+        status_code: int,
+        code: str,
+        message: str,
+    ) -> NoReturn:
+        raise HTTPException(
+            status_code=status_code,
+            detail=ErrorResponse(
+                error=RunError(
+                    code=cast("Any", code),
+                    message=message,
+                    retryable=False,
+                )
+            ).model_dump(),
+        )
 
     def _require_record(self, run_id: str) -> HostedRunRecord:
         record = self._records.get(run_id)
@@ -365,6 +637,13 @@ class HostedRunService:
                     )
                     raise RuntimeError(record.error.message)
                 record.completed_at = datetime.now(UTC)
+                self._append_audit_event(
+                    event="run.completed",
+                    client_service_id=record.request.client.service_id,
+                    run_id=record.run_id,
+                    request_id=record.request.client.request_id,
+                    detail=None,
+                )
             except Exception as exc:
                 if record.error is None:
                     record.error = RunError(
@@ -373,6 +652,13 @@ class HostedRunService:
                         retryable=False,
                     )
                 record.completed_at = datetime.now(UTC)
+                self._append_audit_event(
+                    event="run.failed",
+                    client_service_id=record.request.client.service_id,
+                    run_id=record.run_id,
+                    request_id=record.request.client.request_id,
+                    detail=record.error.message,
+                )
                 raise
             finally:
                 await sandbox.stop()
@@ -496,13 +782,13 @@ def create_app(  # noqa: C901
         )
 
     @app.post("/v1/runs", response_model=RunStatus, status_code=202)
-    async def create_run(request: RunRequest) -> RunStatus:
-        return await service.create_run(request)
+    async def create_run(request: RunRequest, http_request: Request) -> RunStatus:
+        return await service.create_run(request, headers=dict(http_request.headers))
 
     @app.get("/v1/runs/{run_id}", response_model=RunStatus)
-    async def get_run(run_id: str) -> RunStatus:
+    async def get_run(run_id: str, http_request: Request) -> RunStatus:
         try:
-            return await service.get_status(run_id)
+            return await service.get_status(run_id, headers=dict(http_request.headers))
         except KeyError as exc:
             error = ErrorResponse(
                 error=RunError(
@@ -514,9 +800,9 @@ def create_app(  # noqa: C901
             raise HTTPException(status_code=404, detail=error.model_dump()) from exc
 
     @app.get("/v1/runs/{run_id}/report", response_model=ProofOfAuditReport)
-    async def get_report(run_id: str) -> ProofOfAuditReport:
+    async def get_report(run_id: str, http_request: Request) -> ProofOfAuditReport:
         try:
-            return service.get_report(run_id)
+            return service.get_report(run_id, headers=dict(http_request.headers))
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"unknown run id: {run_id}") from exc
         except RuntimeError as exc:
@@ -525,9 +811,9 @@ def create_app(  # noqa: C901
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.get("/v1/runs/{run_id}/logs", response_model=LogsResponse)
-    async def get_logs(run_id: str) -> LogsResponse:
+    async def get_logs(run_id: str, http_request: Request) -> LogsResponse:
         try:
-            return service.get_logs(run_id)
+            return service.get_logs(run_id, headers=dict(http_request.headers))
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"unknown run id: {run_id}") from exc
 

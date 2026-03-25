@@ -72,6 +72,11 @@ class ServiceSettings(BaseModel):
     port: int = 8000
     root_dir: str = str(USER_CONFIG_DIR / "service")
     healthcheck_path: str = "/healthz"
+    auth_enabled: bool = False
+    api_key_header: str = "X-Agent-Forge-API-Key"
+    clients_path: str = str(USER_CONFIG_DIR / "service" / "clients.toml")
+    allow_local_path_sources: bool = False
+    max_source_size_bytes: int = 50_000_000
 
 
 class ProviderSettings(BaseModel):
