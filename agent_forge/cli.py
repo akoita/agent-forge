@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 import click
@@ -55,6 +56,18 @@ def main() -> None:
     type=int,
     help="Max concurrent tasks for queue worker (0=unlimited)",
 )
+@click.option(
+    "--output-format",
+    default="text",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    help="Render a human summary or a machine-readable JSON result.",
+)
+@click.option(
+    "--report-file",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Write the machine-readable run result to a JSON file.",
+)
 def run(
     task: str,
     repo: str,
@@ -64,6 +77,8 @@ def run(
     queue_backend: str | None,
     redis_url: str,
     max_concurrent_runs: int,
+    output_format: str,
+    report_file: Path | None,
 ) -> None:
     """Run an agent task on a repository."""
     # Build CLI overrides from provided flags
@@ -96,6 +111,11 @@ def run(
         sys.exit(1)
 
     if queue_backend is not None:
+        if output_format == "json" or report_file is not None:
+            err_console.print(
+                "[red]Machine-readable output is not supported in queue mode yet.[/red]"
+            )
+            sys.exit(1)
         asyncio.run(
             _run_agent_queued(
                 task, repo, cfg, provider_name, api_key,
@@ -105,7 +125,8 @@ def run(
             )
         )
     else:
-        asyncio.run(_run_agent(task, repo, cfg, provider_name, api_key))
+        result = asyncio.run(_run_agent(task, repo, cfg, provider_name, api_key))
+        _emit_run_output(result, output_format=output_format, report_file=report_file)
 
 
 async def _run_agent(
@@ -114,7 +135,7 @@ async def _run_agent(
     cfg: Any,
     provider_name: str,
     api_key: str,
-) -> None:
+) -> Any:
     """Execute the full agent pipeline (direct mode).
 
     Creates an ``EventBus`` so lifecycle events are emitted even in
@@ -152,7 +173,7 @@ async def _run_agent(
             await sandbox.stop()
             await llm.close()
 
-    _display_run_summary(result)
+    return result
 
 
 async def _run_agent_queued(
@@ -310,6 +331,59 @@ def _display_run_summary(run: Any) -> None:
     console.print(Panel(table, title="[bold]Agent Run Complete", border_style=state_color))
 
 
+def _run_output_payload(run: Any) -> dict[str, object]:
+    """Build a stable machine-readable summary for a completed run."""
+    duration_seconds: float | None = None
+    if run.completed_at:
+        duration_seconds = (run.completed_at - run.created_at).total_seconds()
+
+    run_dir = USER_CONFIG_DIR / "runs" / run.id
+    return {
+        "schema_version": "agent-forge-run-result-v1",
+        "run_id": run.id,
+        "state": run.state.value,
+        "task": run.task,
+        "repo_path": run.repo_path,
+        "iterations": run.iterations,
+        "created_at": run.created_at.isoformat(),
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "duration_seconds": duration_seconds,
+        "error": run.error,
+        "total_tokens": {
+            "prompt_tokens": run.total_tokens.prompt_tokens,
+            "completion_tokens": run.total_tokens.completion_tokens,
+            "total_tokens": run.total_tokens.total_tokens,
+        },
+        "artifacts": {
+            "run_dir": str(run_dir),
+            "run_json": str(run_dir / "run.json"),
+            "messages_jsonl": str(run_dir / "messages.jsonl"),
+            "events_jsonl": str(run_dir / "events.jsonl"),
+            "summary_json": str(run_dir / "summary.json"),
+        },
+    }
+
+
+def _emit_run_output(
+    run: Any,
+    *,
+    output_format: str,
+    report_file: Path | None,
+) -> None:
+    """Emit either rich text or machine-readable JSON for a run."""
+    payload = _run_output_payload(run)
+
+    if report_file is not None:
+        report_file.parent.mkdir(parents=True, exist_ok=True)
+        report_file.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    if output_format == "json":
+        click.echo(json.dumps(payload))
+        return
+
+    _display_run_summary(run)
+
+
 # ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
@@ -317,7 +391,13 @@ def _display_run_summary(run: Any) -> None:
 
 @main.command()
 @click.argument("run_id")
-def status(run_id: str) -> None:
+@click.option(
+    "--output-format",
+    default="text",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    help="Render a human summary or a machine-readable JSON result.",
+)
+def status(run_id: str, output_format: str) -> None:
     """Show the status and summary of a specific run."""
     from agent_forge.agent.persistence import load_run
 
@@ -327,7 +407,7 @@ def status(run_id: str) -> None:
         err_console.print(f"[red]Run not found:[/red] {run_id}")
         sys.exit(1)
 
-    _display_run_summary(agent_run)
+    _emit_run_output(agent_run, output_format=output_format, report_file=None)
 
 
 # ---------------------------------------------------------------------------

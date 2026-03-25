@@ -940,6 +940,11 @@ Artifact references are part of the status document rather than being implied:
 - `logs`
 - `run_metadata`
 
+Hosted profiles may also expose a profile-specific report contract behind the
+artifact references. The initial downstream-oriented profile is
+`proof-of-audit-solidity-v1`, which emits `proof-of-audit-report-v1` JSON and
+separates that artifact from the human-oriented CLI summary.
+
 ### 5.1 Configuration File Schema
 
 Agent Forge uses a TOML configuration file (`agent-forge.toml`):
