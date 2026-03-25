@@ -898,6 +898,48 @@ At the end of each run, produce a summary printed to console:
 
 ## 5. Data Models & Schemas
 
+### 5.1 Hosted Service Run API
+
+Hosted mode exposes a versioned machine API for external clients. The first
+contract version is intentionally polling-based and centered on a single run
+resource:
+
+- `POST /v1/runs` accepts a `RunRequest` document with `client`, `profile`,
+  `source`, optional `target`, and optional artifact delivery preferences.
+- `GET /v1/runs/{run_id}` returns a `RunStatus` document that includes the run
+  lifecycle state, client/profile echo fields, and stable artifact references.
+- All request and response models are versioned with explicit
+  `schema_version` fields so hosted clients do not have to infer compatibility
+  from CLI behavior.
+
+The v1 request supports these source payload patterns:
+
+- `local_path` for already-resolved source paths in a colocated environment
+- `archive_uri` for source bundles such as `.zip` and `.tar.gz`
+- `repository_uri` or `git_repository` for externally-resolved repository inputs
+
+The v1 status model standardizes lifecycle states as:
+
+- `accepted`
+- `queued`
+- `running`
+- `completed`
+- `failed`
+- `cancelled`
+
+The v1 error envelope standardizes machine-readable failures such as:
+
+- validation failures (`invalid_request`)
+- source acquisition failures (`source_fetch_failed`)
+- sandbox/runtime failures (`sandbox_start_failed`, `sandbox_execution_failed`)
+- policy failures (`policy_denied`, `unauthorized`, `quota_exceeded`)
+
+Artifact references are part of the status document rather than being implied:
+
+- `report`
+- `logs`
+- `run_metadata`
+
 ### 5.1 Configuration File Schema
 
 Agent Forge uses a TOML configuration file (`agent-forge.toml`):
