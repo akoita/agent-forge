@@ -20,13 +20,14 @@ from fastapi import FastAPI, HTTPException
 from agent_forge.agent.core import react_loop
 from agent_forge.agent.models import AgentConfig, AgentRun
 from agent_forge.cli import _create_llm
-from agent_forge.config import USER_CONFIG_DIR, load_config
+from agent_forge.config import USER_CONFIG_DIR, ForgeConfig, load_config
 from agent_forge.orchestration.events import EventBus
 from agent_forge.orchestration.queue import InMemoryQueue, Task, TaskStatus
 from agent_forge.orchestration.worker import Worker
 from agent_forge.sandbox.docker import DockerSandbox
 from agent_forge.service.models import (
     ErrorResponse,
+    HealthResponse,
     LogsResponse,
     ProofOfAuditReport,
     ReportProvenance,
@@ -71,9 +72,14 @@ class HostedRunRecord:
 class HostedRunService:
     """In-process implementation of the versioned hosted run API."""
 
-    def __init__(self, *, service_root: Path | None = None) -> None:
-        self._service_root = service_root or USER_CONFIG_DIR / "service"
-        self._config = load_config()
+    def __init__(
+        self,
+        *,
+        service_root: Path | None = None,
+        config: ForgeConfig | None = None,
+    ) -> None:
+        self._config = config or load_config()
+        self._service_root = service_root or Path(self._config.service.root_dir).expanduser()
         self._queue = InMemoryQueue()
         self._event_bus = EventBus()
         self._records: dict[str, HostedRunRecord] = {}
@@ -460,9 +466,14 @@ class HostedRunService:
         ).model_dump()
 
 
-def create_app(*, service_root: Path | None = None) -> FastAPI:  # noqa: C901
+def create_app(  # noqa: C901
+    *,
+    service_root: Path | None = None,
+    config: ForgeConfig | None = None,
+) -> FastAPI:
     """Create the hosted service ASGI app."""
-    service = HostedRunService(service_root=service_root)
+    resolved_config = config or load_config()
+    service = HostedRunService(service_root=service_root, config=resolved_config)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> Any:
@@ -474,6 +485,15 @@ def create_app(*, service_root: Path | None = None) -> FastAPI:  # noqa: C901
 
     app = FastAPI(title="agent-forge hosted service", version="0.1.0", lifespan=lifespan)
     app.state.service = service
+
+    @app.get(resolved_config.service.healthcheck_path, response_model=HealthResponse)
+    async def healthcheck() -> HealthResponse:
+        return HealthResponse(
+            status="ok",
+            service_root=str(service._service_root),
+            queue_backend=resolved_config.queue.backend,
+            sandbox_image=resolved_config.sandbox.image,
+        )
 
     @app.post("/v1/runs", response_model=RunStatus, status_code=202)
     async def create_run(request: RunRequest) -> RunStatus:

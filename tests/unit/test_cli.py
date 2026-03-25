@@ -222,6 +222,21 @@ class TestConfigCommand:
         assert "max_iterations" in result.output
 
 
+class TestServeCommand:
+    """Tests for the hosted service entrypoint."""
+
+    def test_serve_invokes_uvicorn(self) -> None:
+        runner = _runner()
+        with patch("uvicorn.run") as uvicorn_run:
+            result = runner.invoke(main, ["serve", "--host", "127.0.0.1", "--port", "8123"])
+
+        assert result.exit_code == 0
+        uvicorn_run.assert_called_once()
+        call = uvicorn_run.call_args
+        assert call.kwargs["host"] == "127.0.0.1"
+        assert call.kwargs["port"] == 8123
+
+
 class TestMainGroup:
     """Tests for the CLI group itself."""
 

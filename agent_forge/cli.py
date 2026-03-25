@@ -488,5 +488,39 @@ def config() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# serve
+# ---------------------------------------------------------------------------
+
+
+@main.command()
+@click.option("--host", default=None, help="Bind host override.")
+@click.option("--port", default=None, type=int, help="Bind port override.")
+@click.option(
+    "--service-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Override the hosted service root directory.",
+)
+def serve(host: str | None, port: int | None, service_root: Path | None) -> None:
+    """Run the hosted FastAPI service."""
+    import uvicorn
+
+    cli_overrides: dict[str, Any] = {}
+    if host is not None:
+        cli_overrides["service.host"] = host
+    if port is not None:
+        cli_overrides["service.port"] = port
+    if service_root is not None:
+        cli_overrides["service.root_dir"] = str(service_root)
+
+    cfg = load_config(cli_overrides=cli_overrides or None)
+
+    from agent_forge.service import create_app
+
+    app = create_app(service_root=Path(cfg.service.root_dir).expanduser(), config=cfg)
+    uvicorn.run(app, host=cfg.service.host, port=cfg.service.port)
+
+
 if __name__ == "__main__":
     main()

@@ -23,6 +23,12 @@ level = "INFO"                   # DEBUG, INFO, WARNING, ERROR
 format = "text"                  # "text" or "json"
 log_file = ""                    # Optional path for JSON log file
 
+[service]
+host = "127.0.0.1"
+port = 8000
+root_dir = "~/.agent-forge/service"
+healthcheck_path = "/healthz"
+
 [providers.gemini]
 api_key_env = "GEMINI_API_KEY"
 default_model = "gemini-3.1-flash-lite-preview"

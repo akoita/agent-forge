@@ -65,6 +65,15 @@ class LoggingSettings(BaseModel):
     log_file: str = ""
 
 
+class ServiceSettings(BaseModel):
+    """Settings for the hosted service runtime."""
+
+    host: str = "127.0.0.1"
+    port: int = 8000
+    root_dir: str = str(USER_CONFIG_DIR / "service")
+    healthcheck_path: str = "/healthz"
+
+
 class ProviderSettings(BaseModel):
     """Settings for a single LLM provider."""
 
@@ -79,6 +88,7 @@ class ForgeConfig(BaseModel):
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     queue: QueueSettings = Field(default_factory=QueueSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    service: ServiceSettings = Field(default_factory=ServiceSettings)
     providers: dict[str, ProviderSettings] = Field(
         default_factory=lambda: {
             "gemini": ProviderSettings(
@@ -145,6 +155,7 @@ _SECTION_MODELS: dict[str, type[BaseModel]] = {
     "sandbox": SandboxSettings,
     "queue": QueueSettings,
     "logging": LoggingSettings,
+    "service": ServiceSettings,
 }
 
 

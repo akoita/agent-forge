@@ -117,6 +117,11 @@ class TestEnvOverrides:
         result = _collect_env_overrides()
         assert result == {"queue": {"backend": "redis"}}
 
+    def test_service_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AGENT_FORGE_SERVICE_PORT", "8123")
+        result = _collect_env_overrides()
+        assert result == {"service": {"port": 8123}}
+
 
 # ---------------------------------------------------------------------------
 # CLI Override Mapping
@@ -173,6 +178,8 @@ class TestDefaults:
         assert cfg.queue.max_concurrent_runs == 4
         assert cfg.logging.level == "INFO"
         assert cfg.logging.format == "text"
+        assert cfg.service.host == "127.0.0.1"
+        assert cfg.service.port == 8000
 
     def test_default_providers(self, tmp_path: Path) -> None:
         cfg = load_config(
@@ -258,6 +265,14 @@ class TestPrecedence:
             user_path=user_toml,
         )
         assert cfg.agent.max_iterations == 3  # CLI wins over all
+
+    def test_service_cli_overrides(self, tmp_path: Path) -> None:
+        cfg = load_config(
+            cli_overrides={"service.port": 9000},
+            project_path=tmp_path / "x.toml",
+            user_path=tmp_path / "y.toml",
+        )
+        assert cfg.service.port == 9000
 
     def test_partial_overrides_preserve_other_fields(self, tmp_path: Path) -> None:
         project_toml = tmp_path / "agent-forge.toml"

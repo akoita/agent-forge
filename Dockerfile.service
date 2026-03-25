@@ -1,0 +1,16 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY pyproject.toml README.md LICENSE ./
+COPY agent-forge.toml ./agent-forge.toml
+COPY agent_forge ./agent_forge
+
+RUN pip install --no-cache-dir ".[redis]"
+
+EXPOSE 8000
+
+CMD ["sh", "-lc", "agent-forge serve --host ${AGENT_FORGE_SERVICE_HOST:-0.0.0.0} --port ${AGENT_FORGE_SERVICE_PORT:-8000}"]

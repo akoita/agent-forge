@@ -227,3 +227,14 @@ class LogsResponse(BaseModel):
     inline: str | None = None
     logs_url: str | None = None
     artifacts: dict[str, str]
+
+
+class HealthResponse(BaseModel):
+    """Readiness information for a hosted deployment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ok"]
+    service_root: str
+    queue_backend: str
+    sandbox_image: str

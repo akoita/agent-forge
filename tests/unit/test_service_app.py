@@ -197,3 +197,12 @@ def test_service_rejects_unsupported_profile(tmp_path: Path) -> None:
     with TestClient(app) as client:
         response = client.post("/v1/runs", json=payload)
         assert response.status_code == 400
+
+
+def test_service_healthcheck_uses_config_path(tmp_path: Path) -> None:
+    app = create_app(service_root=tmp_path / "service-root")
+
+    with TestClient(app) as client:
+        response = client.get("/healthz")
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"

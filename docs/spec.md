@@ -945,6 +945,13 @@ artifact references. The initial downstream-oriented profile is
 `proof-of-audit-solidity-v1`, which emits `proof-of-audit-report-v1` JSON and
 separates that artifact from the human-oriented CLI summary.
 
+Hosted deployments read a dedicated `service` config section:
+
+- `service.host`
+- `service.port`
+- `service.root_dir`
+- `service.healthcheck_path`
+
 ### 5.1 Configuration File Schema
 
 Agent Forge uses a TOML configuration file (`agent-forge.toml`):
