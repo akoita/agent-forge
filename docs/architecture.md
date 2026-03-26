@@ -127,6 +127,18 @@ Tools are registered in `ToolRegistry` and their schemas are passed to the LLM a
 
 The CLI wires these together: `CLI → TaskQueue.enqueue() → Worker.dequeue() → react_loop()`.
 
+## Hosted Service Mode
+
+Hosted mode reuses the same queue, worker, sandbox, and persistence layers, but
+adds a FastAPI edge for machine clients plus client auth/policy enforcement.
+
+- `agent_forge/service/app.py` exposes the hosted `/v1/runs` contract
+- `agent_forge/service/security.py` loads client policy from the hosted client registry
+- `agent_forge/service/client.py` provides the Proof-of-Audit compatibility harness
+
+For deployment topology, trust boundaries, and rollout guidance, see the
+[Hosted Service Guide](hosted-service.md).
+
 ## ReAct Loop Sequence
 
 ```mermaid
