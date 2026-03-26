@@ -1463,6 +1463,7 @@ clean:                     ## Clean up containers and build artifacts
 
 > **Goal:** Agent Forge becomes a platform others can build on.
 
+- [x] Hosted service mode for external clients (versioned run API, headless report contract, deployment model, auth and policy controls, compatibility client, operations guide)
 - [ ] MCP (Model Context Protocol) tool server: expose tools for interop with external agents
 - [ ] Multi-tenant auth + RBAC (team workspaces, API keys, usage quotas)
 - [ ] Custom LLM routing: cost/latency-based model selection per tool call
