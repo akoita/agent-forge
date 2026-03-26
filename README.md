@@ -114,6 +114,16 @@ agent-forge run \
 # Check run status
 agent-forge status <run-id>
 
+# Emit a machine-readable run result and persist it to disk
+agent-forge run \
+  --task "Generate a structured audit report" \
+  --repo ./my-app \
+  --output-format json \
+  --report-file ./artifacts/run-result.json
+
+# Render an existing run as JSON
+agent-forge status <run-id> --output-format json
+
 # List recent runs
 agent-forge list
 

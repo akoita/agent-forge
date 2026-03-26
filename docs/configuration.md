@@ -106,14 +106,19 @@ agent-forge run \
   --provider gemini \
   --model gemini-3.1-flash-lite-preview \
   --max-iterations 25 \
+  --output-format text \            # or "json" for machine output
+  --report-file ./artifacts/run-result.json \  # optional JSON file output
   --queue memory \                  # or "redis" (omit for direct mode)
   --redis-url redis://localhost:6379/0 \   # only with --queue redis
   --max-concurrent-runs 4           # worker concurrency limit
 
-agent-forge status <run-id>
+agent-forge status <run-id> --output-format json
 agent-forge list
 agent-forge config        # Show resolved configuration
 ```
+
+Machine-readable output is only available in direct mode. Queue-backed runs
+still emit human-oriented status until that contract is stabilized.
 
 ## Common Setups
 
