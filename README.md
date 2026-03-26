@@ -55,6 +55,7 @@ graph TD
 - **🔒 Sandboxed Execution** — Every tool invocation runs in an ephemeral Docker container with resource limits — never on the host.
 - **🧠 Gemini 3.1 Ready** — Full support for thought signatures, exponential backoff with jitter, and `Retry-After` header.
 - **🔌 Extensible LLM Layer** — Gemini adapter built, OpenAI and Anthropic interfaces defined for easy addition.
+- **🌐 Hosted Service Mode** — Run Agent Forge as a versioned FastAPI service for external clients with API-key auth, policy controls, and Proof-of-Audit compatibility.
 - **📊 Observability** — Structured JSON logs, trace IDs, token/cost tracking on every run.
 - **💾 Run Persistence** — Every agent run is saved to disk with full conversation history and tool invocations.
 - **🧩 Extensible Tools** — Add new tools by implementing a simple `Tool` ABC and registering them.
@@ -225,9 +226,10 @@ agent_forge/
 | **4** | Web Dashboard & REST API                                          | ⬜ Planned     |
 | **5** | Multi-Agent Collaboration                                         | ⬜ Planned     |
 | **6** | Advanced Isolation & Scaling (microVMs, K8s)                      | ⬜ Planned     |
-| **7** | Platform & Ecosystem (MCP, marketplace, IDE plugins)              | ⬜ Planned     |
+| **7** | Platform & Ecosystem (MCP, marketplace, IDE plugins)              | 🚧 In Progress |
 
 See [spec.md § Roadmap](docs/spec.md#12-roadmap) for detailed milestones.
+Hosted service support for external clients is the first completed Phase 7 milestone.
 
 ---
 
