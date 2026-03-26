@@ -7,10 +7,13 @@ from typing import TYPE_CHECKING
 
 from fastapi.testclient import TestClient
 
+from agent_forge.config import ForgeConfig, ServiceSettings
 from agent_forge.service.app import create_app
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
     from agent_forge.orchestration.queue import Task
 
@@ -45,6 +48,55 @@ def _request_payload(source_uri: str) -> dict[str, object]:
             "include_logs": True,
         },
     }
+
+
+def _service_config(
+    tmp_path: Path,
+    *,
+    auth_enabled: bool,
+    clients_path: Path | None = None,
+    allow_local_path_sources: bool = False,
+    max_source_size_bytes: int = 50_000_000,
+) -> ForgeConfig:
+    return ForgeConfig(
+        service=ServiceSettings(
+            root_dir=str(tmp_path / "service-root"),
+            auth_enabled=auth_enabled,
+            clients_path=str(clients_path or (tmp_path / "clients.toml")),
+            allow_local_path_sources=allow_local_path_sources,
+            max_source_size_bytes=max_source_size_bytes,
+        )
+    )
+
+
+def _write_clients_file(
+    path: Path,
+    *,
+    allow_local_path: bool = False,
+    include_secondary_client: bool = False,
+) -> None:
+    secondary = """
+[clients.other-client]
+api_key_env = "OTHER_SERVICE_API_KEY"
+allowed_profiles = ["proof-of-audit-solidity-v1"]
+allowed_source_kinds = ["local_path"]
+max_active_runs = 1
+max_runs_per_day = 5
+allow_local_path = true
+""" if include_secondary_client else ""
+    path.write_text(
+        f"""
+[clients.proof-of-audit-auditor]
+api_key_env = "POA_SERVICE_API_KEY"
+allowed_profiles = ["proof-of-audit-solidity-v1"]
+allowed_source_kinds = ["local_path", "archive_uri"]
+max_active_runs = 1
+max_runs_per_day = 5
+allow_local_path = {"true" if allow_local_path else "false"}
+{secondary}
+""".lstrip(),
+        encoding="utf-8",
+    )
 
 
 def test_service_create_run_and_return_report(tmp_path: Path) -> None:
@@ -206,3 +258,222 @@ def test_service_healthcheck_uses_config_path(tmp_path: Path) -> None:
         response = client.get("/healthz")
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
+
+
+def test_service_requires_api_key_when_auth_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    clients_path = tmp_path / "clients.toml"
+    _write_clients_file(clients_path, allow_local_path=True)
+    monkeypatch.setenv("POA_SERVICE_API_KEY", "test-service-key")
+
+    app = create_app(
+        config=_service_config(
+            tmp_path,
+            auth_enabled=True,
+            clients_path=clients_path,
+            allow_local_path_sources=True,
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/v1/runs", json=_request_payload(str(repo)))
+        assert response.status_code == 401
+        assert response.json()["detail"]["error"]["code"] == "unauthorized"
+
+
+def test_service_denies_local_paths_by_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    clients_path = tmp_path / "clients.toml"
+    _write_clients_file(clients_path, allow_local_path=False)
+    monkeypatch.setenv("POA_SERVICE_API_KEY", "test-service-key")
+
+    app = create_app(
+        config=_service_config(
+            tmp_path,
+            auth_enabled=True,
+            clients_path=clients_path,
+            allow_local_path_sources=False,
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/runs",
+            json=_request_payload(str(repo)),
+            headers={"X-Agent-Forge-API-Key": "test-service-key"},
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"]["error"]["code"] == "policy_denied"
+
+
+def test_service_enforces_active_run_quota(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    clients_path = tmp_path / "clients.toml"
+    _write_clients_file(clients_path, allow_local_path=True)
+    monkeypatch.setenv("POA_SERVICE_API_KEY", "test-service-key")
+
+    app = create_app(
+        config=_service_config(
+            tmp_path,
+            auth_enabled=True,
+            clients_path=clients_path,
+            allow_local_path_sources=True,
+        )
+    )
+
+    async def slow_runner(task: Task) -> None:
+        await asyncio.sleep(0.1)
+        record = app.state.service._records[task.id]
+        record.started_at = record.created_at
+        record.completed_at = record.created_at
+        record.report_path.parent.mkdir(parents=True, exist_ok=True)
+        record.report_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "proof-of-audit-report-v1",
+                    "run_id": task.id,
+                    "summary": "ok",
+                    "confidence": "high",
+                    "findings": [],
+                    "stats": {
+                        "finding_count": 0,
+                        "max_severity": None,
+                        "severity_breakdown": {
+                            "critical": 0,
+                            "high": 0,
+                            "medium": 0,
+                            "low": 0,
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    app.state.service._worker._task_runner = slow_runner
+
+    with TestClient(app) as client:
+        headers = {"X-Agent-Forge-API-Key": "test-service-key"}
+        first = client.post("/v1/runs", json=_request_payload(str(repo)), headers=headers)
+        assert first.status_code == 202
+
+        second = client.post("/v1/runs", json=_request_payload(str(repo)), headers=headers)
+        assert second.status_code == 429
+        assert second.json()["detail"]["error"]["code"] == "quota_exceeded"
+
+
+def test_service_prevents_cross_client_run_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    clients_path = tmp_path / "clients.toml"
+    _write_clients_file(clients_path, allow_local_path=True, include_secondary_client=True)
+    monkeypatch.setenv("POA_SERVICE_API_KEY", "test-service-key")
+    monkeypatch.setenv("OTHER_SERVICE_API_KEY", "other-service-key")
+
+    app = create_app(
+        config=_service_config(
+            tmp_path,
+            auth_enabled=True,
+            clients_path=clients_path,
+            allow_local_path_sources=True,
+        )
+    )
+    service = app.state.service
+
+    async def fake_runner(task: Task) -> None:
+        record = service._records[task.id]
+        record.started_at = record.created_at
+        record.completed_at = record.created_at
+        record.report_path.parent.mkdir(parents=True, exist_ok=True)
+        record.report_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "proof-of-audit-report-v1",
+                    "run_id": task.id,
+                    "summary": "ok",
+                    "confidence": "high",
+                    "findings": [],
+                    "stats": {
+                        "finding_count": 0,
+                        "max_severity": None,
+                        "severity_breakdown": {
+                            "critical": 0,
+                            "high": 0,
+                            "medium": 0,
+                            "low": 0,
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    service._worker._task_runner = fake_runner
+
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/v1/runs",
+            json=_request_payload(str(repo)),
+            headers={"X-Agent-Forge-API-Key": "test-service-key"},
+        )
+        assert create_response.status_code == 202
+        run_id = create_response.json()["run_id"]
+
+        status_response = client.get(
+            f"/v1/runs/{run_id}",
+            headers={"X-Agent-Forge-API-Key": "other-service-key"},
+        )
+        assert status_response.status_code == 403
+        assert status_response.json()["detail"]["error"]["code"] == "policy_denied"
+
+
+def test_service_writes_audit_log_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "Vault.sol").write_text("contract Vault {}\n", encoding="utf-8")
+    clients_path = tmp_path / "clients.toml"
+    _write_clients_file(clients_path, allow_local_path=True)
+    monkeypatch.setenv("POA_SERVICE_API_KEY", "test-service-key")
+
+    app = create_app(
+        config=_service_config(
+            tmp_path,
+            auth_enabled=True,
+            clients_path=clients_path,
+            allow_local_path_sources=True,
+            max_source_size_bytes=1,
+        )
+    )
+
+    with TestClient(app) as client:
+        denied = client.post(
+            "/v1/runs",
+            json=_request_payload(str(repo)),
+            headers={"X-Agent-Forge-API-Key": "test-service-key"},
+        )
+        assert denied.status_code == 403
+
+    audit_log = tmp_path / "service-root" / "audit" / "events.jsonl"
+    lines = audit_log.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["event"] == "run.denied"
+    assert payload["client_service_id"] == "proof-of-audit-auditor"
