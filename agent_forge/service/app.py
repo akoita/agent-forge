@@ -17,6 +17,7 @@ from typing import Any, NoReturn, cast
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from agent_forge.agent.core import react_loop
 from agent_forge.agent.models import AgentConfig, AgentRun
@@ -956,6 +957,24 @@ def create_app(  # noqa: C901
         if http_request.client is not None:
             return http_request.client.host
         return None
+
+    @app.middleware("http")
+    async def require_hosted_auth(http_request: Request, call_next: Any) -> Any:
+        if not resolved_config.service.auth_enabled:
+            return await call_next(http_request)
+        if not http_request.url.path.startswith("/v1/runs"):
+            return await call_next(http_request)
+
+        try:
+            service._authenticate_headers(
+                dict(http_request.headers),
+                request_origin=_request_origin(http_request),
+                user_agent=http_request.headers.get("user-agent"),
+            )
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+        return await call_next(http_request)
 
     @app.get(resolved_config.service.healthcheck_path, response_model=HealthResponse)
     async def healthcheck() -> HealthResponse:
