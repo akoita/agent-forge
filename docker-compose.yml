@@ -11,6 +11,8 @@ services:
       AGENT_FORGE_SERVICE_HOST: "0.0.0.0"
       AGENT_FORGE_SERVICE_PORT: "8000"
       AGENT_FORGE_SERVICE_ROOT_DIR: "/var/lib/agent-forge/service"
+      AGENT_FORGE_SERVICE_AUTH_ENABLED: "true"
+      AGENT_FORGE_SERVICE_CLIENTS_PATH: "/var/lib/agent-forge/service/clients.toml"
       AGENT_FORGE_QUEUE_BACKEND: "memory"
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"

@@ -286,6 +286,62 @@ async def test_service_requires_api_key_when_auth_enabled(
 
 
 @pytest.mark.asyncio
+async def test_service_rejects_unauthenticated_requests_before_body_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clients_path = tmp_path / "clients.toml"
+    _write_clients_file(clients_path, allow_local_path=True)
+    monkeypatch.setenv("POA_SERVICE_API_KEY", "test-service-key")
+
+    app = create_app(
+        config=_service_config(
+            tmp_path,
+            auth_enabled=True,
+            clients_path=clients_path,
+            allow_local_path_sources=True,
+        )
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+    ):
+        response = await client.post("/v1/runs", json={})
+        assert response.status_code == 401
+        assert response.json()["detail"]["error"]["code"] == "unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_unauthenticated_run_lookup_before_run_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clients_path = tmp_path / "clients.toml"
+    _write_clients_file(clients_path, allow_local_path=True)
+    monkeypatch.setenv("POA_SERVICE_API_KEY", "test-service-key")
+
+    app = create_app(
+        config=_service_config(
+            tmp_path,
+            auth_enabled=True,
+            clients_path=clients_path,
+            allow_local_path_sources=True,
+        )
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+    ):
+        response = await client.get("/v1/runs/nonexistent")
+        assert response.status_code == 401
+        assert response.json()["detail"]["error"]["code"] == "unauthorized"
+
+
+@pytest.mark.asyncio
 async def test_service_denies_local_paths_by_policy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

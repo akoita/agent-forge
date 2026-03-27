@@ -89,6 +89,8 @@ Relevant settings:
 - `service.clients_path`: TOML registry describing external clients and their policy limits
 - `service.allow_local_path_sources`: global safety switch for colocated `local_path` submissions
 - `service.max_source_size_bytes`: upper bound on accepted source material size
+- Authentication is enforced before request validation and run lookup on `/v1/runs*`
+  so anonymous callers receive `401` instead of schema or existence errors.
 
 ### Client Registry
 
@@ -138,6 +140,16 @@ For local queue-backed development:
 ```bash
 docker compose up -d redis
 ```
+
+The checked-in compose deployment also sets:
+
+```bash
+AGENT_FORGE_SERVICE_AUTH_ENABLED=true
+AGENT_FORGE_SERVICE_CLIENTS_PATH=/var/lib/agent-forge/service/clients.toml
+```
+
+If your deployment does not use `docker compose`, set those environment
+variables explicitly or the service will fall back to repo defaults.
 
 ### 4. Run The Hosted Service
 
