@@ -24,6 +24,7 @@ class ServiceClientPolicy(BaseModel):
 
     api_key_env: str
     allowed_profiles: list[str] = Field(default_factory=list)
+    allowed_report_schemas: list[str]
     allowed_source_kinds: list[AllowedSourceKind] = Field(
         default_factory=_default_allowed_source_kinds
     )

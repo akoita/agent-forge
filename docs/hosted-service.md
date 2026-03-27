@@ -99,6 +99,7 @@ Hosted auth and policy rules are stored separately from repo config in
 [clients.proof-of-audit-auditor]
 api_key_env = "POA_SERVICE_API_KEY"
 allowed_profiles = ["proof-of-audit-solidity-v1"]
+allowed_report_schemas = ["proof-of-audit-report-v1"]
 allowed_source_kinds = ["archive_uri", "local_path"]
 max_active_runs = 1
 max_runs_per_day = 5
@@ -126,7 +127,9 @@ make build-sandbox
 ### 2. Prepare Client Policy
 
 Create `~/.agent-forge/service/clients.toml` with at least one client entry, and
-export the referenced API key environment variable.
+export the referenced API key environment variable. Each client entry must
+declare `allowed_report_schemas` in addition to `allowed_profiles`, source
+policy, and quota settings.
 
 ### 3. Start Dependencies
 
@@ -179,7 +182,7 @@ Hosted mode writes useful state to disk:
 ### Common Failure Modes
 
 - `unauthorized`: missing or invalid hosted API key, or missing provider API key
-- `policy_denied`: client requested a disallowed profile or source kind
+- `policy_denied`: client requested a disallowed profile, report schema, or source kind
 - `quota_exceeded`: active-run or daily-run limit reached
 - `sandbox_execution_failed`: run reached the sandbox but failed during execution
 - `report_generation_failed`: agent completed without emitting the expected machine report
@@ -191,3 +194,5 @@ Hosted mode writes useful state to disk:
 - Validate `main` CI plus service PR CI before promoting a new image.
 - Roll out config changes and client-registry changes together so auth and policy stay aligned.
 - Monitor `events.jsonl` and run artifacts during rollout; they are the fastest way to confirm the service path is actually being exercised.
+  Each event now includes client identity, request origin, request/run identifiers,
+  profile id, submit time, lifecycle status, and any rejection or failure reason.
