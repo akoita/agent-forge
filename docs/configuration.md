@@ -96,6 +96,8 @@ export AGENT_FORGE_SERVICE_PORT=8000
 
 For hosted-mode client policy and deployment-specific settings, see the
 [Hosted Service Guide](hosted-service.md).
+Hosted client registry entries must include `allowed_report_schemas` alongside
+`api_key_env`, `allowed_profiles`, and the quota/source policy fields.
 
 ## CLI Flags
 

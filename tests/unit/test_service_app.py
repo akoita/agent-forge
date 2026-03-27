@@ -5,15 +5,14 @@ import json
 import zipfile
 from typing import TYPE_CHECKING
 
-from fastapi.testclient import TestClient
+import httpx
+import pytest
 
 from agent_forge.config import ForgeConfig, ServiceSettings
 from agent_forge.service.app import create_app
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
     from agent_forge.orchestration.queue import Task
 
@@ -79,6 +78,7 @@ def _write_clients_file(
 [clients.other-client]
 api_key_env = "OTHER_SERVICE_API_KEY"
 allowed_profiles = ["proof-of-audit-solidity-v1"]
+allowed_report_schemas = ["proof-of-audit-report-v1"]
 allowed_source_kinds = ["local_path"]
 max_active_runs = 1
 max_runs_per_day = 5
@@ -89,6 +89,7 @@ allow_local_path = true
 [clients.proof-of-audit-auditor]
 api_key_env = "POA_SERVICE_API_KEY"
 allowed_profiles = ["proof-of-audit-solidity-v1"]
+allowed_report_schemas = ["proof-of-audit-report-v1"]
 allowed_source_kinds = ["local_path", "archive_uri"]
 max_active_runs = 1
 max_runs_per_day = 5
@@ -99,7 +100,8 @@ allow_local_path = {"true" if allow_local_path else "false"}
     )
 
 
-def test_service_create_run_and_return_report(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_service_create_run_and_return_report(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "Vault.sol").write_text("contract Vault {}\n", encoding="utf-8")
@@ -135,65 +137,39 @@ def test_service_create_run_and_return_report(tmp_path: Path) -> None:
             encoding="utf-8",
         )
         record.completed_at = record.created_at
-        run_dir = record.run_dir
-        run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "run.json").write_text(
-            json.dumps(
-                {
-                    "id": task.id,
-                    "task": "audit",
-                    "repo_path": str(record.workspace_dir),
-                    "state": "completed",
-                    "iterations": 1,
-                    "total_tokens": {
-                        "prompt_tokens": 0,
-                        "completion_tokens": 0,
-                        "total_tokens": 0,
-                    },
-                    "config": {
-                        "max_iterations": 3,
-                        "max_tokens_per_run": 200000,
-                        "model": "gemini-3.1-flash-lite-preview",
-                        "provider": "gemini",
-                        "temperature": 0.0,
-                        "system_prompt": None,
-                    },
-                    "created_at": record.created_at.isoformat(),
-                    "completed_at": record.completed_at.isoformat(),
-                    "error": None,
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
 
     service._worker._task_runner = fake_runner
+    transport = httpx.ASGITransport(app=app)
 
-    with TestClient(app) as client:
-        response = client.post("/v1/runs", json=_request_payload(str(repo)))
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+    ):
+        response = await client.post("/v1/runs", json=_request_payload(str(repo)))
         assert response.status_code == 202
         run_id = response.json()["run_id"]
 
         for _ in range(40):
-            status_response = client.get(f"/v1/runs/{run_id}")
+            status_response = await client.get(f"/v1/runs/{run_id}")
             assert status_response.status_code == 200
             if status_response.json()["status"] == "completed":
                 break
-            asyncio.run(asyncio.sleep(0.01))
+            await asyncio.sleep(0.01)
         else:
             raise AssertionError("run did not complete")
 
-        report_response = client.get(f"/v1/runs/{run_id}/report")
+        report_response = await client.get(f"/v1/runs/{run_id}/report")
         assert report_response.status_code == 200
         assert report_response.json()["schema_version"] == "proof-of-audit-report-v1"
 
-        logs_response = client.get(f"/v1/runs/{run_id}/logs")
+        logs_response = await client.get(f"/v1/runs/{run_id}/logs")
         assert logs_response.status_code == 200
         report_json = logs_response.json()["artifacts"]["report_json"]
         assert report_json.endswith("/.agent-forge/report.json")
 
 
-def test_service_materializes_zip_sources(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_service_materializes_zip_sources(tmp_path: Path) -> None:
     archive_path = tmp_path / "bundle.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
         archive.writestr("wrapped/src/Vault.sol", "contract Vault {}\n")
@@ -217,25 +193,35 @@ def test_service_materializes_zip_sources(tmp_path: Path) -> None:
         "source_digest": "sha256:test",
     }
 
-    with TestClient(app) as client:
-        response = client.post("/v1/runs", json=payload)
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+    ):
+        response = await client.post("/v1/runs", json=payload)
         assert response.status_code == 202
         run_id = response.json()["run_id"]
         record = service._records[run_id]
         assert (record.workspace_dir / "src" / "Vault.sol").exists()
 
 
-def test_service_rejects_unknown_run_id(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_service_rejects_unknown_run_id(tmp_path: Path) -> None:
     app = create_app(service_root=tmp_path / "service-root")
+    transport = httpx.ASGITransport(app=app)
 
-    with TestClient(app) as client:
-        response = client.get("/v1/runs/run_missing")
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+    ):
+        response = await client.get("/v1/runs/run_missing")
         assert response.status_code == 404
         detail = response.json()["detail"]
         assert detail["error"]["code"] == "invalid_request"
 
 
-def test_service_rejects_unsupported_profile(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_service_rejects_unsupported_profile(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     app = create_app(service_root=tmp_path / "service-root")
@@ -246,21 +232,31 @@ def test_service_rejects_unsupported_profile(tmp_path: Path) -> None:
         "report_schema": "proof-of-audit-report-v1",
     }
 
-    with TestClient(app) as client:
-        response = client.post("/v1/runs", json=payload)
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+    ):
+        response = await client.post("/v1/runs", json=payload)
         assert response.status_code == 400
 
 
-def test_service_healthcheck_uses_config_path(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_service_healthcheck_uses_config_path(tmp_path: Path) -> None:
     app = create_app(service_root=tmp_path / "service-root")
+    transport = httpx.ASGITransport(app=app)
 
-    with TestClient(app) as client:
-        response = client.get("/healthz")
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+    ):
+        response = await client.get("/healthz")
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
 
 
-def test_service_requires_api_key_when_auth_enabled(
+@pytest.mark.asyncio
+async def test_service_requires_api_key_when_auth_enabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -278,14 +274,19 @@ def test_service_requires_api_key_when_auth_enabled(
             allow_local_path_sources=True,
         )
     )
+    transport = httpx.ASGITransport(app=app)
 
-    with TestClient(app) as client:
-        response = client.post("/v1/runs", json=_request_payload(str(repo)))
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+    ):
+        response = await client.post("/v1/runs", json=_request_payload(str(repo)))
         assert response.status_code == 401
         assert response.json()["detail"]["error"]["code"] == "unauthorized"
 
 
-def test_service_denies_local_paths_by_policy(
+@pytest.mark.asyncio
+async def test_service_denies_local_paths_by_policy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -303,9 +304,13 @@ def test_service_denies_local_paths_by_policy(
             allow_local_path_sources=False,
         )
     )
+    transport = httpx.ASGITransport(app=app)
 
-    with TestClient(app) as client:
-        response = client.post(
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+    ):
+        response = await client.post(
             "/v1/runs",
             json=_request_payload(str(repo)),
             headers={"X-Agent-Forge-API-Key": "test-service-key"},
@@ -314,7 +319,49 @@ def test_service_denies_local_paths_by_policy(
         assert response.json()["detail"]["error"]["code"] == "policy_denied"
 
 
-def test_service_enforces_active_run_quota(
+@pytest.mark.asyncio
+async def test_service_denies_disallowed_report_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    clients_path = tmp_path / "clients.toml"
+    _write_clients_file(clients_path, allow_local_path=True)
+    clients_path.write_text(
+        clients_path.read_text(encoding="utf-8").replace(
+            'allowed_report_schemas = ["proof-of-audit-report-v1"]',
+            'allowed_report_schemas = ["some-other-report-v1"]',
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("POA_SERVICE_API_KEY", "test-service-key")
+
+    app = create_app(
+        config=_service_config(
+            tmp_path,
+            auth_enabled=True,
+            clients_path=clients_path,
+            allow_local_path_sources=True,
+        )
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+    ):
+        response = await client.post(
+            "/v1/runs",
+            json=_request_payload(str(repo)),
+            headers={"X-Agent-Forge-API-Key": "test-service-key"},
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"]["error"]["code"] == "policy_denied"
+
+
+@pytest.mark.asyncio
+async def test_service_enforces_active_run_quota(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -363,18 +410,23 @@ def test_service_enforces_active_run_quota(
         )
 
     app.state.service._worker._task_runner = slow_runner
+    transport = httpx.ASGITransport(app=app)
 
-    with TestClient(app) as client:
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+    ):
         headers = {"X-Agent-Forge-API-Key": "test-service-key"}
-        first = client.post("/v1/runs", json=_request_payload(str(repo)), headers=headers)
+        first = await client.post("/v1/runs", json=_request_payload(str(repo)), headers=headers)
         assert first.status_code == 202
 
-        second = client.post("/v1/runs", json=_request_payload(str(repo)), headers=headers)
+        second = await client.post("/v1/runs", json=_request_payload(str(repo)), headers=headers)
         assert second.status_code == 429
         assert second.json()["detail"]["error"]["code"] == "quota_exceeded"
 
 
-def test_service_prevents_cross_client_run_access(
+@pytest.mark.asyncio
+async def test_service_prevents_cross_client_run_access(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -424,9 +476,13 @@ def test_service_prevents_cross_client_run_access(
         )
 
     service._worker._task_runner = fake_runner
+    transport = httpx.ASGITransport(app=app)
 
-    with TestClient(app) as client:
-        create_response = client.post(
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+    ):
+        create_response = await client.post(
             "/v1/runs",
             json=_request_payload(str(repo)),
             headers={"X-Agent-Forge-API-Key": "test-service-key"},
@@ -434,7 +490,7 @@ def test_service_prevents_cross_client_run_access(
         assert create_response.status_code == 202
         run_id = create_response.json()["run_id"]
 
-        status_response = client.get(
+        status_response = await client.get(
             f"/v1/runs/{run_id}",
             headers={"X-Agent-Forge-API-Key": "other-service-key"},
         )
@@ -442,7 +498,8 @@ def test_service_prevents_cross_client_run_access(
         assert status_response.json()["detail"]["error"]["code"] == "policy_denied"
 
 
-def test_service_writes_audit_log_entries(
+@pytest.mark.asyncio
+async def test_service_writes_audit_log_entries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -462,12 +519,20 @@ def test_service_writes_audit_log_entries(
             max_source_size_bytes=1,
         )
     )
+    transport = httpx.ASGITransport(app=app)
 
-    with TestClient(app) as client:
-        denied = client.post(
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+    ):
+        denied = await client.post(
             "/v1/runs",
             json=_request_payload(str(repo)),
-            headers={"X-Agent-Forge-API-Key": "test-service-key"},
+            headers={
+                "X-Agent-Forge-API-Key": "test-service-key",
+                "User-Agent": "pytest-service-app",
+                "X-Forwarded-For": "203.0.113.7",
+            },
         )
         assert denied.status_code == 403
 
@@ -477,3 +542,9 @@ def test_service_writes_audit_log_entries(
     payload = json.loads(lines[0])
     assert payload["event"] == "run.denied"
     assert payload["client_service_id"] == "proof-of-audit-auditor"
+    assert payload["profile_id"] == "proof-of-audit-solidity-v1"
+    assert payload["final_status"] == "rejected"
+    assert payload["reason"] == "source exceeds max size: 18"
+    assert payload["request_origin"] == "203.0.113.7"
+    assert payload["user_agent"] == "pytest-service-app"
+    assert payload["submitted_at"] is not None

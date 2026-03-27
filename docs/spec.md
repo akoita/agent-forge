@@ -963,6 +963,7 @@ loaded from `service.clients_path`, which maps each external `service_id` to:
 
 - an API key environment variable name
 - allowed hosted profiles
+- allowed hosted report schemas
 - allowed source kinds
 - max active runs
 - max runs per day
@@ -970,7 +971,9 @@ loaded from `service.clients_path`, which maps each external `service_id` to:
 
 Hosted mode also appends JSONL audit events under
 `<service.root_dir>/audit/events.jsonl` for accepted runs, policy denials, and
-run completion or failure.
+run completion or failure. Each record captures client identity, request origin,
+request and run identifiers, profile id, submit time, lifecycle status, and any
+rejection or failure reason.
 
 The hosted API also ships with a Proof-of-Audit compatibility harness in
 `agent_forge.service.client`, including a client helper that submits the

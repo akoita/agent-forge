@@ -42,6 +42,7 @@ def _write_clients_file(path: Path) -> None:
 [clients.proof-of-audit-auditor]
 api_key_env = "POA_SERVICE_API_KEY"
 allowed_profiles = ["proof-of-audit-solidity-v1"]
+allowed_report_schemas = ["proof-of-audit-report-v1"]
 allowed_source_kinds = ["local_path", "archive_uri"]
 max_active_runs = 1
 max_runs_per_day = 5

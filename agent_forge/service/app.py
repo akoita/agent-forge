@@ -56,6 +56,8 @@ class HostedRunRecord:
     request: RunRequest
     workspace_dir: Path
     created_at: datetime
+    request_origin: str | None = None
+    user_agent: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
     error: RunError | None = None
@@ -110,16 +112,29 @@ class HostedRunService:
         request: RunRequest,
         *,
         headers: dict[str, str] | None = None,
+        request_origin: str | None = None,
+        user_agent: str | None = None,
     ) -> RunStatus:
         """Accept a new hosted run request and enqueue it."""
-        client_service_id, client_policy = self._authenticate_headers(headers)
+        client_service_id, client_policy = self._authenticate_headers(
+            headers,
+            request_origin=request_origin,
+            user_agent=user_agent,
+        )
         self._authorize_submission(
             request=request,
             client_service_id=client_service_id,
             client_policy=client_policy,
+            request_origin=request_origin,
+            user_agent=user_agent,
         )
         self._validate_request(request)
-        self._enforce_quotas(client_service_id)
+        self._enforce_quotas(
+            client_service_id,
+            request=request,
+            request_origin=request_origin,
+            user_agent=user_agent,
+        )
         run_id = f"run_{uuid.uuid4().hex[:16]}"
         workspace_dir = self._materialize_source(run_id, request)
         prompt = self._build_task_prompt(request)
@@ -134,6 +149,8 @@ class HostedRunService:
             request=request,
             workspace_dir=workspace_dir,
             created_at=datetime.now(UTC),
+            request_origin=request_origin,
+            user_agent=user_agent,
         )
         self._records[run_id] = record
         self._append_audit_event(
@@ -141,7 +158,11 @@ class HostedRunService:
             client_service_id=request.client.service_id,
             run_id=run_id,
             request_id=request.client.request_id,
-            detail=request.profile.id,
+            profile_id=request.profile.id,
+            submitted_at=record.created_at,
+            final_status="accepted",
+            request_origin=request_origin,
+            user_agent=user_agent,
         )
         await self._queue.enqueue(
             Task(
@@ -158,13 +179,24 @@ class HostedRunService:
         run_id: str,
         *,
         headers: dict[str, str] | None = None,
+        request_origin: str | None = None,
+        user_agent: str | None = None,
     ) -> RunStatus:
         """Return the current lifecycle document for a run."""
-        client_service_id, _ = self._authenticate_headers(headers)
+        client_service_id, _ = self._authenticate_headers(
+            headers,
+            request_origin=request_origin,
+            user_agent=user_agent,
+        )
         record = self._records.get(run_id)
         if record is None:
             raise KeyError(run_id)
-        self._authorize_run_access(record, client_service_id=client_service_id)
+        self._authorize_run_access(
+            record,
+            client_service_id=client_service_id,
+            request_origin=request_origin,
+            user_agent=user_agent,
+        )
         queue_status = await self._queue.get_status(run_id)
         return self._build_status(record, status=self._map_status(queue_status))
 
@@ -173,11 +205,22 @@ class HostedRunService:
         run_id: str,
         *,
         headers: dict[str, str] | None = None,
+        request_origin: str | None = None,
+        user_agent: str | None = None,
     ) -> ProofOfAuditReport:
         """Return the machine report for a completed run."""
-        client_service_id, _ = self._authenticate_headers(headers)
+        client_service_id, _ = self._authenticate_headers(
+            headers,
+            request_origin=request_origin,
+            user_agent=user_agent,
+        )
         record = self._require_record(run_id)
-        self._authorize_run_access(record, client_service_id=client_service_id)
+        self._authorize_run_access(
+            record,
+            client_service_id=client_service_id,
+            request_origin=request_origin,
+            user_agent=user_agent,
+        )
         if record.error is not None:
             raise RuntimeError("run_failed")
         if not record.report_path.exists():
@@ -203,11 +246,22 @@ class HostedRunService:
         run_id: str,
         *,
         headers: dict[str, str] | None = None,
+        request_origin: str | None = None,
+        user_agent: str | None = None,
     ) -> LogsResponse:
         """Return the persisted artifact references for a run."""
-        client_service_id, _ = self._authenticate_headers(headers)
+        client_service_id, _ = self._authenticate_headers(
+            headers,
+            request_origin=request_origin,
+            user_agent=user_agent,
+        )
         record = self._require_record(run_id)
-        self._authorize_run_access(record, client_service_id=client_service_id)
+        self._authorize_run_access(
+            record,
+            client_service_id=client_service_id,
+            request_origin=request_origin,
+            user_agent=user_agent,
+        )
         artifacts = {
             "run_dir": str(record.run_dir),
             "run_json": str(record.run_dir / "run.json"),
@@ -221,6 +275,9 @@ class HostedRunService:
     def _authenticate_headers(
         self,
         headers: dict[str, str] | None,
+        *,
+        request_origin: str | None = None,
+        user_agent: str | None = None,
     ) -> tuple[str | None, ServiceClientPolicy | None]:
         if not self._config.service.auth_enabled:
             return None, None
@@ -233,6 +290,8 @@ class HostedRunService:
                 status_code=401,
                 code="unauthorized",
                 message=f"missing service API key header: {header_name}",
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
 
         for client_service_id, policy in self._client_policies.items():
@@ -244,6 +303,8 @@ class HostedRunService:
             status_code=401,
             code="unauthorized",
             message="invalid service API key",
+            request_origin=request_origin,
+            user_agent=user_agent,
         )
         raise AssertionError("unreachable")
 
@@ -253,6 +314,8 @@ class HostedRunService:
         request: RunRequest,
         client_service_id: str | None,
         client_policy: ServiceClientPolicy | None,
+        request_origin: str | None = None,
+        user_agent: str | None = None,
     ) -> None:
         if client_service_id is None or client_policy is None:
             return
@@ -262,12 +325,19 @@ class HostedRunService:
                 event="run.denied",
                 client_service_id=client_service_id,
                 request_id=request.client.request_id,
-                detail="client service_id does not match authenticated API key",
+                profile_id=request.profile.id,
+                submitted_at=datetime.now(UTC),
+                final_status="rejected",
+                reason="client service_id does not match authenticated API key",
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
             self._deny(
                 status_code=403,
                 code="unauthorized",
                 message="request client does not match authenticated service client",
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
 
         if request.profile.id not in client_policy.allowed_profiles:
@@ -275,12 +345,42 @@ class HostedRunService:
                 event="run.denied",
                 client_service_id=client_service_id,
                 request_id=request.client.request_id,
-                detail=f"profile not allowed: {request.profile.id}",
+                profile_id=request.profile.id,
+                submitted_at=datetime.now(UTC),
+                final_status="rejected",
+                reason=f"profile not allowed: {request.profile.id}",
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
             self._deny(
                 status_code=403,
                 code="policy_denied",
                 message=f"profile not allowed for client: {request.profile.id}",
+                request_origin=request_origin,
+                user_agent=user_agent,
+            )
+
+        if request.profile.report_schema not in client_policy.allowed_report_schemas:
+            self._append_audit_event(
+                event="run.denied",
+                client_service_id=client_service_id,
+                request_id=request.client.request_id,
+                profile_id=request.profile.id,
+                submitted_at=datetime.now(UTC),
+                final_status="rejected",
+                reason=f"report schema not allowed: {request.profile.report_schema}",
+                request_origin=request_origin,
+                user_agent=user_agent,
+            )
+            self._deny(
+                status_code=403,
+                code="policy_denied",
+                message=(
+                    "report schema not allowed for client: "
+                    f"{request.profile.report_schema}"
+                ),
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
 
         if request.source.kind not in client_policy.allowed_source_kinds:
@@ -288,12 +388,19 @@ class HostedRunService:
                 event="run.denied",
                 client_service_id=client_service_id,
                 request_id=request.client.request_id,
-                detail=f"source kind not allowed: {request.source.kind}",
+                profile_id=request.profile.id,
+                submitted_at=datetime.now(UTC),
+                final_status="rejected",
+                reason=f"source kind not allowed: {request.source.kind}",
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
             self._deny(
                 status_code=403,
                 code="policy_denied",
                 message=f"source kind not allowed for client: {request.source.kind}",
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
 
         local_path_allowed = (
@@ -304,12 +411,19 @@ class HostedRunService:
                 event="run.denied",
                 client_service_id=client_service_id,
                 request_id=request.client.request_id,
-                detail="local_path sources disabled by service policy",
+                profile_id=request.profile.id,
+                submitted_at=datetime.now(UTC),
+                final_status="rejected",
+                reason="local_path sources disabled by service policy",
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
             self._deny(
                 status_code=403,
                 code="policy_denied",
                 message="local_path sources are disabled for hosted clients",
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
 
         source_size_bytes = self._source_size_bytes(request.source.uri)
@@ -318,12 +432,19 @@ class HostedRunService:
                 event="run.denied",
                 client_service_id=client_service_id,
                 request_id=request.client.request_id,
-                detail=f"source exceeds max size: {source_size_bytes}",
+                profile_id=request.profile.id,
+                submitted_at=datetime.now(UTC),
+                final_status="rejected",
+                reason=f"source exceeds max size: {source_size_bytes}",
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
             self._deny(
                 status_code=403,
                 code="policy_denied",
                 message="source exceeds configured size limit",
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
 
     def _authorize_run_access(
@@ -331,6 +452,8 @@ class HostedRunService:
         record: HostedRunRecord,
         *,
         client_service_id: str | None,
+        request_origin: str | None = None,
+        user_agent: str | None = None,
     ) -> None:
         if client_service_id is None:
             return
@@ -341,15 +464,29 @@ class HostedRunService:
             client_service_id=client_service_id,
             run_id=record.run_id,
             request_id=record.request.client.request_id,
-            detail="attempted to access another client's run",
+            profile_id=record.request.profile.id,
+            submitted_at=record.created_at,
+            final_status="rejected",
+            reason="attempted to access another client's run",
+            request_origin=request_origin,
+            user_agent=user_agent,
         )
         self._deny(
             status_code=403,
             code="policy_denied",
             message="run does not belong to authenticated client",
+            request_origin=request_origin,
+            user_agent=user_agent,
         )
 
-    def _enforce_quotas(self, client_service_id: str | None) -> None:
+    def _enforce_quotas(
+        self,
+        client_service_id: str | None,
+        *,
+        request: RunRequest,
+        request_origin: str | None = None,
+        user_agent: str | None = None,
+    ) -> None:
         if client_service_id is None:
             return
         policy = self._client_policies.get(client_service_id)
@@ -358,6 +495,8 @@ class HostedRunService:
                 status_code=401,
                 code="unauthorized",
                 message=f"no client policy configured for: {client_service_id}",
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
 
         now = datetime.now(UTC)
@@ -375,24 +514,40 @@ class HostedRunService:
             self._append_audit_event(
                 event="run.denied",
                 client_service_id=client_service_id,
-                detail=f"max active runs exceeded: {active_runs}",
+                request_id=request.client.request_id,
+                profile_id=request.profile.id,
+                submitted_at=datetime.now(UTC),
+                final_status="rejected",
+                reason=f"max active runs exceeded: {active_runs}",
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
             self._deny(
                 status_code=429,
                 code="quota_exceeded",
                 message="client has reached the active run limit",
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
 
         if daily_runs >= policy.max_runs_per_day:
             self._append_audit_event(
                 event="run.denied",
                 client_service_id=client_service_id,
-                detail=f"max daily runs exceeded: {daily_runs}",
+                request_id=request.client.request_id,
+                profile_id=request.profile.id,
+                submitted_at=datetime.now(UTC),
+                final_status="rejected",
+                reason=f"max daily runs exceeded: {daily_runs}",
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
             self._deny(
                 status_code=429,
                 code="quota_exceeded",
                 message="client has reached the daily run limit",
+                request_origin=request_origin,
+                user_agent=user_agent,
             )
 
     def _source_size_bytes(self, source_uri: str) -> int:
@@ -412,7 +567,12 @@ class HostedRunService:
         client_service_id: str | None,
         run_id: str | None = None,
         request_id: str | None = None,
-        detail: str | None = None,
+        profile_id: str | None = None,
+        submitted_at: datetime | None = None,
+        final_status: str | None = None,
+        reason: str | None = None,
+        request_origin: str | None = None,
+        user_agent: str | None = None,
     ) -> None:
         payload = {
             "timestamp": datetime.now(UTC).isoformat(),
@@ -420,7 +580,12 @@ class HostedRunService:
             "client_service_id": client_service_id,
             "run_id": run_id,
             "request_id": request_id,
-            "detail": detail,
+            "profile_id": profile_id,
+            "submitted_at": submitted_at.isoformat() if submitted_at else None,
+            "final_status": final_status,
+            "reason": reason,
+            "request_origin": request_origin,
+            "user_agent": user_agent,
         }
         self._audit_log_path.parent.mkdir(parents=True, exist_ok=True)
         with self._audit_log_path.open("a", encoding="utf-8") as handle:
@@ -432,7 +597,10 @@ class HostedRunService:
         status_code: int,
         code: str,
         message: str,
+        request_origin: str | None = None,
+        user_agent: str | None = None,
     ) -> NoReturn:
+        _ = request_origin, user_agent
         raise HTTPException(
             status_code=status_code,
             detail=ErrorResponse(
@@ -642,7 +810,11 @@ class HostedRunService:
                     client_service_id=record.request.client.service_id,
                     run_id=record.run_id,
                     request_id=record.request.client.request_id,
-                    detail=None,
+                    profile_id=record.request.profile.id,
+                    submitted_at=record.created_at,
+                    final_status="completed",
+                    request_origin=record.request_origin,
+                    user_agent=record.user_agent,
                 )
             except Exception as exc:
                 if record.error is None:
@@ -657,7 +829,12 @@ class HostedRunService:
                     client_service_id=record.request.client.service_id,
                     run_id=record.run_id,
                     request_id=record.request.client.request_id,
-                    detail=record.error.message,
+                    profile_id=record.request.profile.id,
+                    submitted_at=record.created_at,
+                    final_status="failed",
+                    reason=record.error.message,
+                    request_origin=record.request_origin,
+                    user_agent=record.user_agent,
                 )
                 raise
             finally:
@@ -772,6 +949,14 @@ def create_app(  # noqa: C901
     app = FastAPI(title="agent-forge hosted service", version="0.1.0", lifespan=lifespan)
     app.state.service = service
 
+    def _request_origin(http_request: Request) -> str | None:
+        forwarded_for = http_request.headers.get("x-forwarded-for")
+        if forwarded_for:
+            return forwarded_for.split(",", 1)[0].strip() or None
+        if http_request.client is not None:
+            return http_request.client.host
+        return None
+
     @app.get(resolved_config.service.healthcheck_path, response_model=HealthResponse)
     async def healthcheck() -> HealthResponse:
         return HealthResponse(
@@ -783,12 +968,22 @@ def create_app(  # noqa: C901
 
     @app.post("/v1/runs", response_model=RunStatus, status_code=202)
     async def create_run(request: RunRequest, http_request: Request) -> RunStatus:
-        return await service.create_run(request, headers=dict(http_request.headers))
+        return await service.create_run(
+            request,
+            headers=dict(http_request.headers),
+            request_origin=_request_origin(http_request),
+            user_agent=http_request.headers.get("user-agent"),
+        )
 
     @app.get("/v1/runs/{run_id}", response_model=RunStatus)
     async def get_run(run_id: str, http_request: Request) -> RunStatus:
         try:
-            return await service.get_status(run_id, headers=dict(http_request.headers))
+            return await service.get_status(
+                run_id,
+                headers=dict(http_request.headers),
+                request_origin=_request_origin(http_request),
+                user_agent=http_request.headers.get("user-agent"),
+            )
         except KeyError as exc:
             error = ErrorResponse(
                 error=RunError(
@@ -802,7 +997,12 @@ def create_app(  # noqa: C901
     @app.get("/v1/runs/{run_id}/report", response_model=ProofOfAuditReport)
     async def get_report(run_id: str, http_request: Request) -> ProofOfAuditReport:
         try:
-            return service.get_report(run_id, headers=dict(http_request.headers))
+            return service.get_report(
+                run_id,
+                headers=dict(http_request.headers),
+                request_origin=_request_origin(http_request),
+                user_agent=http_request.headers.get("user-agent"),
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"unknown run id: {run_id}") from exc
         except RuntimeError as exc:
@@ -813,7 +1013,12 @@ def create_app(  # noqa: C901
     @app.get("/v1/runs/{run_id}/logs", response_model=LogsResponse)
     async def get_logs(run_id: str, http_request: Request) -> LogsResponse:
         try:
-            return service.get_logs(run_id, headers=dict(http_request.headers))
+            return service.get_logs(
+                run_id,
+                headers=dict(http_request.headers),
+                request_origin=_request_origin(http_request),
+                user_agent=http_request.headers.get("user-agent"),
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"unknown run id: {run_id}") from exc
 
