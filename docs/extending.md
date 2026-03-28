@@ -83,6 +83,52 @@ async def test_my_tool_basic():
 - `description` should be clear — the LLM reads it to decide when to use the tool
 - Always return a `ToolResult` (never raise from `execute`)
 
+## Shipping a Tool Plugin
+
+Agent Forge can load external tool plugins automatically from Python entry
+points in the `agent_forge.tools` group.
+
+### 1. Package the Tool
+
+Create a normal Python package that depends on `agent-forge` and expose either:
+
+- a `Tool` subclass with a zero-argument constructor, or
+- a pre-instantiated `Tool` object
+
+### 2. Declare the Entry Point
+
+```toml
+[project.entry-points."agent_forge.tools"]
+my_tool = "my_package.tool:MyTool"
+```
+
+### 3. Install the Plugin
+
+```bash
+pip install my-package
+```
+
+or during development:
+
+```bash
+pip install -e ./path/to/plugin
+```
+
+After installation, `create_default_registry()` loads the plugin automatically
+for the CLI and hosted service.
+
+### Plugin Validation Rules
+
+- entry points must resolve to a `Tool` instance or a `Tool` subclass
+- subclasses must be instantiable without constructor arguments
+- plugin tool names must remain unique across built-ins and other plugins
+- plugin load failures are raised immediately with the entry point name/value
+
+### Example Package
+
+See [`examples/echo-tool-plugin`](/home/koita/dev/ai/agent-forge/examples/echo-tool-plugin)
+for a minimal working plugin package.
+
 ---
 
 ## Adding a New LLM Provider

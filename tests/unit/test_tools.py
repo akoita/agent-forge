@@ -94,7 +94,7 @@ class TestToolRegistry:
             registry.get("nonexistent")
 
     def test_list_definitions(self) -> None:
-        registry = create_default_registry()
+        registry = create_default_registry(load_plugins=False)
         defs = registry.list_definitions()
         names = {d.name for d in defs}
         assert names == {

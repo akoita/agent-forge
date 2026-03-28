@@ -1435,7 +1435,7 @@ clean:                     ## Clean up containers and build artifacts
 > **Goal:** The agent understands git workflows and users can extend it with custom tools.
 
 - [x] Git-aware tools: `git_diff`, `git_commit`, `git_create_branch`, `create_pr`
-- [ ] Plugin system: load custom tools from external Python packages
+- [x] Plugin system: load custom tools from external Python packages
 - [ ] Tool dependency resolution (e.g., a tool that requires another tool's output)
 - [ ] Custom system prompt templates (per-project `.agent-forge/prompts/`)
 - [ ] Agent memory: persist learnings across runs (file-based initially)

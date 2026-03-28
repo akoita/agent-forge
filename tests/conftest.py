@@ -77,4 +77,4 @@ def mock_llm() -> LLMProvider:
 @pytest.fixture
 def tool_registry() -> ToolRegistry:
     """A fully populated tool registry with all built-in tools."""
-    return create_default_registry()
+    return create_default_registry(load_plugins=False)

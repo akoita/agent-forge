@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-forge-echo-tool-plugin"
+version = "0.1.0"
+description = "Example external Agent Forge tool plugin"
+requires-python = ">=3.11"
+
+[project.entry-points."agent_forge.tools"]
+echo_tool = "agent_forge_echo_plugin:EchoTool"

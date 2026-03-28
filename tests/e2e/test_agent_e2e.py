@@ -90,7 +90,7 @@ def llm(api_key: str) -> GeminiProvider:
 @pytest.fixture
 def tools() -> ToolRegistry:
     """Create the default tool registry."""
-    return create_default_registry()
+    return create_default_registry(load_plugins=False)
 
 
 @pytest.fixture
@@ -337,4 +337,3 @@ class TestAgentPersistence:
         assert loaded.total_tokens.total_tokens == result.total_tokens.total_tokens
         assert len(loaded.messages) == len(result.messages)
         assert len(loaded.tool_invocations) == len(result.tool_invocations)
-
