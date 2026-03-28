@@ -16,6 +16,7 @@ import pytest
 
 from agent_forge.orchestration.events import EventBus
 from agent_forge.orchestration.queue import Task, TaskStatus
+from agent_forge.sandbox.base import SandboxConfig
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -29,6 +30,12 @@ def _fake_config() -> MagicMock:
     cfg.agent.max_iterations = 10
     cfg.agent.max_tokens_per_run = 100_000
     cfg.agent.temperature = 0.0
+    cfg.sandbox.image = "agent-forge-sandbox:latest"
+    cfg.sandbox.cpu_limit = 1.0
+    cfg.sandbox.memory_limit = "512m"
+    cfg.sandbox.timeout_seconds = 300
+    cfg.sandbox.network_enabled = False
+    cfg.sandbox.writable_cache_mounts = True
     return cfg
 
 
@@ -129,13 +136,18 @@ class TestMemoryQueueMode:
                 return_value="task-abc",
             ),
         ):
+
             async def fake_runner(task: Task) -> None:
                 pass
 
             mock_make_runner.return_value = fake_runner
 
             await _run_agent_queued(
-                "fix bug", "/tmp/repo", _fake_config(), "gemini", "key",
+                "fix bug",
+                "/tmp/repo",
+                _fake_config(),
+                "gemini",
+                "key",
                 queue_backend="memory",
                 redis_url="redis://localhost",
                 max_concurrent_runs=0,
@@ -168,6 +180,7 @@ class TestMemoryQueueMode:
                 side_effect=lambda _t: f"task-{len(enqueue_calls)}",
             ),
         ):
+
             async def fake_runner(task: Task) -> None:
                 pass
 
@@ -176,7 +189,11 @@ class TestMemoryQueueMode:
             # Run 3 tasks sequentially (each call to _run_agent_queued is one task)
             for i in range(3):
                 await _run_agent_queued(
-                    f"task {i}", "/tmp/repo", _fake_config(), "gemini", "key",
+                    f"task {i}",
+                    "/tmp/repo",
+                    _fake_config(),
+                    "gemini",
+                    "key",
                     queue_backend="memory",
                     redis_url="redis://localhost",
                     max_concurrent_runs=0,
@@ -205,6 +222,7 @@ class TestMemoryQueueMode:
                 return_value="task-1",
             ),
         ):
+
             async def fake_runner(task: Task) -> None:
                 pass
 
@@ -212,11 +230,39 @@ class TestMemoryQueueMode:
 
             # Should not crash with non-zero concurrency
             await _run_agent_queued(
-                "task", "/tmp/repo", _fake_config(), "gemini", "key",
+                "task",
+                "/tmp/repo",
+                _fake_config(),
+                "gemini",
+                "key",
                 queue_backend="memory",
                 redis_url="redis://localhost",
                 max_concurrent_runs=8,
             )
+
+
+class TestSandboxConfigWiring:
+    def test_build_sandbox_config(self) -> None:
+        from agent_forge.cli import _build_sandbox_config
+
+        cfg = _fake_config()
+        cfg.sandbox.image = "agent-forge-sandbox:full"
+        cfg.sandbox.cpu_limit = 2.0
+        cfg.sandbox.memory_limit = "2g"
+        cfg.sandbox.timeout_seconds = 480
+        cfg.sandbox.network_enabled = True
+        cfg.sandbox.writable_cache_mounts = True
+
+        sandbox_config = _build_sandbox_config(cfg)
+
+        assert sandbox_config == SandboxConfig(
+            image="agent-forge-sandbox:full",
+            cpu_limit=2.0,
+            memory_limit="2g",
+            timeout_seconds=480,
+            network_enabled=True,
+            writable_cache_mounts=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +296,11 @@ class TestRedisQueueMode:
             mock_make_runner.return_value = fake_runner
 
             await _run_agent_queued(
-                "fix bug", "/tmp/repo", _fake_config(), "gemini", "key",
+                "fix bug",
+                "/tmp/repo",
+                _fake_config(),
+                "gemini",
+                "key",
                 queue_backend="redis",
                 redis_url="redis://custom:6380/1",
                 max_concurrent_runs=5,
@@ -286,7 +336,11 @@ class TestRedisQueueMode:
 
             for i in range(3):
                 await _run_agent_queued(
-                    f"task {i}", "/tmp/repo", _fake_config(), "gemini", "key",
+                    f"task {i}",
+                    "/tmp/repo",
+                    _fake_config(),
+                    "gemini",
+                    "key",
                     queue_backend="redis",
                     redis_url="redis://localhost:6379/0",
                     max_concurrent_runs=2,
@@ -327,6 +381,7 @@ class TestQueueModeCleanup:
                 return_value="task-fail",
             ),
         ):
+
             async def fake_runner(task: Task) -> None:
                 pass
 
@@ -334,7 +389,11 @@ class TestQueueModeCleanup:
 
             with pytest.raises(SystemExit):
                 await _run_agent_queued(
-                    "broken task", "/tmp/repo", _fake_config(), "gemini", "key",
+                    "broken task",
+                    "/tmp/repo",
+                    _fake_config(),
+                    "gemini",
+                    "key",
                     queue_backend="memory",
                     redis_url="redis://localhost",
                     max_concurrent_runs=0,
@@ -373,7 +432,11 @@ class TestQueueModeCleanup:
 
             with pytest.raises(SystemExit):
                 await _run_agent_queued(
-                    "task", "/tmp/repo", _fake_config(), "gemini", "key",
+                    "task",
+                    "/tmp/repo",
+                    _fake_config(),
+                    "gemini",
+                    "key",
                     queue_backend="redis",
                     redis_url="redis://localhost",
                     max_concurrent_runs=0,

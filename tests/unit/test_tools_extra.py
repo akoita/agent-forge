@@ -86,8 +86,19 @@ class TestRunShell:
         tool = RunShellTool()
         await tool.execute({"command": "sleep 1", "timeout_seconds": 999}, sandbox)
 
-        # Timeout should be capped at 120
-        sandbox.exec.assert_called_once_with("sleep 1", timeout_seconds=120)
+        # Timeout should be capped at the tool hard ceiling.
+        sandbox.exec.assert_called_once_with("sleep 1", timeout_seconds=600)
+
+    @pytest.mark.asyncio
+    async def test_timeout_capped_by_sandbox_policy(self) -> None:
+        sandbox = AsyncMock()
+        sandbox.timeout_cap_seconds = 45
+        sandbox.exec.return_value = ExecResult(exit_code=0, stdout="ok", stderr="")
+
+        tool = RunShellTool()
+        await tool.execute({"command": "sleep 1", "timeout_seconds": 120}, sandbox)
+
+        sandbox.exec.assert_called_once_with("sleep 1", timeout_seconds=45)
 
     @pytest.mark.asyncio
     async def test_output_truncation(self) -> None:

@@ -16,6 +16,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from agent_forge.config import USER_CONFIG_DIR, load_config
+from agent_forge.sandbox.base import SandboxConfig
 
 console = Console()
 err_console = Console(stderr=True)
@@ -38,6 +39,18 @@ def main() -> None:
 @click.option("--model", default=None, help="LLM model to use")
 @click.option("--provider", default=None, help="LLM provider (gemini, openai, anthropic)")
 @click.option("--max-iterations", default=None, type=int, help="Max ReAct loop iterations")
+@click.option("--sandbox-image", default=None, help="Sandbox image to run")
+@click.option(
+    "--network/--no-network",
+    default=None,
+    help="Enable or disable network access inside the sandbox",
+)
+@click.option(
+    "--command-timeout",
+    default=None,
+    type=int,
+    help="Per-command sandbox timeout cap in seconds",
+)
 @click.option(
     "--queue",
     "queue_backend",
@@ -74,6 +87,9 @@ def run(
     model: str | None,
     provider: str | None,
     max_iterations: int | None,
+    sandbox_image: str | None,
+    network: bool | None,
+    command_timeout: int | None,
     queue_backend: str | None,
     redis_url: str,
     max_concurrent_runs: int,
@@ -81,24 +97,23 @@ def run(
     report_file: Path | None,
 ) -> None:
     """Run an agent task on a repository."""
-    # Build CLI overrides from provided flags
-    cli_overrides: dict[str, Any] = {}
-    if model is not None:
-        cli_overrides["agent.default_model"] = model
-    if provider is not None:
-        cli_overrides["agent.default_provider"] = provider
-    if max_iterations is not None:
-        cli_overrides["agent.max_iterations"] = max_iterations
-
-    cfg = load_config(cli_overrides=cli_overrides or None)
+    cfg = load_config(
+        cli_overrides=_build_cli_overrides(
+            model=model,
+            provider=provider,
+            max_iterations=max_iterations,
+            sandbox_image=sandbox_image,
+            network=network,
+            command_timeout=command_timeout,
+        )
+    )
 
     # Resolve API key
     provider_name = cfg.agent.default_provider
     provider_cfg = cfg.providers.get(provider_name)
     if provider_cfg is None:
         err_console.print(
-            f"[red]Unknown provider:[/red] '{provider_name}'. "
-            f"Available: {', '.join(cfg.providers)}"
+            f"[red]Unknown provider:[/red] '{provider_name}'. Available: {', '.join(cfg.providers)}"
         )
         sys.exit(1)
 
@@ -118,7 +133,11 @@ def run(
             sys.exit(1)
         asyncio.run(
             _run_agent_queued(
-                task, repo, cfg, provider_name, api_key,
+                task,
+                repo,
+                cfg,
+                provider_name,
+                api_key,
                 queue_backend=queue_backend,
                 redis_url=redis_url,
                 max_concurrent_runs=max_concurrent_runs,
@@ -143,10 +162,12 @@ async def _run_agent(
     """
     from agent_forge.agent.core import react_loop
     from agent_forge.agent.models import AgentConfig, AgentRun
+    from agent_forge.agent.prompts import build_system_prompt
     from agent_forge.orchestration.events import EventBus
     from agent_forge.sandbox.docker import DockerSandbox
     from agent_forge.tools import create_default_registry
 
+    sandbox_config = _build_sandbox_config(cfg)
     agent_config = AgentConfig(
         model=cfg.agent.default_model,
         max_iterations=cfg.agent.max_iterations,
@@ -154,17 +175,28 @@ async def _run_agent(
         temperature=cfg.agent.temperature,
     )
 
-    agent_run = AgentRun(task=task, repo_path=repo, config=agent_config)
     event_bus = EventBus()
     llm = _create_llm(provider_name, api_key)
     tools = create_default_registry()
+    agent_config.system_prompt = build_system_prompt(
+        task,
+        tools.list_definitions(),
+        sandbox_image=sandbox_config.image,
+        network_enabled=sandbox_config.network_enabled,
+        command_timeout_seconds=sandbox_config.timeout_seconds,
+    )
+    agent_run = AgentRun(task=task, repo_path=repo, config=agent_config)
     sandbox = DockerSandbox()
 
     with console.status("[bold green]Agent running...", spinner="dots"):
         try:
-            await sandbox.start(repo_path=repo)
+            await sandbox.start(repo_path=repo, config=sandbox_config)
             result = await react_loop(
-                agent_run, llm, tools, sandbox, event_bus=event_bus,
+                agent_run,
+                llm,
+                tools,
+                sandbox,
+                event_bus=event_bus,
             )
         except Exception as exc:  # noqa: BLE001 — top-level catch-all for CLI
             err_console.print(f"[red]Agent failed:[/red] {exc}")
@@ -264,14 +296,16 @@ def _create_llm(provider_name: str, api_key: str) -> Any:
     if provider_name == "gemini":
         return GeminiProvider(api_key=api_key)
     err_console.print(
-        f"[red]Provider '{provider_name}' not yet implemented.[/red] "
-        "Only 'gemini' is available."
+        f"[red]Provider '{provider_name}' not yet implemented.[/red] Only 'gemini' is available."
     )
     sys.exit(1)
 
 
 def _make_task_runner(
-    _cfg: Any, provider_name: str, api_key: str, event_bus: Any,
+    _cfg: Any,
+    provider_name: str,
+    api_key: str,
+    event_bus: Any,
 ) -> Any:
     """Build an async callable that the Worker invokes for each task.
 
@@ -280,29 +314,81 @@ def _make_task_runner(
     """
     from agent_forge.agent.core import react_loop
     from agent_forge.agent.models import AgentRun
+    from agent_forge.agent.prompts import build_system_prompt
     from agent_forge.sandbox.docker import DockerSandbox
     from agent_forge.tools import create_default_registry
 
+    sandbox_config = _build_sandbox_config(_cfg)
+
     async def _runner(task: Any) -> None:
+        tools = create_default_registry()
+        task.config.system_prompt = build_system_prompt(
+            task.task_description,
+            tools.list_definitions(),
+            sandbox_image=sandbox_config.image,
+            network_enabled=sandbox_config.network_enabled,
+            command_timeout_seconds=sandbox_config.timeout_seconds,
+        )
         agent_run = AgentRun(
             task=task.task_description,
             repo_path=task.repo_path,
             config=task.config,
         )
         llm = _create_llm(provider_name, api_key)
-        tools = create_default_registry()
         sandbox = DockerSandbox()
 
         try:
-            await sandbox.start(repo_path=task.repo_path)
+            await sandbox.start(repo_path=task.repo_path, config=sandbox_config)
             await react_loop(
-                agent_run, llm, tools, sandbox, event_bus=event_bus,
+                agent_run,
+                llm,
+                tools,
+                sandbox,
+                event_bus=event_bus,
             )
         finally:
             await sandbox.stop()
             await llm.close()
 
     return _runner
+
+
+def _build_sandbox_config(cfg: Any) -> SandboxConfig:
+    """Convert resolved app config into a sandbox runtime config."""
+    return SandboxConfig(
+        image=cfg.sandbox.image,
+        cpu_limit=cfg.sandbox.cpu_limit,
+        memory_limit=cfg.sandbox.memory_limit,
+        timeout_seconds=cfg.sandbox.timeout_seconds,
+        network_enabled=cfg.sandbox.network_enabled,
+        writable_cache_mounts=cfg.sandbox.writable_cache_mounts,
+    )
+
+
+def _build_cli_overrides(
+    *,
+    model: str | None,
+    provider: str | None,
+    max_iterations: int | None,
+    sandbox_image: str | None,
+    network: bool | None,
+    command_timeout: int | None,
+) -> dict[str, Any] | None:
+    """Collect non-empty CLI overrides into config dotted keys."""
+    cli_overrides: dict[str, Any] = {}
+    if model is not None:
+        cli_overrides["agent.default_model"] = model
+    if provider is not None:
+        cli_overrides["agent.default_provider"] = provider
+    if max_iterations is not None:
+        cli_overrides["agent.max_iterations"] = max_iterations
+    if sandbox_image is not None:
+        cli_overrides["sandbox.image"] = sandbox_image
+    if network is not None:
+        cli_overrides["sandbox.network_enabled"] = network
+    if command_timeout is not None:
+        cli_overrides["sandbox.timeout_seconds"] = command_timeout
+    return cli_overrides or None
 
 
 def _display_run_summary(run: Any) -> None:

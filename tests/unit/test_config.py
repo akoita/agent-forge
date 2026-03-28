@@ -127,6 +127,11 @@ class TestEnvOverrides:
         result = _collect_env_overrides()
         assert result == {"service": {"auth_enabled": True}}
 
+    def test_sandbox_cache_mounts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AGENT_FORGE_SANDBOX_WRITABLE_CACHE_MOUNTS", "false")
+        result = _collect_env_overrides()
+        assert result == {"sandbox": {"writable_cache_mounts": False}}
+
 
 # ---------------------------------------------------------------------------
 # CLI Override Mapping
@@ -179,6 +184,7 @@ class TestDefaults:
         assert cfg.sandbox.memory_limit == "512m"
         assert cfg.sandbox.timeout_seconds == 300
         assert cfg.sandbox.network_enabled is False
+        assert cfg.sandbox.writable_cache_mounts is True
         assert cfg.queue.backend == "memory"
         assert cfg.queue.max_concurrent_runs == 4
         assert cfg.logging.level == "INFO"

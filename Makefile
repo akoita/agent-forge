@@ -1,4 +1,4 @@
-.PHONY: setup build-sandbox test test-unit test-integration test-e2e lint format quality run clean update-prices
+.PHONY: setup build-sandbox build-sandbox-node build-sandbox-full test test-unit test-integration test-e2e lint format quality run clean update-prices
 
 update-prices:             ## Refresh vendored model pricing from LiteLLM
 	python scripts/update_prices.py
@@ -8,6 +8,12 @@ setup:                     ## Install dependencies
 
 build-sandbox:             ## Build the sandbox Docker image
 	docker build -t agent-forge-sandbox:latest -f agent_forge/sandbox/Dockerfile .
+
+build-sandbox-node:        ## Build the Node-focused sandbox image
+	docker build -t agent-forge-sandbox:node -f agent_forge/sandbox/Dockerfile.node .
+
+build-sandbox-full:        ## Build the full Python+Node sandbox image
+	docker build -t agent-forge-sandbox:full -f agent_forge/sandbox/Dockerfile.full .
 
 test:                      ## Run all tests (excludes integration + e2e)
 	pytest --cov=agent_forge --cov-report=term-missing -m "not integration and not e2e"

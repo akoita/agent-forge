@@ -52,6 +52,11 @@ class DockerSandbox(Sandbox):
         """Current lifecycle state."""
         return self._state
 
+    @property
+    def timeout_cap_seconds(self) -> int:
+        """Effective command timeout cap exposed to tools."""
+        return self._config.timeout_seconds
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -70,7 +75,16 @@ class DockerSandbox(Sandbox):
         self._config = cfg
 
         security_opts: list[str] = ["no-new-privileges"]
-        tmpfs: dict[str, str] = {"/tmp": "rw,noexec,nosuid,size=64m"}  # noqa: S108
+        tmpfs = self._build_tmpfs(cfg)
+        environment = dict(cfg.env_vars)
+        if cfg.network_enabled and cfg.writable_cache_mounts:
+            environment.setdefault("HOME", "/cache/home")
+            environment.setdefault("XDG_CACHE_HOME", "/cache/xdg")
+            environment.setdefault("PIP_CACHE_DIR", "/cache/pip")
+            environment.setdefault("NPM_CONFIG_CACHE", "/cache/npm")
+            environment.setdefault("YARN_CACHE_FOLDER", "/cache/yarn")
+            environment.setdefault("PNPM_HOME", "/cache/pnpm-home")
+            environment.setdefault("PNPM_STORE_DIR", "/cache/pnpm-store")
 
         # Parse memory limit to bytes for Docker SDK
         mem_limit = cfg.memory_limit
@@ -86,7 +100,7 @@ class DockerSandbox(Sandbox):
             "tmpfs": tmpfs,
             "nano_cpus": int(cfg.cpu_limit * 1e9),
             "mem_limit": mem_limit,
-            "environment": cfg.env_vars,
+            "environment": environment,
             "volumes": {
                 repo_path: {
                     "bind": cfg.workspace_path,
@@ -132,8 +146,7 @@ class DockerSandbox(Sandbox):
 
         self._state = SandboxState.STOPPED
         msg = (
-            f"Failed to start sandbox container after "
-            f"{_START_MAX_RETRIES + 1} attempts: {last_exc}"
+            f"Failed to start sandbox container after {_START_MAX_RETRIES + 1} attempts: {last_exc}"
         )
         raise SandboxStartupError(msg) from last_exc
 
@@ -249,3 +262,19 @@ class DockerSandbox(Sandbox):
         if self._state != SandboxState.RUNNING or self._container is None:
             msg = "Sandbox is not running. Call start() first."
             raise RuntimeError(msg)
+
+    def _build_tmpfs(self, cfg: SandboxConfig) -> dict[str, str]:
+        """Build tmpfs mounts for scratch space and optional package caches."""
+        tmpfs = {
+            "/tmp": self._tmpfs_options(size="128m", executable=False),  # noqa: S108
+        }
+        if cfg.network_enabled and cfg.writable_cache_mounts:
+            tmpfs["/cache"] = self._tmpfs_options(size="1g", executable=True)
+        return tmpfs
+
+    def _tmpfs_options(self, *, size: str, executable: bool) -> str:
+        exec_flag = "exec" if executable else "noexec"
+        return (
+            f"rw,{exec_flag},nosuid,nodev,size={size},"
+            f"uid={self._host_uid},gid={self._host_gid},mode=1777"
+        )
