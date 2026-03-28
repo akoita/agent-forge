@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import docker
 from docker.errors import APIError, NotFound
@@ -217,9 +217,11 @@ class DockerSandbox(Sandbox):
                 stderr=f"Docker exec error: {exc}",
             )
 
-        stdout_raw, stderr_raw = output or (None, None)
+        output_tuple = cast(tuple[bytes | None, bytes | None] | None, output)
+        stdout_raw, stderr_raw = output_tuple or (None, None)
+        normalized_exit_code = int(exit_code) if exit_code is not None else 1
         return ExecResult(
-            exit_code=exit_code,
+            exit_code=normalized_exit_code,
             stdout=(stdout_raw or b"").decode("utf-8", errors="replace"),
             stderr=(stderr_raw or b"").decode("utf-8", errors="replace"),
         )
