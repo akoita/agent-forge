@@ -72,7 +72,7 @@ tests/
 | `agent_config`     | `AgentConfig`  | Config with sensible test defaults     |
 | `agent_run`        | `AgentRun`     | Fresh run using tmp_path workspace     |
 | `mock_llm`         | `LLMProvider`  | AsyncMock that returns a stop response |
-| `tool_registry`    | `ToolRegistry` | Registry with all 6 built-in tools     |
+| `tool_registry`    | `ToolRegistry` | Registry with all 10 built-in tools    |
 
 ## Writing New Tests
 

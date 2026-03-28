@@ -1245,6 +1245,11 @@ agent-forge/
 │   │   ├── read_file.py
 │   │   ├── write_file.py
 │   │   ├── edit_file.py
+│   │   ├── git_common.py
+│   │   ├── git_diff.py
+│   │   ├── git_commit.py
+│   │   ├── git_create_branch.py
+│   │   ├── create_pr.py
 │   │   ├── run_shell.py
 │   │   ├── search_codebase.py
 │   │   └── list_directory.py
@@ -1429,7 +1434,7 @@ clean:                     ## Clean up containers and build artifacts
 
 > **Goal:** The agent understands git workflows and users can extend it with custom tools.
 
-- [ ] Git-aware tools: `git_diff`, `git_commit`, `git_create_branch`, `create_pr`
+- [x] Git-aware tools: `git_diff`, `git_commit`, `git_create_branch`, `create_pr`
 - [ ] Plugin system: load custom tools from external Python packages
 - [ ] Tool dependency resolution (e.g., a tool that requires another tool's output)
 - [ ] Custom system prompt templates (per-project `.agent-forge/prompts/`)
