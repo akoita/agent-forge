@@ -335,7 +335,7 @@ class TestEditFile:
 
 class TestDefaultRegistry:
     def test_all_tools_registered(self) -> None:
-        registry = create_default_registry()
+        registry = create_default_registry(load_plugins=False)
         names = {d.name for d in registry.list_definitions()}
         assert names == {
             "create_pr",
