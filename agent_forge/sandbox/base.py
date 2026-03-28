@@ -23,6 +23,7 @@ class SandboxState(Enum):
 class SandboxConfig:
     """Configuration for a sandbox container."""
 
+    backend: str = "docker"
     image: str = "agent-forge-sandbox:latest"
     workspace_path: str = "/workspace"
     cpu_limit: float = 1.0

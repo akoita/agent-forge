@@ -26,7 +26,8 @@ from agent_forge.config import USER_CONFIG_DIR, ForgeConfig, load_config
 from agent_forge.orchestration.events import EventBus
 from agent_forge.orchestration.queue import InMemoryQueue, Task, TaskStatus
 from agent_forge.orchestration.worker import Worker
-from agent_forge.sandbox.docker import DockerSandbox
+from agent_forge.sandbox.base import SandboxConfig
+from agent_forge.sandbox.factory import create_sandbox
 from agent_forge.service.models import (
     ErrorResponse,
     HealthResponse,
@@ -376,10 +377,7 @@ class HostedRunService:
             self._deny(
                 status_code=403,
                 code="policy_denied",
-                message=(
-                    "report schema not allowed for client: "
-                    f"{request.profile.report_schema}"
-                ),
+                message=(f"report schema not allowed for client: {request.profile.report_schema}"),
                 request_origin=request_origin,
                 user_agent=user_agent,
             )
@@ -554,11 +552,7 @@ class HostedRunService:
     def _source_size_bytes(self, source_uri: str) -> int:
         path = self._local_path_from_uri(source_uri)
         if path.is_dir():
-            return sum(
-                child.stat().st_size
-                for child in path.rglob("*")
-                if child.is_file()
-            )
+            return sum(child.stat().st_size for child in path.rglob("*") if child.is_file())
         return path.stat().st_size
 
     def _append_audit_event(
@@ -698,8 +692,7 @@ class HostedRunService:
                 error=RunError(
                     code="source_fetch_failed",
                     message=(
-                        "only local and file:// URIs are supported in this service "
-                        f"build: {uri}"
+                        f"only local and file:// URIs are supported in this service build: {uri}"
                     ),
                     retryable=False,
                 )
@@ -756,7 +749,7 @@ class HostedRunService:
             f"Focus first on the contract named {entry_contract}{target_context}. "
             "Do not modify the source code except for writing a valid JSON report to "
             ".agent-forge/report.json. The report must use schema_version "
-            "\"proof-of-audit-report-v1\" and include the fields run_id, summary, "
+            '"proof-of-audit-report-v1" and include the fields run_id, summary, '
             "confidence, findings, stats, optional benchmark_id, optional target, and "
             "optional provenance. Each finding must include finding_id, title, severity, "
             "category, description, impact, recommendation, confidence, and optional "
@@ -788,7 +781,16 @@ class HostedRunService:
 
             llm = _create_llm(provider_name, api_key)
             tools = create_default_registry()
-            sandbox = DockerSandbox()
+            sandbox_config = SandboxConfig(
+                backend=self._config.sandbox.backend,
+                image=self._config.sandbox.image,
+                cpu_limit=self._config.sandbox.cpu_limit,
+                memory_limit=self._config.sandbox.memory_limit,
+                timeout_seconds=self._config.sandbox.timeout_seconds,
+                network_enabled=self._config.sandbox.network_enabled,
+                writable_cache_mounts=self._config.sandbox.writable_cache_mounts,
+            )
+            sandbox = create_sandbox(sandbox_config)
             agent_run = AgentRun(
                 task=task.task_description,
                 repo_path=task.repo_path,
@@ -796,7 +798,7 @@ class HostedRunService:
                 id=task.id,
             )
             try:
-                await sandbox.start(repo_path=task.repo_path)
+                await sandbox.start(repo_path=task.repo_path, config=sandbox_config)
                 await react_loop(agent_run, llm, tools, sandbox, event_bus=self._event_bus)
                 if not record.report_path.exists():
                     record.error = RunError(
@@ -859,9 +861,8 @@ class HostedRunService:
         )
 
     def _artifact_refs(self, record: HostedRunRecord) -> list[RunArtifactRef]:
-        include_logs = (
-            record.request.artifacts is None
-            or bool(record.request.artifacts.include_logs)
+        include_logs = record.request.artifacts is None or bool(
+            record.request.artifacts.include_logs
         )
         artifacts = [
             RunArtifactRef(

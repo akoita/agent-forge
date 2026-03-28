@@ -25,6 +25,7 @@ You can use the following tools to complete the task:
 7. Stay within the /workspace directory.
 
 ## Sandbox
+- Backend: {sandbox_backend}
 - Runtime image: {sandbox_image}
 - Network: {network_status}
 - Max shell command timeout: {command_timeout_seconds}s
@@ -37,6 +38,7 @@ def build_system_prompt(
     task: str,
     tool_definitions: list[ToolDefinition],
     *,
+    sandbox_backend: str = "docker",
     sandbox_image: str = "agent-forge-sandbox:latest",
     network_enabled: bool = False,
     command_timeout_seconds: int = 300,
@@ -60,6 +62,7 @@ def build_system_prompt(
 
     return _SYSTEM_PROMPT_TEMPLATE.format(
         tool_descriptions="\n".join(tool_lines),
+        sandbox_backend=sandbox_backend,
         sandbox_image=sandbox_image,
         network_rule=network_rule,
         network_status=network_status,

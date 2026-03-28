@@ -40,8 +40,9 @@ class AgentSettings(BaseModel):
 
 
 class SandboxSettings(BaseModel):
-    """Settings for the Docker sandbox runtime."""
+    """Settings for the sandbox runtime."""
 
+    backend: str = "docker"
     image: str = DEFAULT_SANDBOX_IMAGE
     cpu_limit: float = 1.0
     memory_limit: str = "512m"

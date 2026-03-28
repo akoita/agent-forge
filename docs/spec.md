@@ -416,12 +416,14 @@ from dataclasses import dataclass
 
 @dataclass
 class SandboxConfig:
+    backend: str = "docker"                      # "docker" | "bwrap" | "auto"
     image: str = "agent-forge-sandbox:latest"    # Pre-built image with common tools
     workspace_path: str = "/workspace"           # Mount point inside container
     cpu_limit: float = 1.0                       # CPU cores
     memory_limit: str = "512m"                   # Memory limit
     timeout_seconds: int = 300                   # Max container lifetime
     network_enabled: bool = False                # Network access (default: isolated)
+    writable_cache_mounts: bool = True           # Mount writable cache tmpfs
     env_vars: dict[str, str] = field(default_factory=dict)
 
 class Sandbox(ABC):
@@ -527,10 +529,11 @@ Sandbox capabilities are configured through `SandboxConfig` and CLI flags. Each 
 
 | Capability          | Default           | Opt-in via                           | Use case                          |
 | ------------------- | ----------------- | ------------------------------------ | --------------------------------- |
+| **Backend**         | Docker            | `backend="..."` / `--sandbox-backend`| Bubblewrap fallback, CI, fast startup |
 | **Network access**  | ❌ Disabled       | `network_enabled=True` / `--network` | Install dependencies, fetch APIs  |
 | **Custom runtime**  | Python 3.12       | `image="..."` / `--sandbox-image`    | Node.js, Go, Rust, multi-runtime  |
-| **Writable paths**  | `/workspace` only | Future: `--writable-paths`           | Cache dirs (`~/.npm`, `~/.cache`) |
-| **Command timeout** | 120s              | Future: `--command-timeout`          | Long builds, `npm install`        |
+| **Writable paths**  | `/workspace` only | `writable_cache_mounts=True`         | Cache dirs (`~/.npm`, `~/.cache`) |
+| **Command timeout** | 300s              | `timeout_seconds=...` / `--command-timeout` | Long builds, `npm install` |
 | **Tmpfs size**      | 64 MB (noexec)    | Future: `--tmpfs-size`               | Larger temporary storage          |
 
 > **Design decision:** We start restricted and let operators widen permissions, rather than starting open and asking them to lock down. This ensures that forgetting to configure is safe, not dangerous.
