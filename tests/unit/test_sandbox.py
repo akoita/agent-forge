@@ -63,6 +63,7 @@ class TestSandboxLifecycle:
             assert call_kwargs["read_only"] is True
             assert call_kwargs["pids_limit"] == 256
             assert "/tmp" in call_kwargs["tmpfs"]
+            assert "noexec" in call_kwargs["tmpfs"]["/tmp"]
             assert call_kwargs["network_mode"] == "none"
             assert call_kwargs["user"] == f"{os.getuid()}:{os.getgid()}"
 
@@ -82,6 +83,29 @@ class TestSandboxLifecycle:
             assert call_kwargs["nano_cpus"] == 2_000_000_000
             assert call_kwargs["mem_limit"] == "1g"
             assert "network_mode" not in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_start_network_cache_mounts(self, mock_docker_client: MagicMock) -> None:
+        with patch("agent_forge.sandbox.docker.docker") as mock_docker:
+            mock_docker.from_env.return_value = mock_docker_client
+            sandbox = DockerSandbox()
+            config = SandboxConfig(network_enabled=True, writable_cache_mounts=True)
+            await sandbox.start("/tmp/repo", config=config)
+
+            call_kwargs = mock_docker_client.containers.run.call_args[1]
+            assert "/cache" in call_kwargs["tmpfs"]
+            assert "exec" in call_kwargs["tmpfs"]["/cache"]
+            assert call_kwargs["environment"]["HOME"] == "/cache/home"
+            assert call_kwargs["environment"]["NPM_CONFIG_CACHE"] == "/cache/npm"
+
+    @pytest.mark.asyncio
+    async def test_timeout_cap_exposed(self, mock_docker_client: MagicMock) -> None:
+        with patch("agent_forge.sandbox.docker.docker") as mock_docker:
+            mock_docker.from_env.return_value = mock_docker_client
+            sandbox = DockerSandbox()
+            await sandbox.start("/tmp/repo", config=SandboxConfig(timeout_seconds=420))
+
+            assert sandbox.timeout_cap_seconds == 420
 
     @pytest.mark.asyncio
     async def test_start_already_running(self, mock_docker_client: MagicMock) -> None:
@@ -150,7 +174,9 @@ class TestSandboxExec:
             # No chown during start anymore; just our command
             assert container.exec_run.call_count == 1
             container.exec_run.assert_called_with(
-                ["bash", "-c", "echo hello"], demux=True, user=f"{os.getuid()}:{os.getgid()}",
+                ["bash", "-c", "echo hello"],
+                demux=True,
+                user=f"{os.getuid()}:{os.getgid()}",
             )
 
     @pytest.mark.asyncio

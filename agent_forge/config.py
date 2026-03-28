@@ -47,6 +47,7 @@ class SandboxSettings(BaseModel):
     memory_limit: str = "512m"
     timeout_seconds: int = 300
     network_enabled: bool = False
+    writable_cache_mounts: bool = True
 
 
 class QueueSettings(BaseModel):

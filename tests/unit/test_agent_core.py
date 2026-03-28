@@ -330,11 +330,26 @@ class TestBuildSystemPrompt:
         assert "read_file" in prompt
         assert "Fix the bug" in prompt
         assert "/workspace" in prompt
+        assert "Runtime image: agent-forge-sandbox:latest" in prompt
+        assert "Network: disabled" in prompt
 
     def test_empty_tools(self) -> None:
         prompt = build_system_prompt(task="Do something", tool_definitions=[])
         assert "Agent Forge" in prompt
         assert "Do something" in prompt
+
+    def test_network_enabled_prompt(self) -> None:
+        prompt = build_system_prompt(
+            task="Install dependencies",
+            tool_definitions=[],
+            sandbox_image="agent-forge-sandbox:node",
+            network_enabled=True,
+            command_timeout_seconds=480,
+        )
+        assert "Network: enabled" in prompt
+        assert "installing dependencies" in prompt
+        assert "agent-forge-sandbox:node" in prompt
+        assert "480s" in prompt
 
 
 class TestTokenUsageAdd:

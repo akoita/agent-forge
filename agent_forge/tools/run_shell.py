@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from agent_forge.sandbox.base import Sandbox
 
 _MAX_OUTPUT_BYTES = 50 * 1024  # 50 KB
-_MAX_TIMEOUT = 120  # hard cap
+_MAX_TIMEOUT = 600  # hard cap
 
 # Dangerous command patterns
 _BLOCKLIST: list[re.Pattern[str]] = [
@@ -46,7 +46,9 @@ class RunShellTool(Tool):
                 },
                 "timeout_seconds": {
                     "type": "integer",
-                    "description": "Timeout in seconds (default: 30, max: 120)",
+                    "description": (
+                        "Timeout in seconds (default: 30, max: sandbox policy, hard cap: 600)"
+                    ),
                     "default": 30,
                 },
             },
@@ -56,7 +58,10 @@ class RunShellTool(Tool):
     async def execute(self, arguments: dict[str, Any], sandbox: Sandbox) -> ToolResult:
         """Run a shell command with timeout and output truncation."""
         command = arguments.get("command", "")
-        timeout = min(arguments.get("timeout_seconds", 30), _MAX_TIMEOUT)
+        timeout_cap = getattr(sandbox, "timeout_cap_seconds", _MAX_TIMEOUT)
+        if not isinstance(timeout_cap, int) or timeout_cap <= 0:
+            timeout_cap = _MAX_TIMEOUT
+        timeout = min(arguments.get("timeout_seconds", 30), timeout_cap, _MAX_TIMEOUT)
 
         if not command:
             return ToolResult(output="", error="Missing required argument: command", exit_code=1)

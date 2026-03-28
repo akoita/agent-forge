@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from typing import TYPE_CHECKING
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
@@ -41,9 +41,12 @@ class TestRunCommand:
             main,
             [
                 "run",
-                "--task", "Fix a bug",
-                "--repo", "/tmp/fake-repo",
-                "--provider", "nonexistent",
+                "--task",
+                "Fix a bug",
+                "--repo",
+                "/tmp/fake-repo",
+                "--provider",
+                "nonexistent",
             ],
         )
         assert result.exit_code != 0
@@ -72,17 +75,22 @@ class TestRunCommand:
         env = dict(os.environ)
         env["GEMINI_API_KEY"] = "test-key"
         report_file = tmp_path / "report.json"
-        with patch("agent_forge.cli._run_agent", side_effect=fake_run), patch(
-            "agent_forge.cli.USER_CONFIG_DIR", tmp_path
+        with (
+            patch("agent_forge.cli._run_agent", side_effect=fake_run),
+            patch("agent_forge.cli.USER_CONFIG_DIR", tmp_path),
         ):
             result = runner.invoke(
                 main,
                 [
                     "run",
-                    "--task", "Fix a bug",
-                    "--repo", "/tmp/fake-repo",
-                    "--output-format", "json",
-                    "--report-file", str(report_file),
+                    "--task",
+                    "Fix a bug",
+                    "--repo",
+                    "/tmp/fake-repo",
+                    "--output-format",
+                    "json",
+                    "--report-file",
+                    str(report_file),
                 ],
                 env=env,
             )
@@ -106,15 +114,61 @@ class TestRunCommand:
             main,
             [
                 "run",
-                "--task", "Fix a bug",
-                "--repo", "/tmp/fake-repo",
-                "--queue", "memory",
-                "--output-format", "json",
+                "--task",
+                "Fix a bug",
+                "--repo",
+                "/tmp/fake-repo",
+                "--queue",
+                "memory",
+                "--output-format",
+                "json",
             ],
             env=env,
         )
         assert result.exit_code != 0
         assert "not supported in queue mode yet" in result.output
+
+    def test_run_sandbox_flags_override_config(self) -> None:
+        """CLI sandbox flags should reach load_config as sandbox overrides."""
+        runner = _runner()
+        env = dict(os.environ)
+        env["GEMINI_API_KEY"] = "test-key"
+        fake_cfg = MagicMock()
+        fake_cfg.agent.default_provider = "gemini"
+        fake_cfg.providers = {"gemini": MagicMock(api_key_env="GEMINI_API_KEY")}
+
+        with (
+            patch("agent_forge.cli.load_config", return_value=fake_cfg) as mock_load_config,
+            patch("agent_forge.cli._run_agent") as mock_run_agent,
+            patch("agent_forge.cli._emit_run_output") as mock_emit,
+        ):
+            result = runner.invoke(
+                main,
+                [
+                    "run",
+                    "--task",
+                    "Fix a bug",
+                    "--repo",
+                    "/tmp/fake-repo",
+                    "--sandbox-image",
+                    "agent-forge-sandbox:node",
+                    "--network",
+                    "--command-timeout",
+                    "480",
+                ],
+                env=env,
+            )
+
+        assert result.exit_code == 0
+        mock_load_config.assert_called_once_with(
+            cli_overrides={
+                "sandbox.image": "agent-forge-sandbox:node",
+                "sandbox.network_enabled": True,
+                "sandbox.timeout_seconds": 480,
+            }
+        )
+        mock_run_agent.assert_called_once()
+        mock_emit.assert_called_once()
 
 
 class TestStatusCommand:
@@ -160,8 +214,9 @@ class TestStatusCommand:
         save_run(run, base_dir=tmp_path)
 
         runner = _runner()
-        with patch("agent_forge.agent.persistence._default_runs_dir", return_value=tmp_path), patch(
-            "agent_forge.cli.USER_CONFIG_DIR", tmp_path.parent
+        with (
+            patch("agent_forge.agent.persistence._default_runs_dir", return_value=tmp_path),
+            patch("agent_forge.cli.USER_CONFIG_DIR", tmp_path.parent),
         ):
             result = runner.invoke(main, ["status", run.id, "--output-format", "json"])
 
