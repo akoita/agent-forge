@@ -217,7 +217,7 @@ class DockerSandbox(Sandbox):
                 stderr=f"Docker exec error: {exc}",
             )
 
-        output_tuple = cast(tuple[bytes | None, bytes | None] | None, output)
+        output_tuple = cast("tuple[bytes | None, bytes | None] | None", output)
         stdout_raw, stderr_raw = output_tuple or (None, None)
         normalized_exit_code = int(exit_code) if exit_code is not None else 1
         return ExecResult(
