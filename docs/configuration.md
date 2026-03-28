@@ -26,6 +26,7 @@ temperature = 0.0
 system_prompt_path = ""
 
 [sandbox]
+backend = "docker"
 image = "agent-forge-sandbox:latest"
 cpu_limit = 1.0
 memory_limit = "512m"
@@ -90,6 +91,7 @@ Examples:
 ```bash
 export AGENT_FORGE_AGENT_MAX_ITERATIONS=10
 export AGENT_FORGE_SANDBOX_MEMORY_LIMIT=1g
+export AGENT_FORGE_SANDBOX_BACKEND=auto
 export AGENT_FORGE_SANDBOX_IMAGE=agent-forge-sandbox:full
 export AGENT_FORGE_LOGGING_LEVEL=DEBUG
 export AGENT_FORGE_SERVICE_AUTH_ENABLED=true
@@ -110,6 +112,7 @@ agent-forge run \
   --provider gemini \
   --model gemini-3.1-flash-lite-preview \
   --max-iterations 25 \
+  --sandbox-backend auto \
   --sandbox-image agent-forge-sandbox:full \
   --network \
   --command-timeout 480 \
@@ -154,6 +157,7 @@ agent-forge run --task "Add input validation" --repo ./my-app
 
 ```toml
 [sandbox]
+backend = "auto"
 image = "agent-forge-sandbox:full"
 memory_limit = "1g"
 timeout_seconds = 600
@@ -174,6 +178,12 @@ Build them with:
 ./scripts/build-sandbox.sh node
 ./scripts/build-sandbox.sh full
 ```
+
+### Sandbox Backends
+
+- `docker`: use the Docker daemon-backed sandbox
+- `bwrap`: use Linux bubblewrap directly
+- `auto`: prefer Docker and fall back to bubblewrap when Docker is unavailable
 ```
 
 ## Inspecting Config

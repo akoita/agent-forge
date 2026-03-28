@@ -92,6 +92,11 @@ class TestEnvOverrides:
         result = _collect_env_overrides()
         assert result == {"sandbox": {"memory_limit": "1g"}}
 
+    def test_sandbox_backend(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AGENT_FORGE_SANDBOX_BACKEND", "bwrap")
+        result = _collect_env_overrides()
+        assert result == {"sandbox": {"backend": "bwrap"}}
+
     def test_bool_coercion(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("AGENT_FORGE_SANDBOX_NETWORK_ENABLED", "true")
         result = _collect_env_overrides()
@@ -180,6 +185,7 @@ class TestDefaults:
         assert cfg.agent.default_provider == "gemini"
         assert cfg.agent.default_model == "gemini-3.1-flash-lite-preview"
         assert cfg.agent.temperature == 0.0
+        assert cfg.sandbox.backend == "docker"
         assert cfg.sandbox.image == "agent-forge-sandbox:latest"
         assert cfg.sandbox.memory_limit == "512m"
         assert cfg.sandbox.timeout_seconds == 300

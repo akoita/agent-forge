@@ -330,6 +330,7 @@ class TestBuildSystemPrompt:
         assert "read_file" in prompt
         assert "Fix the bug" in prompt
         assert "/workspace" in prompt
+        assert "Backend: docker" in prompt
         assert "Runtime image: agent-forge-sandbox:latest" in prompt
         assert "Network: disabled" in prompt
 
@@ -342,10 +343,12 @@ class TestBuildSystemPrompt:
         prompt = build_system_prompt(
             task="Install dependencies",
             tool_definitions=[],
+            sandbox_backend="bwrap",
             sandbox_image="agent-forge-sandbox:node",
             network_enabled=True,
             command_timeout_seconds=480,
         )
+        assert "Backend: bwrap" in prompt
         assert "Network: enabled" in prompt
         assert "installing dependencies" in prompt
         assert "agent-forge-sandbox:node" in prompt

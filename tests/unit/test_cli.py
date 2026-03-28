@@ -152,6 +152,8 @@ class TestRunCommand:
                     "/tmp/fake-repo",
                     "--sandbox-image",
                     "agent-forge-sandbox:node",
+                    "--sandbox-backend",
+                    "bwrap",
                     "--network",
                     "--command-timeout",
                     "480",
@@ -163,6 +165,7 @@ class TestRunCommand:
         mock_load_config.assert_called_once_with(
             cli_overrides={
                 "sandbox.image": "agent-forge-sandbox:node",
+                "sandbox.backend": "bwrap",
                 "sandbox.network_enabled": True,
                 "sandbox.timeout_seconds": 480,
             }

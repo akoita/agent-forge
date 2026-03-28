@@ -41,6 +41,12 @@ def main() -> None:
 @click.option("--max-iterations", default=None, type=int, help="Max ReAct loop iterations")
 @click.option("--sandbox-image", default=None, help="Sandbox image to run")
 @click.option(
+    "--sandbox-backend",
+    default=None,
+    type=click.Choice(["docker", "bwrap", "auto"], case_sensitive=False),
+    help="Sandbox backend to use",
+)
+@click.option(
     "--network/--no-network",
     default=None,
     help="Enable or disable network access inside the sandbox",
@@ -88,6 +94,7 @@ def run(
     provider: str | None,
     max_iterations: int | None,
     sandbox_image: str | None,
+    sandbox_backend: str | None,
     network: bool | None,
     command_timeout: int | None,
     queue_backend: str | None,
@@ -103,6 +110,7 @@ def run(
             provider=provider,
             max_iterations=max_iterations,
             sandbox_image=sandbox_image,
+            sandbox_backend=sandbox_backend,
             network=network,
             command_timeout=command_timeout,
         )
@@ -164,7 +172,7 @@ async def _run_agent(
     from agent_forge.agent.models import AgentConfig, AgentRun
     from agent_forge.agent.prompts import build_system_prompt
     from agent_forge.orchestration.events import EventBus
-    from agent_forge.sandbox.docker import DockerSandbox
+    from agent_forge.sandbox.factory import create_sandbox
     from agent_forge.tools import create_default_registry
 
     sandbox_config = _build_sandbox_config(cfg)
@@ -181,12 +189,13 @@ async def _run_agent(
     agent_config.system_prompt = build_system_prompt(
         task,
         tools.list_definitions(),
+        sandbox_backend=sandbox_config.backend,
         sandbox_image=sandbox_config.image,
         network_enabled=sandbox_config.network_enabled,
         command_timeout_seconds=sandbox_config.timeout_seconds,
     )
     agent_run = AgentRun(task=task, repo_path=repo, config=agent_config)
-    sandbox = DockerSandbox()
+    sandbox = create_sandbox(sandbox_config)
 
     with console.status("[bold green]Agent running...", spinner="dots"):
         try:
@@ -315,7 +324,7 @@ def _make_task_runner(
     from agent_forge.agent.core import react_loop
     from agent_forge.agent.models import AgentRun
     from agent_forge.agent.prompts import build_system_prompt
-    from agent_forge.sandbox.docker import DockerSandbox
+    from agent_forge.sandbox.factory import create_sandbox
     from agent_forge.tools import create_default_registry
 
     sandbox_config = _build_sandbox_config(_cfg)
@@ -325,6 +334,7 @@ def _make_task_runner(
         task.config.system_prompt = build_system_prompt(
             task.task_description,
             tools.list_definitions(),
+            sandbox_backend=sandbox_config.backend,
             sandbox_image=sandbox_config.image,
             network_enabled=sandbox_config.network_enabled,
             command_timeout_seconds=sandbox_config.timeout_seconds,
@@ -335,7 +345,7 @@ def _make_task_runner(
             config=task.config,
         )
         llm = _create_llm(provider_name, api_key)
-        sandbox = DockerSandbox()
+        sandbox = create_sandbox(sandbox_config)
 
         try:
             await sandbox.start(repo_path=task.repo_path, config=sandbox_config)
@@ -356,6 +366,7 @@ def _make_task_runner(
 def _build_sandbox_config(cfg: Any) -> SandboxConfig:
     """Convert resolved app config into a sandbox runtime config."""
     return SandboxConfig(
+        backend=cfg.sandbox.backend,
         image=cfg.sandbox.image,
         cpu_limit=cfg.sandbox.cpu_limit,
         memory_limit=cfg.sandbox.memory_limit,
@@ -371,6 +382,7 @@ def _build_cli_overrides(
     provider: str | None,
     max_iterations: int | None,
     sandbox_image: str | None,
+    sandbox_backend: str | None,
     network: bool | None,
     command_timeout: int | None,
 ) -> dict[str, Any] | None:
@@ -384,6 +396,8 @@ def _build_cli_overrides(
         cli_overrides["agent.max_iterations"] = max_iterations
     if sandbox_image is not None:
         cli_overrides["sandbox.image"] = sandbox_image
+    if sandbox_backend is not None:
+        cli_overrides["sandbox.backend"] = sandbox_backend
     if network is not None:
         cli_overrides["sandbox.network_enabled"] = network
     if command_timeout is not None:

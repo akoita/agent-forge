@@ -30,6 +30,7 @@ def _fake_config() -> MagicMock:
     cfg.agent.max_iterations = 10
     cfg.agent.max_tokens_per_run = 100_000
     cfg.agent.temperature = 0.0
+    cfg.sandbox.backend = "docker"
     cfg.sandbox.image = "agent-forge-sandbox:latest"
     cfg.sandbox.cpu_limit = 1.0
     cfg.sandbox.memory_limit = "512m"
@@ -69,9 +70,9 @@ class TestDirectModeEventBus:
             patch("agent_forge.cli._create_llm") as mock_llm_factory,
             patch("agent_forge.tools.create_default_registry") as mock_tools,
             patch("agent_forge.agent.core.react_loop", new_callable=AsyncMock) as mock_react,
-            patch("agent_forge.sandbox.docker.DockerSandbox") as mock_sandbox_cls,
+            patch("agent_forge.sandbox.factory.create_sandbox") as mock_create_sandbox,
         ):
-            mock_sandbox_cls.return_value = AsyncMock()
+            mock_create_sandbox.return_value = AsyncMock()
             mock_llm_factory.return_value = AsyncMock()
             mock_tools.return_value = MagicMock()
             mock_react.return_value = _mock_react_result()
@@ -92,9 +93,9 @@ class TestDirectModeEventBus:
             patch("agent_forge.cli._create_llm") as mock_llm_factory,
             patch("agent_forge.tools.create_default_registry") as mock_tools,
             patch("agent_forge.agent.core.react_loop", new_callable=AsyncMock) as mock_react,
-            patch("agent_forge.sandbox.docker.DockerSandbox") as mock_sandbox_cls,
+            patch("agent_forge.sandbox.factory.create_sandbox") as mock_create_sandbox,
         ):
-            mock_sandbox_cls.return_value = AsyncMock()
+            mock_create_sandbox.return_value = AsyncMock()
             mock_llm_factory.return_value = AsyncMock()
             mock_tools.return_value = MagicMock()
             mock_react.return_value = _mock_react_result()
@@ -246,6 +247,7 @@ class TestSandboxConfigWiring:
         from agent_forge.cli import _build_sandbox_config
 
         cfg = _fake_config()
+        cfg.sandbox.backend = "auto"
         cfg.sandbox.image = "agent-forge-sandbox:full"
         cfg.sandbox.cpu_limit = 2.0
         cfg.sandbox.memory_limit = "2g"
@@ -256,6 +258,7 @@ class TestSandboxConfigWiring:
         sandbox_config = _build_sandbox_config(cfg)
 
         assert sandbox_config == SandboxConfig(
+            backend="auto",
             image="agent-forge-sandbox:full",
             cpu_limit=2.0,
             memory_limit="2g",
@@ -486,10 +489,10 @@ class TestMakeTaskRunner:
         with (
             patch("agent_forge.cli._create_llm") as mock_llm_factory,
             patch("agent_forge.agent.core.react_loop", new_callable=AsyncMock) as mock_react,
-            patch("agent_forge.sandbox.docker.DockerSandbox") as mock_sandbox_cls,
+            patch("agent_forge.sandbox.factory.create_sandbox") as mock_create_sandbox,
         ):
             mock_sandbox = AsyncMock()
-            mock_sandbox_cls.return_value = mock_sandbox
+            mock_create_sandbox.return_value = mock_sandbox
             mock_llm = AsyncMock()
             mock_llm_factory.return_value = mock_llm
 
