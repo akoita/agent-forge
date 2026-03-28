@@ -13,6 +13,7 @@ import pytest
 
 from agent_forge.sandbox.base import ExecResult
 from agent_forge.tools import (
+    CreatePRTool,
     ListDirectoryTool,
     ReadFileTool,
     ToolRegistry,
@@ -97,20 +98,30 @@ class TestToolRegistry:
         defs = registry.list_definitions()
         names = {d.name for d in defs}
         assert names == {
+            "create_pr",
             "read_file",
             "write_file",
             "edit_file",
             "list_directory",
             "run_shell",
             "search_codebase",
+            "git_diff",
+            "git_commit",
+            "git_create_branch",
         }
-        assert len(registry) == 6
+        assert len(registry) == 10
 
     def test_to_definition(self) -> None:
         tool = ReadFileTool()
         defn = tool.to_definition()
         assert defn.name == "read_file"
         assert "path" in defn.parameters["properties"]
+
+    def test_new_tool_to_definition(self) -> None:
+        tool = CreatePRTool()
+        defn = tool.to_definition()
+        assert defn.name == "create_pr"
+        assert "title" in defn.parameters["properties"]
 
 
 # ---------------------------------------------------------------------------

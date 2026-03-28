@@ -96,7 +96,7 @@ class LLMProvider(ABC):
 
 ### Tool System (`agent_forge/tools/`)
 
-Six built-in tools, each implementing the `Tool` ABC:
+Ten built-in tools, each implementing the `Tool` ABC:
 
 | Tool              | Description                     |
 | ----------------- | ------------------------------- |
@@ -106,6 +106,10 @@ Six built-in tools, each implementing the `Tool` ABC:
 | `list_directory`  | List files and directories      |
 | `run_shell`       | Execute shell commands          |
 | `search_codebase` | Grep/ripgrep code search        |
+| `git_diff`        | Inspect staged, unstaged, or ref-based diffs |
+| `git_commit`      | Commit staged changes           |
+| `git_create_branch` | Create and check out a branch |
+| `create_pr`       | Open a GitHub pull request      |
 
 Tools are registered in `ToolRegistry` and their schemas are passed to the LLM as function declarations.
 
