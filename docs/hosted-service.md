@@ -118,6 +118,11 @@ export GEMINI_API_KEY="..."
 export POA_SERVICE_API_KEY="..."
 ```
 
+When a hosted client submits `archive_uri`, the service can materialize local
+archives and `gs://` objects. Remote `archive_uri` inputs still need to resolve
+to a local file before extraction, so the hosted runtime identity must have
+read access to the relevant Cloud Storage bucket or objects.
+
 ## Local Development Workflow
 
 ### 1. Build Sandbox Support
@@ -196,6 +201,7 @@ Hosted mode writes useful state to disk:
 - `unauthorized`: missing or invalid hosted API key, or missing provider API key
 - `policy_denied`: client requested a disallowed profile, report schema, or source kind
 - `quota_exceeded`: active-run or daily-run limit reached
+- `source_fetch_failed`: the submitted source URI could not be resolved, downloaded, or extracted
 - `sandbox_execution_failed`: run reached the sandbox but failed during execution
 - `report_generation_failed`: agent completed without emitting the expected machine report
 

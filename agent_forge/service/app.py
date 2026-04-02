@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import importlib
 import json
 import os
 import shutil
@@ -14,7 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn, cast
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -550,6 +551,9 @@ class HostedRunService:
             )
 
     def _source_size_bytes(self, source_uri: str) -> int:
+        parsed = urlparse(source_uri)
+        if parsed.scheme == "gs":
+            return self._gcs_source_size_bytes(parsed)
         path = self._local_path_from_uri(source_uri)
         if path.is_dir():
             return sum(child.stat().st_size for child in path.rglob("*") if child.is_file())
@@ -638,9 +642,9 @@ class HostedRunService:
             )
 
     def _materialize_source(self, run_id: str, request: RunRequest) -> Path:
-        uri_path = self._local_path_from_uri(request.source.uri)
         source_root = self._service_root / "sources" / run_id
         source_root.mkdir(parents=True, exist_ok=True)
+        uri_path = self._materialize_source_uri(request.source.uri, source_root / "_downloads")
         repo_root = source_root / "repo"
 
         if uri_path.is_dir():
@@ -686,14 +690,78 @@ class HostedRunService:
         if parsed.scheme in {"", "file"}:
             raw_path = parsed.path if parsed.scheme == "file" else uri
             return Path(raw_path).expanduser().resolve()
+        self._raise_unsupported_source_uri(uri)
+        raise AssertionError("unreachable")
+
+    def _materialize_source_uri(self, uri: str, download_root: Path) -> Path:
+        parsed = urlparse(uri)
+        if parsed.scheme in {"", "file"}:
+            return self._local_path_from_uri(uri)
+        if parsed.scheme == "gs":
+            return self._download_gcs_uri(parsed, download_root)
+        self._raise_unsupported_source_uri(uri)
+        raise AssertionError("unreachable")
+
+    def _gcs_source_size_bytes(self, parsed: ParseResult) -> int:
+        bucket_name, object_name = self._parse_gcs_uri(parsed)
+        try:
+            storage = importlib.import_module("google.cloud.storage")
+        except ImportError as exc:
+            self._raise_source_fetch_failed(
+                "gs:// URIs require google-cloud-storage support in this service build"
+            )
+            raise AssertionError("unreachable") from exc
+
+        blob = storage.Client().bucket(bucket_name).get_blob(object_name)
+        if blob is None or blob.size is None:
+            self._raise_source_fetch_failed(f"GCS object not found: gs://{bucket_name}/{object_name}")
+        return int(blob.size)
+
+    def _download_gcs_uri(self, parsed: ParseResult, download_root: Path) -> Path:
+        bucket_name, object_name = self._parse_gcs_uri(parsed)
+        filename = Path(object_name).name
+        destination = (download_root / filename).resolve()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            storage = importlib.import_module("google.cloud.storage")
+            google_exceptions = importlib.import_module("google.api_core.exceptions")
+        except ImportError as exc:
+            self._raise_source_fetch_failed(
+                "gs:// URIs require google-cloud-storage support in this service build"
+            )
+            raise AssertionError("unreachable") from exc
+
+        blob = storage.Client().bucket(bucket_name).blob(object_name)
+        try:
+            blob.download_to_filename(str(destination))
+        except google_exceptions.NotFound:
+            self._raise_source_fetch_failed(f"GCS object not found: gs://{bucket_name}/{object_name}")
+        except google_exceptions.GoogleAPIError as exc:
+            self._raise_source_fetch_failed(
+                f"failed to download GCS source: gs://{bucket_name}/{object_name} ({exc})"
+            )
+        return destination
+
+    def _parse_gcs_uri(self, parsed: ParseResult) -> tuple[str, str]:
+        bucket_name = parsed.netloc
+        object_name = parsed.path.lstrip("/")
+        if bucket_name and object_name:
+            return bucket_name, object_name
+        self._raise_source_fetch_failed(f"invalid GCS source URI: {parsed.geturl()}")
+        raise AssertionError("unreachable")
+
+    def _raise_unsupported_source_uri(self, uri: str) -> NoReturn:
+        self._raise_source_fetch_failed(
+            f"only local, file://, and gs:// URIs are supported in this service build: {uri}"
+        )
+
+    def _raise_source_fetch_failed(self, message: str) -> NoReturn:
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
                 error=RunError(
                     code="source_fetch_failed",
-                    message=(
-                        f"only local and file:// URIs are supported in this service build: {uri}"
-                    ),
+                    message=message,
                     retryable=False,
                 )
             ).model_dump(),
