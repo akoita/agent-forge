@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import zipfile
 from typing import TYPE_CHECKING
 
@@ -203,6 +204,81 @@ async def test_service_materializes_zip_sources(tmp_path: Path) -> None:
         run_id = response.json()["run_id"]
         record = service._records[run_id]
         assert (record.workspace_dir / "src" / "Vault.sol").exists()
+
+
+@pytest.mark.asyncio
+async def test_service_materializes_gcs_zip_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive_path = tmp_path / "bundle.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("wrapped/src/Vault.sol", "contract Vault {}\n")
+
+    app = create_app(service_root=tmp_path / "service-root")
+    service = app.state.service
+
+    async def fake_runner(task: Task) -> None:
+        record = service._records[task.id]
+        record.started_at = record.created_at
+        record.completed_at = record.created_at
+
+    def fake_gcs_size(_parsed: object) -> int:
+        return archive_path.stat().st_size
+
+    def fake_gcs_download(_parsed: object, download_root: Path) -> Path:
+        destination = download_root / "bundle.zip"
+        download_root.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(archive_path, destination)
+        return destination
+
+    monkeypatch.setattr(service, "_gcs_source_size_bytes", fake_gcs_size)
+    monkeypatch.setattr(service, "_download_gcs_uri", fake_gcs_download)
+    service._worker._task_runner = fake_runner
+
+    payload = _request_payload("gs://proof-of-audit-testnet-testnet-source-bundles/source-bundles/bundle.zip")
+    payload["source"] = {
+        "kind": "archive_uri",
+        "uri": "gs://proof-of-audit-testnet-testnet-source-bundles/source-bundles/bundle.zip",
+        "archive_format": "zip",
+        "entry_contract": "Vault",
+        "source_digest": "sha256:test",
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+    ):
+        response = await client.post("/v1/runs", json=payload)
+        assert response.status_code == 202
+        run_id = response.json()["run_id"]
+        record = service._records[run_id]
+        assert (record.workspace_dir / "src" / "Vault.sol").exists()
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_unsupported_remote_source_uri(tmp_path: Path) -> None:
+    app = create_app(service_root=tmp_path / "service-root")
+
+    payload = _request_payload("https://example.com/bundle.zip")
+    payload["source"] = {
+        "kind": "archive_uri",
+        "uri": "https://example.com/bundle.zip",
+        "archive_format": "zip",
+        "entry_contract": "Vault",
+        "source_digest": "sha256:test",
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+    ):
+        response = await client.post("/v1/runs", json=payload)
+        assert response.status_code == 400
+        assert response.json()["detail"]["error"]["code"] == "source_fetch_failed"
+        assert "gs://" in response.json()["detail"]["error"]["message"]
 
 
 @pytest.mark.asyncio
