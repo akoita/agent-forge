@@ -203,7 +203,24 @@ Hosted mode writes useful state to disk:
 - `quota_exceeded`: active-run or daily-run limit reached
 - `source_fetch_failed`: the submitted source URI could not be resolved, downloaded, or extracted
 - `sandbox_execution_failed`: run reached the sandbox but failed during execution
-- `report_generation_failed`: agent completed without emitting the expected machine report
+- `report_generation_failed`: agent completed (including recovery pass) without ever writing the report file
+- `report_invalid_json`: report.json exists but contains malformed JSON
+- `report_schema_invalid`: report.json is valid JSON but is missing required schema fields (e.g., `schema_version`, `summary`, `findings`, `stats`)
+
+#### Report Recovery Pass
+
+When the primary agent loop completes without writing `.agent-forge/report.json`,
+the hosted service automatically attempts a **single-turn recovery pass** — one
+additional LLM call that explicitly instructs the model to write the report
+using its existing audit context. This costs one extra LLM round-trip but
+avoids failing runs where the model simply forgot to call `write_file`.
+
+After the recovery pass (or if the primary run already wrote the file), the
+service validates the report:
+
+1. File must exist → otherwise `report_generation_failed`
+2. File must parse as valid JSON → otherwise `report_invalid_json`
+3. JSON must contain all required top-level fields → otherwise `report_schema_invalid`
 
 ### Rollout Guidance
 

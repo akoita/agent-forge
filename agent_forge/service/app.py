@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 
 from agent_forge.agent.core import react_loop
 from agent_forge.agent.models import AgentConfig, AgentRun
+from agent_forge.agent.prompts import build_hosted_poa_system_prompt
 from agent_forge.cli import _create_llm
 from agent_forge.config import USER_CONFIG_DIR, ForgeConfig, load_config
 from agent_forge.orchestration.events import EventBus
@@ -49,6 +50,18 @@ from agent_forge.service.security import ServiceClientPolicy, load_client_regist
 from agent_forge.tools import create_default_registry
 
 _REPORT_RELATIVE_PATH = Path(".agent-forge/report.json")
+
+_REPORT_REQUIRED_FIELDS = {"schema_version", "run_id", "summary", "confidence", "findings", "stats"}
+
+_REPORT_RECOVERY_PROMPT = (
+    "The audit analysis is complete but you did not write the required report file. "
+    "You MUST now write a valid JSON report to .agent-forge/report.json using the "
+    "write_file tool. The report must use schema_version \"proof-of-audit-report-v1\" "
+    "and include the fields: run_id, summary, confidence, findings (array), and stats "
+    "(object with finding_count, max_severity, severity_breakdown with critical/high/"
+    "medium/low counts). If you found no issues, use an empty findings array and "
+    "stats with finding_count=0. Write the file NOW — this is your only chance."
+)
 
 
 @dataclass
@@ -825,6 +838,36 @@ class HostedRunService:
             "If no finding is confirmed, write an empty findings array and matching stats."
         )
 
+    def _validate_report_artifact(self, record: HostedRunRecord) -> None:
+        """Validate that the report file exists, is valid JSON, and has required fields."""
+        if not record.report_path.exists():
+            record.error = RunError(
+                code="report_generation_failed",
+                message="run completed without writing .agent-forge/report.json",
+                retryable=False,
+            )
+            raise RuntimeError(record.error.message)
+
+        raw = record.report_path.read_text(encoding="utf-8")
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            record.error = RunError(
+                code="report_invalid_json",
+                message=f"report.json exists but is not valid JSON: {exc}",
+                retryable=False,
+            )
+            raise RuntimeError(record.error.message) from exc
+
+        missing = _REPORT_REQUIRED_FIELDS - set(payload.keys())
+        if missing:
+            record.error = RunError(
+                code="report_schema_invalid",
+                message=f"report.json missing required fields: {sorted(missing)}",
+                retryable=False,
+            )
+            raise RuntimeError(record.error.message)
+
     def _make_task_runner(self) -> Any:
         async def _runner(task: Task) -> None:
             record = self._records[task.id]
@@ -859,22 +902,66 @@ class HostedRunService:
                 writable_cache_mounts=self._config.sandbox.writable_cache_mounts,
             )
             sandbox = create_sandbox(sandbox_config)
+            tool_definitions = tools.list_definitions()
+            hosted_prompt = build_hosted_poa_system_prompt(
+                task.task_description,
+                tool_definitions,
+                sandbox_backend=sandbox_config.backend,
+                sandbox_image=sandbox_config.image,
+                network_enabled=sandbox_config.network_enabled,
+            )
+            agent_config = AgentConfig(
+                model=task.config.model,
+                max_iterations=task.config.max_iterations,
+                max_tokens_per_run=task.config.max_tokens_per_run,
+                temperature=task.config.temperature,
+                system_prompt=hosted_prompt,
+            )
             agent_run = AgentRun(
                 task=task.task_description,
                 repo_path=task.repo_path,
-                config=task.config,
+                config=agent_config,
                 id=task.id,
             )
             try:
                 await sandbox.start(repo_path=task.repo_path, config=sandbox_config)
                 await react_loop(agent_run, llm, tools, sandbox, event_bus=self._event_bus)
+
+                # Report finalization: recovery pass if report is missing
                 if not record.report_path.exists():
-                    record.error = RunError(
-                        code="report_generation_failed",
-                        message="run completed without writing .agent-forge/report.json",
-                        retryable=False,
+                    self._append_audit_event(
+                        event="run.report_recovery_started",
+                        client_service_id=record.request.client.service_id,
+                        run_id=record.run_id,
+                        request_id=record.request.client.request_id,
+                        profile_id=record.request.profile.id,
+                        submitted_at=record.created_at,
+                        final_status="running",
+                        reason="report missing after primary run; attempting recovery",
+                        request_origin=record.request_origin,
+                        user_agent=record.user_agent,
                     )
-                    raise RuntimeError(record.error.message)
+                    recovery_config = AgentConfig(
+                        model=agent_config.model,
+                        max_iterations=1,
+                        max_tokens_per_run=agent_config.max_tokens_per_run,
+                        temperature=agent_config.temperature,
+                    )
+                    recovery_run = AgentRun(
+                        task=_REPORT_RECOVERY_PROMPT,
+                        repo_path=task.repo_path,
+                        config=recovery_config,
+                        id=f"{task.id}_recovery",
+                    )
+                    # Carry forward conversation history so the model has context
+                    recovery_run.messages = list(agent_run.messages)
+                    await react_loop(
+                        recovery_run, llm, tools, sandbox, event_bus=self._event_bus,
+                    )
+
+                # Post-run validation: existence + JSON + schema
+                self._validate_report_artifact(record)
+
                 record.completed_at = datetime.now(UTC)
                 self._append_audit_event(
                     event="run.completed",

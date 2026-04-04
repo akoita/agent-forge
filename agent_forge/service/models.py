@@ -21,6 +21,8 @@ ErrorCode = Literal[
     "sandbox_start_failed",
     "sandbox_execution_failed",
     "report_generation_failed",
+    "report_invalid_json",
+    "report_schema_invalid",
     "policy_denied",
     "unauthorized",
     "quota_exceeded",
