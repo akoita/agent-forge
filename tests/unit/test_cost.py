@@ -67,9 +67,7 @@ class TestCostEntry:
         assert entry.timestamp is not None
 
     def test_default_timestamp(self) -> None:
-        entry = CostEntry(
-            model="x", prompt_tokens=0, completion_tokens=0, estimated_cost_usd=0.0
-        )
+        entry = CostEntry(model="x", prompt_tokens=0, completion_tokens=0, estimated_cost_usd=0.0)
         assert entry.timestamp.tzinfo is not None
 
 

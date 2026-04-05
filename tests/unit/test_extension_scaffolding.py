@@ -95,9 +95,7 @@ class TestScaffoldExtension:
         """The generated profile YAML should be parseable."""
         scaffold_extension("yaml-test", target_dir=tmp_path)
 
-        profile_path = (
-            tmp_path / "yaml-test" / "yaml_test" / "profiles" / "default.yaml"
-        )
+        profile_path = tmp_path / "yaml-test" / "yaml_test" / "profiles" / "default.yaml"
         with open(profile_path) as f:
             data = yaml.safe_load(f)
 
@@ -112,9 +110,7 @@ class TestScaffoldExtension:
 
         scaffold_extension("profile-test", target_dir=tmp_path)
 
-        profile_path = (
-            tmp_path / "profile-test" / "profile_test" / "profiles" / "default.yaml"
-        )
+        profile_path = tmp_path / "profile-test" / "profile_test" / "profiles" / "default.yaml"
         with open(profile_path) as f:
             data = yaml.safe_load(f)
 
@@ -155,17 +151,62 @@ class TestScaffoldExtension:
         """The sample tool should have a CamelCase class name."""
         scaffold_extension("my-tool-ext", target_dir=tmp_path)
 
-        tool = (
-            tmp_path / "my-tool-ext" / "my_tool_ext" / "tools" / "sample_tool.py"
-        ).read_text()
+        tool = (tmp_path / "my-tool-ext" / "my_tool_ext" / "tools" / "sample_tool.py").read_text()
         assert "class MyToolExtSampleTool(Tool):" in tool
         assert 'return "my_tool_ext_sample"' in tool
 
     def test_default_target_dir_is_cwd(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Without target_dir, scaffolds in cwd."""
         monkeypatch.chdir(tmp_path)
         result = scaffold_extension("cwd-test")
         assert result == tmp_path / "cwd-test"
         assert result.is_dir()
+
+    def test_creates_prompts_directory(self, tmp_path: Path) -> None:
+        """Scaffolded extension should have a prompts/ directory with a sample."""
+        scaffold_extension("prompt-ext", target_dir=tmp_path)
+        pkg = tmp_path / "prompt-ext" / "prompt_ext"
+        assert (pkg / "prompts").is_dir()
+        assert (pkg / "prompts" / "system_prompt.md").is_file()
+        content = (pkg / "prompts" / "system_prompt.md").read_text()
+        assert "prompt-ext" in content
+
+    def test_creates_workflows_directory(self, tmp_path: Path) -> None:
+        """Scaffolded extension should have a workflows/ directory with a sample."""
+        scaffold_extension("wf-ext", target_dir=tmp_path)
+        pkg = tmp_path / "wf-ext" / "wf_ext"
+        assert (pkg / "workflows").is_dir()
+        assert (pkg / "workflows" / "sample-workflow.md").is_file()
+        content = (pkg / "workflows" / "sample-workflow.md").read_text()
+        assert "wf-ext" in content
+
+    def test_pyproject_has_prompts_entry_point(self, tmp_path: Path) -> None:
+        """Generated pyproject.toml should include agent_forge.prompts."""
+        scaffold_extension("pe-test", target_dir=tmp_path)
+        pyproject_path = tmp_path / "pe-test" / "pyproject.toml"
+        with open(pyproject_path, "rb") as f:
+            data = tomllib.load(f)
+        eps = data["project"]["entry-points"]
+        assert "agent_forge.prompts" in eps
+        assert "pe-test" in eps["agent_forge.prompts"]
+
+    def test_pyproject_has_workflows_entry_point(self, tmp_path: Path) -> None:
+        """Generated pyproject.toml should include agent_forge.workflows."""
+        scaffold_extension("we-test", target_dir=tmp_path)
+        pyproject_path = tmp_path / "we-test" / "pyproject.toml"
+        with open(pyproject_path, "rb") as f:
+            data = tomllib.load(f)
+        eps = data["project"]["entry-points"]
+        assert "agent_forge.workflows" in eps
+        assert "we-test" in eps["agent_forge.workflows"]
+
+    def test_init_contains_prompts_and_workflows(self, tmp_path: Path) -> None:
+        """The __init__.py should export PROMPTS_DIR and WORKFLOWS_DIR."""
+        scaffold_extension("init-check", target_dir=tmp_path)
+        init = (tmp_path / "init-check" / "init_check" / "__init__.py").read_text()
+        assert "PROMPTS_DIR" in init
+        assert "WORKFLOWS_DIR" in init

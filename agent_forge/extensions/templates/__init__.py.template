@@ -7,6 +7,8 @@ from pathlib import Path
 from agent_forge.extensions.discovery import ExtensionInfo
 
 PROFILES_DIR = Path(__file__).parent / "profiles"
+PROMPTS_DIR = Path(__file__).parent / "prompts"
+WORKFLOWS_DIR = Path(__file__).parent / "workflows"
 
 extension_info = ExtensionInfo(
     name="$extension_name",
@@ -15,4 +17,6 @@ extension_info = ExtensionInfo(
     package="agent-forge-$extension_name",
     profiles=["$package_name-default"],
     tools=[],
+    prompts=["system_prompt"],
+    workflows=["sample-workflow"],
 )

@@ -230,6 +230,11 @@ async def _run_agent(
     # Resolve prompt_scope from profile
     prompt_scope = profile.prompt_scope if profile else None
 
+    # Discover extension prompt fragments
+    from agent_forge.extensions.discovery import discover_extension_prompt_fragments
+
+    extension_prompts = discover_extension_prompt_fragments() or None
+
     event_bus = EventBus()
     llm = _create_llm(provider_name, api_key)
     tools = create_default_registry()
@@ -241,6 +246,7 @@ async def _run_agent(
         network_enabled=sandbox_config.network_enabled,
         command_timeout_seconds=sandbox_config.timeout_seconds,
         prompt_scope=prompt_scope,
+        extension_prompts=extension_prompts,
     )
     agent_run = AgentRun(task=task, repo_path=repo, config=agent_config)
     sandbox = create_sandbox(sandbox_config)
@@ -714,18 +720,20 @@ def extensions_list() -> None:
     """List installed Agent Forge extensions."""
     from agent_forge.extensions.discovery import (
         discover_extension_profile_dirs,
+        discover_extension_workflow_dirs,
         discover_extensions,
     )
     from agent_forge.tools.plugins import discover_tool_plugins
 
     exts = discover_extensions()
 
-    # Also discover standalone profile dirs and tool plugins for
-    # extensions that only register profiles or tools (no metadata).
+    # Also discover standalone profile/workflow dirs and tool plugins for
+    # extensions that only register profiles, workflows, or tools (no metadata).
     profile_dirs = discover_extension_profile_dirs()
+    workflow_dirs = discover_extension_workflow_dirs()
     tool_plugins = discover_tool_plugins()
 
-    if not exts and not profile_dirs and not tool_plugins:
+    if not exts and not profile_dirs and not workflow_dirs and not tool_plugins:
         console.print("[dim]No extensions installed.[/dim]")
         return
 
@@ -734,6 +742,8 @@ def extensions_list() -> None:
     table.add_column("Version", justify="center")
     table.add_column("Profiles", style="green")
     table.add_column("Tools", style="yellow")
+    table.add_column("Prompts", style="magenta")
+    table.add_column("Workflows", style="blue")
     table.add_column("Description")
 
     for ext in exts:
@@ -742,6 +752,8 @@ def extensions_list() -> None:
             ext.version or "—",
             ", ".join(ext.profiles) if ext.profiles else "—",
             ", ".join(ext.tools) if ext.tools else "—",
+            ", ".join(ext.prompts) if ext.prompts else "—",
+            ", ".join(ext.workflows) if ext.workflows else "—",
             ext.description or "—",
         )
 
@@ -755,7 +767,23 @@ def extensions_list() -> None:
                 "—",
                 str(pdir),
                 "—",
+                "—",
+                "—",
                 "Profile directory (no extension metadata)",
+            )
+
+    # Show orphan workflow dirs.
+    for wdir in workflow_dirs:
+        if wdir.name not in known_names:
+            workflows = [f.stem for f in sorted(wdir.iterdir()) if f.suffix == ".md"]
+            table.add_row(
+                f"(workflows: {wdir.name})",
+                "—",
+                "—",
+                "—",
+                "—",
+                ", ".join(workflows) if workflows else str(wdir),
+                "Workflow directory (no extension metadata)",
             )
 
     # Show orphan tool plugins.
@@ -769,6 +797,8 @@ def extensions_list() -> None:
                 "—",
                 "—",
                 tp.name,
+                "—",
+                "—",
                 f"Tool plugin ({tp.value})",
             )
 
@@ -813,4 +843,3 @@ def init_extension(name: str, target_dir: Path | None) -> None:
 
 if __name__ == "__main__":
     main()
-

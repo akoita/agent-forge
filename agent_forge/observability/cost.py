@@ -123,12 +123,8 @@ class CostTracker:
         return {
             "run_id": self.run_id,
             "total_prompt_tokens": sum(e.prompt_tokens for e in self.entries),
-            "total_completion_tokens": sum(
-                e.completion_tokens for e in self.entries
-            ),
-            "total_tokens": sum(
-                e.prompt_tokens + e.completion_tokens for e in self.entries
-            ),
+            "total_completion_tokens": sum(e.completion_tokens for e in self.entries),
+            "total_tokens": sum(e.prompt_tokens + e.completion_tokens for e in self.entries),
             "total_cost_usd": self.total_cost(),
             "llm_calls": len(self.entries),
         }

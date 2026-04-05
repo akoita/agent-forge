@@ -23,13 +23,13 @@ from agent_forge.observability.tracing import inject_trace_context
 
 # Patterns that likely represent API keys / tokens.
 _SECRET_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"AIza[0-9A-Za-z\-_]{35}"),          # Google / Gemini
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),              # OpenAI
-    re.compile(r"sk-ant-[A-Za-z0-9\-]{20,}"),        # Anthropic
-    re.compile(r"key-[A-Za-z0-9]{20,}"),             # Generic key-* tokens
-    re.compile(r"ghp_[A-Za-z0-9]{36,}"),             # GitHub PAT
-    re.compile(r"ghs_[A-Za-z0-9]{36,}"),             # GitHub App token
-    re.compile(r"glpat-[A-Za-z0-9\-_]{20,}"),        # GitLab PAT
+    re.compile(r"AIza[0-9A-Za-z\-_]{35}"),  # Google / Gemini
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),  # OpenAI
+    re.compile(r"sk-ant-[A-Za-z0-9\-]{20,}"),  # Anthropic
+    re.compile(r"key-[A-Za-z0-9]{20,}"),  # Generic key-* tokens
+    re.compile(r"ghp_[A-Za-z0-9]{36,}"),  # GitHub PAT
+    re.compile(r"ghs_[A-Za-z0-9]{36,}"),  # GitHub App token
+    re.compile(r"glpat-[A-Za-z0-9\-_]{20,}"),  # GitLab PAT
 ]
 
 REDACTED = "***REDACTED***"
@@ -53,9 +53,7 @@ def _redact_value(value: Any) -> Any:
     return value
 
 
-def redact_secrets(
-    _logger: Any, _method_name: str, event_dict: dict[str, Any]
-) -> dict[str, Any]:
+def redact_secrets(_logger: Any, _method_name: str, event_dict: dict[str, Any]) -> dict[str, Any]:
     """structlog processor that redacts API key patterns from all values."""
     return {key: _redact_value(val) for key, val in event_dict.items()}
 

@@ -161,15 +161,19 @@ class OpenAIProvider(LLMProvider):
 
         for msg in messages:
             if msg.role == Role.SYSTEM:
-                oai_messages.append({
-                    "role": "system",
-                    "content": msg.content,
-                })
+                oai_messages.append(
+                    {
+                        "role": "system",
+                        "content": msg.content,
+                    }
+                )
             elif msg.role == Role.USER:
-                oai_messages.append({
-                    "role": "user",
-                    "content": msg.content,
-                })
+                oai_messages.append(
+                    {
+                        "role": "user",
+                        "content": msg.content,
+                    }
+                )
             elif msg.role == Role.ASSISTANT:
                 m: dict[str, Any] = {
                     "role": "assistant",
@@ -189,11 +193,13 @@ class OpenAIProvider(LLMProvider):
                     ]
                 oai_messages.append(m)
             elif msg.role == Role.TOOL:
-                oai_messages.append({
-                    "role": "tool",
-                    "tool_call_id": msg.tool_call_id or "",
-                    "content": msg.content,
-                })
+                oai_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": msg.tool_call_id or "",
+                        "content": msg.content,
+                    }
+                )
 
         return oai_messages
 
@@ -235,9 +241,7 @@ class OpenAIProvider(LLMProvider):
             finish_reason=mapped_reason,
         )
 
-    def _parse_stream_chunk(
-        self, data: dict[str, Any], model: str
-    ) -> LLMResponse:
+    def _parse_stream_chunk(self, data: dict[str, Any], model: str) -> LLMResponse:
         """Parse a single SSE chunk from a streaming response."""
         choices = data.get("choices", [])
         if not choices:
@@ -280,9 +284,7 @@ class OpenAIProvider(LLMProvider):
         return result
 
     @staticmethod
-    def _map_finish_reason(
-        oai_reason: str, tool_calls: list[ToolCall]
-    ) -> str:
+    def _map_finish_reason(oai_reason: str, tool_calls: list[ToolCall]) -> str:
         """Map OpenAI finish reason to our standard reasons."""
         if tool_calls:
             return "tool_calls"
@@ -298,14 +300,10 @@ class OpenAIProvider(LLMProvider):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _compute_delay(
-        attempt: int, resp: httpx.Response | None = None
-    ) -> float:
+    def _compute_delay(attempt: int, resp: httpx.Response | None = None) -> float:
         """Compute the retry delay, respecting Retry-After if present."""
         if resp is not None:
-            retry_after = resp.headers.get("Retry-After") or resp.headers.get(
-                "retry-after"
-            )
+            retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
             if retry_after:
                 try:
                     parsed: float = float(retry_after)
@@ -367,9 +365,7 @@ class OpenAIProvider(LLMProvider):
                         )
                         await asyncio.sleep(_BACKOFF_BASE)
                         continue
-                    raise LLMResponseError(
-                        "Malformed JSON response from OpenAI API"
-                    ) from exc
+                    raise LLMResponseError("Malformed JSON response from OpenAI API") from exc
 
             except httpx.TimeoutException as exc:
                 last_exc = exc
@@ -396,20 +392,13 @@ class OpenAIProvider(LLMProvider):
         status_code = resp.status_code
         if status_code == 401 or status_code == 403:
             raise LLMAuthError(
-                f"OpenAI authentication failed (HTTP {status_code}). "
-                "Check your OPENAI_API_KEY."
+                f"OpenAI authentication failed (HTTP {status_code}). Check your OPENAI_API_KEY."
             )
         if status_code >= 400:
             try:
                 body = resp.json()
-                detail = (
-                    body.get("error", {}).get("message", resp.text[:500])
-                )
+                detail = body.get("error", {}).get("message", resp.text[:500])
             except Exception:  # noqa: BLE001
                 detail = resp.text[:500]
-            logger.error(
-                "openai_api_error", status_code=status_code, detail=detail
-            )
-            raise LLMResponseError(
-                f"OpenAI API error (HTTP {status_code}): {detail}"
-            )
+            logger.error("openai_api_error", status_code=status_code, detail=detail)
+            raise LLMResponseError(f"OpenAI API error (HTTP {status_code}): {detail}")

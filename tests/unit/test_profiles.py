@@ -396,9 +396,7 @@ class TestProfileEntryPointDiscovery:
             "agent_forge.extensions.discovery.discover_extension_profile_dirs",
             return_value=[ext_dir],
         ) as mock_discover:
-            registry = load_profiles(
-                include_builtins=False, discover_entry_points=False
-            )
+            registry = load_profiles(include_builtins=False, discover_entry_points=False)
 
         # Should NOT have called discovery
         mock_discover.assert_not_called()
@@ -427,4 +425,3 @@ class TestProfileEntryPointDiscovery:
         assert "gemini" in registry
         # Extension profile also present
         assert "addon" in registry
-

@@ -141,5 +141,5 @@ class TestToolPluginRegistration:
                 registry,
                 entry_points_factory=lambda: [
                     FakeEntryPoint("read_file", "pkg:DuplicateReadFileTool", DuplicateReadFileTool)
-                ]
+                ],
             )

@@ -77,7 +77,8 @@ class TestRedisQueueEnqueue:
         assert task.status == TaskStatus.QUEUED
         mock_redis.hset.assert_called_once()
         mock_redis.zadd.assert_called_once_with(
-            "agent_forge:queue", {"test-task-1": 0},
+            "agent_forge:queue",
+            {"test-task-1": 0},
         )
 
     @pytest.mark.asyncio
@@ -100,7 +101,8 @@ class TestRedisQueueEnqueue:
         await q.enqueue(task)
 
         mock_redis.zadd.assert_called_once_with(
-            "agent_forge:queue", {"test-task-1": -5},
+            "agent_forge:queue",
+            {"test-task-1": -5},
         )
 
 

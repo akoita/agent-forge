@@ -20,8 +20,8 @@ from agent_forge.orchestration.queue import Task, TaskQueue, TaskStatus
 logger = get_logger("redis_queue")
 
 # Redis key prefixes
-_QUEUE_KEY = "agent_forge:queue"        # Sorted set: score = -priority
-_TASK_PREFIX = "agent_forge:task:"      # Hash per task
+_QUEUE_KEY = "agent_forge:queue"  # Sorted set: score = -priority
+_TASK_PREFIX = "agent_forge:task:"  # Hash per task
 _CONCURRENT_KEY = "agent_forge:active"  # Counter of active runs
 
 
@@ -60,7 +60,8 @@ class RedisQueue(TaskQueue):
             raise ImportError(msg) from exc
 
         self._redis: Any = aioredis.from_url(
-            redis_url, decode_responses=True,
+            redis_url,
+            decode_responses=True,
         )
         self._max_concurrent = max_concurrent_runs
         self._prefix = key_prefix

@@ -87,3 +87,28 @@ jobs:
 
       - name: Run quality checks
         run: make quality
+
+  # -----------------------------------------------------------------------
+  # Summary gate — set this as the single required status check in
+  # GitHub Branch Protection → "build" must pass before merge.
+  # -----------------------------------------------------------------------
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    needs: [lint, test, integration, quality]
+    if: always()
+    steps:
+      - name: Check upstream job results
+        run: |
+          if [[ "${{ needs.lint.result }}" != "success" ||
+                "${{ needs.test.result }}" != "success" ||
+                "${{ needs.integration.result }}" != "success" ||
+                "${{ needs.quality.result }}" != "success" ]]; then
+            echo "❌ One or more CI jobs failed or were cancelled."
+            echo "  lint:        ${{ needs.lint.result }}"
+            echo "  test:        ${{ needs.test.result }}"
+            echo "  integration: ${{ needs.integration.result }}"
+            echo "  quality:     ${{ needs.quality.result }}"
+            exit 1
+          fi
+          echo "✅ All CI jobs passed."

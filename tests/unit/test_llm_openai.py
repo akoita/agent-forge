@@ -49,9 +49,7 @@ def _text_response(text: str) -> dict[str, object]:
     }
 
 
-def _tool_call_response(
-    name: str, args: dict[str, object]
-) -> dict[str, object]:
+def _tool_call_response(name: str, args: dict[str, object]) -> dict[str, object]:
     """Build an OpenAI tool call response."""
     return {
         "choices": [
@@ -113,9 +111,7 @@ class TestOpenAIComplete:
     @respx.mock
     @pytest.mark.asyncio
     async def test_text_completion(self) -> None:
-        respx.post(_COMPLETIONS_URL).respond(
-            200, json=_text_response("Hello world!")
-        )
+        respx.post(_COMPLETIONS_URL).respond(200, json=_text_response("Hello world!"))
 
         provider = OpenAIProvider(api_key="test-key")
         config = LLMConfig(model=_MODEL)
@@ -162,15 +158,11 @@ class TestOpenAIComplete:
     @respx.mock
     @pytest.mark.asyncio
     async def test_system_message_handled(self) -> None:
-        respx.post(_COMPLETIONS_URL).respond(
-            200, json=_text_response("I understand.")
-        )
+        respx.post(_COMPLETIONS_URL).respond(200, json=_text_response("I understand."))
 
         provider = OpenAIProvider(api_key="test-key")
         messages = [
-            Message(
-                role=Role.SYSTEM, content="You are a coding assistant."
-            ),
+            Message(role=Role.SYSTEM, content="You are a coding assistant."),
             Message(role=Role.USER, content="Hello"),
         ]
         config = LLMConfig(model=_MODEL)
@@ -182,10 +174,7 @@ class TestOpenAIComplete:
         request = respx.calls[0].request
         body = json.loads(request.content)
         assert body["messages"][0]["role"] == "system"
-        assert (
-            body["messages"][0]["content"]
-            == "You are a coding assistant."
-        )
+        assert body["messages"][0]["content"] == "You are a coding assistant."
 
     @respx.mock
     @pytest.mark.asyncio
@@ -218,9 +207,7 @@ class TestOpenAIComplete:
     @respx.mock
     @pytest.mark.asyncio
     async def test_tool_choice_auto_when_tools_provided(self) -> None:
-        respx.post(_COMPLETIONS_URL).respond(
-            200, json=_text_response("ok")
-        )
+        respx.post(_COMPLETIONS_URL).respond(200, json=_text_response("ok"))
 
         provider = OpenAIProvider(api_key="test-key")
         tools = [
@@ -247,9 +234,7 @@ class TestOpenAIComplete:
     @respx.mock
     @pytest.mark.asyncio
     async def test_assistant_tool_call_serialization(self) -> None:
-        respx.post(_COMPLETIONS_URL).respond(
-            200, json=_text_response("Done")
-        )
+        respx.post(_COMPLETIONS_URL).respond(200, json=_text_response("Done"))
 
         provider = OpenAIProvider(api_key="test-key")
         messages = [
@@ -294,9 +279,7 @@ class TestOpenAIErrors:
     @respx.mock
     @pytest.mark.asyncio
     async def test_auth_error(self) -> None:
-        respx.post(_COMPLETIONS_URL).respond(
-            401, json={"error": {"message": "unauthorized"}}
-        )
+        respx.post(_COMPLETIONS_URL).respond(401, json={"error": {"message": "unauthorized"}})
 
         provider = OpenAIProvider(api_key="bad-key")
         messages = [Message(role=Role.USER, content="Hello")]
@@ -308,9 +291,7 @@ class TestOpenAIErrors:
     @respx.mock
     @pytest.mark.asyncio
     async def test_rate_limit_exhausts_retries(self) -> None:
-        respx.post(_COMPLETIONS_URL).respond(
-            429, json={"error": {"message": "rate limited"}}
-        )
+        respx.post(_COMPLETIONS_URL).respond(429, json={"error": {"message": "rate limited"}})
 
         provider = OpenAIProvider(api_key="test-key")
         messages = [Message(role=Role.USER, content="Hello")]
@@ -326,12 +307,8 @@ class TestOpenAIErrors:
     async def test_rate_limit_retries_then_succeeds(self) -> None:
         route = respx.post(_COMPLETIONS_URL)
         route.side_effect = [
-            httpx.Response(
-                429, json={"error": {"message": "rate limited"}}
-            ),
-            httpx.Response(
-                429, json={"error": {"message": "rate limited"}}
-            ),
+            httpx.Response(429, json={"error": {"message": "rate limited"}}),
+            httpx.Response(429, json={"error": {"message": "rate limited"}}),
             httpx.Response(200, json=_text_response("Success!")),
         ]
 
@@ -346,9 +323,7 @@ class TestOpenAIErrors:
     @respx.mock
     @pytest.mark.asyncio
     async def test_timeout_error(self) -> None:
-        respx.post(_COMPLETIONS_URL).mock(
-            side_effect=httpx.ReadTimeout("timeout")
-        )
+        respx.post(_COMPLETIONS_URL).mock(side_effect=httpx.ReadTimeout("timeout"))
 
         provider = OpenAIProvider(api_key="test-key")
         messages = [Message(role=Role.USER, content="Hello")]
@@ -404,9 +379,7 @@ class TestOpenAIErrors:
     @respx.mock
     @pytest.mark.asyncio
     async def test_empty_choices(self) -> None:
-        respx.post(_COMPLETIONS_URL).respond(
-            200, json={"choices": []}
-        )
+        respx.post(_COMPLETIONS_URL).respond(200, json={"choices": []})
 
         provider = OpenAIProvider(api_key="test-key")
         messages = [Message(role=Role.USER, content="Hello")]

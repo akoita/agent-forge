@@ -1,4 +1,4 @@
-"""Unit tests for the extension discovery system (#120)."""
+"""Unit tests for the extension discovery system (#120, #128)."""
 
 from __future__ import annotations
 
@@ -8,8 +8,12 @@ from unittest.mock import MagicMock
 from agent_forge.extensions.discovery import (
     EXTENSION_PLUGIN_GROUP,
     PROFILE_PLUGIN_GROUP,
+    PROMPT_PLUGIN_GROUP,
+    WORKFLOW_PLUGIN_GROUP,
     ExtensionInfo,
     discover_extension_profile_dirs,
+    discover_extension_prompt_fragments,
+    discover_extension_workflow_dirs,
     discover_extensions,
 )
 
@@ -156,6 +160,16 @@ class TestDiscoverExtensions:
         result = discover_extensions(entry_points_factory=factory)
         assert len(result) == 2
 
+    def test_extension_info_has_prompts_and_workflows(self) -> None:
+        """ExtensionInfo supports prompts and workflows fields."""
+        info = ExtensionInfo(
+            name="full-ext",
+            prompts=["sys_prompt"],
+            workflows=["audit-flow"],
+        )
+        assert info.prompts == ["sys_prompt"]
+        assert info.workflows == ["audit-flow"]
+
 
 # ---------------------------------------------------------------------------
 # discover_extension_profile_dirs
@@ -242,5 +256,207 @@ class TestDiscoverExtensionProfileDirs:
             return []
 
         result = discover_extension_profile_dirs(entry_points_factory=factory)
+        assert dir_a in result
+        assert dir_b in result
+
+
+# ---------------------------------------------------------------------------
+# discover_extension_prompt_fragments
+# ---------------------------------------------------------------------------
+
+
+class TestDiscoverExtensionPromptFragments:
+    """Test discovery of prompt fragments from extensions."""
+
+    def test_discover_empty(self) -> None:
+        """No prompt entry_points → empty list."""
+
+        def factory(group: str) -> list[MagicMock]:
+            return []
+
+        result = discover_extension_prompt_fragments(entry_points_factory=factory)
+        assert result == []
+
+    def test_discover_from_string(self) -> None:
+        """A string entry_point is returned directly."""
+        fragment = "Always check for reentrancy vulnerabilities."
+        ep = _mock_ep("my-ext", load_return=fragment)
+
+        def factory(group: str) -> list[MagicMock]:
+            if group == PROMPT_PLUGIN_GROUP:
+                return [ep]
+            return []
+
+        result = discover_extension_prompt_fragments(entry_points_factory=factory)
+        assert result == [fragment]
+
+    def test_discover_from_path(self, tmp_path: Path) -> None:
+        """A Path entry_point reads the file content."""
+        prompt_file = tmp_path / "prompt.md"
+        prompt_file.write_text("Check access controls.", encoding="utf-8")
+
+        ep = _mock_ep("my-ext", load_return=prompt_file)
+
+        def factory(group: str) -> list[MagicMock]:
+            if group == PROMPT_PLUGIN_GROUP:
+                return [ep]
+            return []
+
+        result = discover_extension_prompt_fragments(entry_points_factory=factory)
+        assert result == ["Check access controls."]
+
+    def test_discover_from_callable(self) -> None:
+        """A callable entry_point returning a string is resolved."""
+
+        def prompt_factory() -> str:
+            return "Dynamic prompt fragment"
+
+        ep = _mock_ep("my-ext", load_return=prompt_factory)
+
+        def factory(group: str) -> list[MagicMock]:
+            if group == PROMPT_PLUGIN_GROUP:
+                return [ep]
+            return []
+
+        result = discover_extension_prompt_fragments(entry_points_factory=factory)
+        assert result == ["Dynamic prompt fragment"]
+
+    def test_discover_handles_load_error(self) -> None:
+        """Broken entry_points are skipped."""
+        ep = _mock_ep("crash", load_side_effect=ImportError("fail"))
+
+        def factory(group: str) -> list[MagicMock]:
+            if group == PROMPT_PLUGIN_GROUP:
+                return [ep]
+            return []
+
+        result = discover_extension_prompt_fragments(entry_points_factory=factory)
+        assert result == []
+
+    def test_discover_skips_missing_file(self, tmp_path: Path) -> None:
+        """A Path to a non-existent file is skipped."""
+        missing = tmp_path / "missing.md"
+        ep = _mock_ep("bad", load_return=missing)
+
+        def factory(group: str) -> list[MagicMock]:
+            if group == PROMPT_PLUGIN_GROUP:
+                return [ep]
+            return []
+
+        result = discover_extension_prompt_fragments(entry_points_factory=factory)
+        assert result == []
+
+    def test_discover_skips_invalid_type(self) -> None:
+        """An entry_point resolving to wrong type is skipped."""
+        ep = _mock_ep("bad", load_return=42)
+
+        def factory(group: str) -> list[MagicMock]:
+            if group == PROMPT_PLUGIN_GROUP:
+                return [ep]
+            return []
+
+        result = discover_extension_prompt_fragments(entry_points_factory=factory)
+        assert result == []
+
+    def test_discover_multiple_fragments(self) -> None:
+        """Multiple prompt fragments from different extensions."""
+        ep_a = _mock_ep("ext-a", load_return="Fragment A")
+        ep_b = _mock_ep("ext-b", load_return="Fragment B")
+
+        def factory(group: str) -> list[MagicMock]:
+            if group == PROMPT_PLUGIN_GROUP:
+                return [ep_a, ep_b]
+            return []
+
+        result = discover_extension_prompt_fragments(entry_points_factory=factory)
+        assert "Fragment A" in result
+        assert "Fragment B" in result
+
+
+# ---------------------------------------------------------------------------
+# discover_extension_workflow_dirs
+# ---------------------------------------------------------------------------
+
+
+class TestDiscoverExtensionWorkflowDirs:
+    """Test discovery of workflow directories from extensions."""
+
+    def test_discover_empty(self) -> None:
+        """No workflow entry_points → empty list."""
+
+        def factory(group: str) -> list[MagicMock]:
+            return []
+
+        result = discover_extension_workflow_dirs(entry_points_factory=factory)
+        assert result == []
+
+    def test_discover_valid_path(self, tmp_path: Path) -> None:
+        """A Path entry_point pointing to an existing directory is returned."""
+        workflows_dir = tmp_path / "workflows"
+        workflows_dir.mkdir()
+
+        ep = _mock_ep("my-ext", load_return=workflows_dir)
+
+        def factory(group: str) -> list[MagicMock]:
+            if group == WORKFLOW_PLUGIN_GROUP:
+                return [ep]
+            return []
+
+        result = discover_extension_workflow_dirs(entry_points_factory=factory)
+        assert result == [workflows_dir]
+
+    def test_discover_skips_nonexistent_dir(self, tmp_path: Path) -> None:
+        """A Path pointing to a non-directory is skipped."""
+        missing = tmp_path / "missing"
+        ep = _mock_ep("broken", load_return=missing)
+
+        def factory(group: str) -> list[MagicMock]:
+            if group == WORKFLOW_PLUGIN_GROUP:
+                return [ep]
+            return []
+
+        result = discover_extension_workflow_dirs(entry_points_factory=factory)
+        assert result == []
+
+    def test_discover_skips_non_path(self) -> None:
+        """An entry_point resolving to a non-Path is skipped."""
+        ep = _mock_ep("bad", load_return="not/a/path")
+
+        def factory(group: str) -> list[MagicMock]:
+            if group == WORKFLOW_PLUGIN_GROUP:
+                return [ep]
+            return []
+
+        result = discover_extension_workflow_dirs(entry_points_factory=factory)
+        assert result == []
+
+    def test_discover_handles_load_error(self) -> None:
+        """Broken entry_points are skipped."""
+        ep = _mock_ep("crash", load_side_effect=ImportError("fail"))
+
+        def factory(group: str) -> list[MagicMock]:
+            if group == WORKFLOW_PLUGIN_GROUP:
+                return [ep]
+            return []
+
+        result = discover_extension_workflow_dirs(entry_points_factory=factory)
+        assert result == []
+
+    def test_discover_multiple_dirs(self, tmp_path: Path) -> None:
+        """Multiple workflow directories from different extensions."""
+        dir_a = tmp_path / "a"
+        dir_b = tmp_path / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+
+        ep_a = _mock_ep("ext-a", load_return=dir_a)
+        ep_b = _mock_ep("ext-b", load_return=dir_b)
+
+        def factory(group: str) -> list[MagicMock]:
+            if group == WORKFLOW_PLUGIN_GROUP:
+                return [ep_a, ep_b]
+            return []
+
+        result = discover_extension_workflow_dirs(entry_points_factory=factory)
         assert dir_a in result
         assert dir_b in result

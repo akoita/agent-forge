@@ -173,9 +173,7 @@ class TestSetupLogging:
 
     def test_json_file_output(self) -> None:
         """Verify that log output to a file is valid JSON with required schema."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
             tmp_path = f.name
 
         try:
@@ -207,9 +205,7 @@ class TestSetupLogging:
 
     def test_log_level_filtering(self) -> None:
         """DEBUG messages should be suppressed at INFO level."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
             tmp_path = f.name
 
         try:

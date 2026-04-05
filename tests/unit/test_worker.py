@@ -109,9 +109,7 @@ class TestWorker:
         assert EventType.RUN_STARTED in event_types
         assert EventType.RUN_FAILED in event_types
 
-        failed_event = [
-            e for e in events if e.type == EventType.RUN_FAILED
-        ][0]
+        failed_event = [e for e in events if e.type == EventType.RUN_FAILED][0]
         assert "deliberately broken" in failed_event.data["error"]
 
     @pytest.mark.asyncio

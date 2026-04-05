@@ -41,9 +41,7 @@ def _text_response(text: str) -> dict[str, object]:
     }
 
 
-def _tool_use_response(
-    name: str, args: dict[str, object]
-) -> dict[str, object]:
+def _tool_use_response(name: str, args: dict[str, object]) -> dict[str, object]:
     """Build an Anthropic tool_use response."""
     return {
         "content": [
@@ -87,9 +85,7 @@ class TestAnthropicComplete:
     @respx.mock
     @pytest.mark.asyncio
     async def test_text_completion(self) -> None:
-        respx.post(_MESSAGES_URL).respond(
-            200, json=_text_response("Hello world!")
-        )
+        respx.post(_MESSAGES_URL).respond(200, json=_text_response("Hello world!"))
 
         provider = AnthropicProvider(api_key="test-key")
         config = LLMConfig(model=_MODEL)
@@ -127,9 +123,7 @@ class TestAnthropicComplete:
         messages = [Message(role=Role.USER, content="Read main.py")]
         config = LLMConfig(model=_MODEL)
 
-        resp = await provider.complete(
-            messages, tools=tools, config=config
-        )
+        resp = await provider.complete(messages, tools=tools, config=config)
 
         assert resp.content is None
         assert len(resp.tool_calls) == 1
@@ -141,15 +135,11 @@ class TestAnthropicComplete:
     @respx.mock
     @pytest.mark.asyncio
     async def test_system_message_handled(self) -> None:
-        respx.post(_MESSAGES_URL).respond(
-            200, json=_text_response("I understand.")
-        )
+        respx.post(_MESSAGES_URL).respond(200, json=_text_response("I understand."))
 
         provider = AnthropicProvider(api_key="test-key")
         messages = [
-            Message(
-                role=Role.SYSTEM, content="You are a coding assistant."
-            ),
+            Message(role=Role.SYSTEM, content="You are a coding assistant."),
             Message(role=Role.USER, content="Hello"),
         ]
         config = LLMConfig(model=_MODEL)
@@ -161,9 +151,7 @@ class TestAnthropicComplete:
         request = respx.calls[0].request
         body = json.loads(request.content)
         assert body["system"] == "You are a coding assistant."
-        assert all(
-            m["role"] != "system" for m in body["messages"]
-        )
+        assert all(m["role"] != "system" for m in body["messages"])
 
     @respx.mock
     @pytest.mark.asyncio
@@ -198,9 +186,7 @@ class TestAnthropicComplete:
     @respx.mock
     @pytest.mark.asyncio
     async def test_tools_in_request_body(self) -> None:
-        respx.post(_MESSAGES_URL).respond(
-            200, json=_text_response("ok")
-        )
+        respx.post(_MESSAGES_URL).respond(200, json=_text_response("ok"))
 
         provider = AnthropicProvider(api_key="test-key")
         tools = [
@@ -227,9 +213,7 @@ class TestAnthropicComplete:
     @respx.mock
     @pytest.mark.asyncio
     async def test_assistant_tool_use_serialization(self) -> None:
-        respx.post(_MESSAGES_URL).respond(
-            200, json=_text_response("Done")
-        )
+        respx.post(_MESSAGES_URL).respond(200, json=_text_response("Done"))
 
         provider = AnthropicProvider(api_key="test-key")
         messages = [
@@ -259,20 +243,14 @@ class TestAnthropicComplete:
         body = json.loads(request.content)
         assistant_msg = body["messages"][1]
         assert assistant_msg["role"] == "assistant"
-        tool_use_block = [
-            b
-            for b in assistant_msg["content"]
-            if b["type"] == "tool_use"
-        ]
+        tool_use_block = [b for b in assistant_msg["content"] if b["type"] == "tool_use"]
         assert len(tool_use_block) == 1
         assert tool_use_block[0]["id"] == "toolu_1"
 
     @respx.mock
     @pytest.mark.asyncio
     async def test_anthropic_version_header(self) -> None:
-        respx.post(_MESSAGES_URL).respond(
-            200, json=_text_response("ok")
-        )
+        respx.post(_MESSAGES_URL).respond(200, json=_text_response("ok"))
 
         provider = AnthropicProvider(api_key="test-key")
         messages = [Message(role=Role.USER, content="Hello")]
@@ -330,12 +308,8 @@ class TestAnthropicErrors:
     async def test_rate_limit_retries_then_succeeds(self) -> None:
         route = respx.post(_MESSAGES_URL)
         route.side_effect = [
-            httpx.Response(
-                429, json={"error": {"message": "rate limited"}}
-            ),
-            httpx.Response(
-                429, json={"error": {"message": "rate limited"}}
-            ),
+            httpx.Response(429, json={"error": {"message": "rate limited"}}),
+            httpx.Response(429, json={"error": {"message": "rate limited"}}),
             httpx.Response(200, json=_text_response("Success!")),
         ]
 
@@ -350,9 +324,7 @@ class TestAnthropicErrors:
     @respx.mock
     @pytest.mark.asyncio
     async def test_timeout_error(self) -> None:
-        respx.post(_MESSAGES_URL).mock(
-            side_effect=httpx.ReadTimeout("timeout")
-        )
+        respx.post(_MESSAGES_URL).mock(side_effect=httpx.ReadTimeout("timeout"))
 
         provider = AnthropicProvider(api_key="test-key")
         messages = [Message(role=Role.USER, content="Hello")]

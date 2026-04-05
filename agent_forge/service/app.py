@@ -63,7 +63,7 @@ _PROFILE_ALIASES: dict[str, str] = {
 _REPORT_RECOVERY_PROMPT = (
     "The audit analysis is complete but you did not write the required report file. "
     "You MUST now write a valid JSON report to .agent-forge/report.json using the "
-    "write_file tool. The report must use schema_version \"proof-of-audit-report-v1\" "
+    'write_file tool. The report must use schema_version "proof-of-audit-report-v1" '
     "and include the fields: run_id, summary, confidence, findings (array), and stats "
     "(object with finding_count, max_severity, severity_breakdown with critical/high/"
     "medium/low counts). If you found no issues, use an empty findings array and "
@@ -136,9 +136,7 @@ class HostedRunService:
         plugin_profile_dirs = list(
             (Path(__file__).resolve().parents[2] / "plugins").glob("*/profiles")
         )
-        self._profile_registry = load_profiles(
-            plugin_profile_dirs if plugin_profile_dirs else None
-        )
+        self._profile_registry = load_profiles(plugin_profile_dirs if plugin_profile_dirs else None)
         # Validate and resolve persona if set
         if self._persona_id is not None:
             if self._persona_id not in self._profile_registry:
@@ -672,8 +670,7 @@ class HostedRunService:
                     error=RunError(
                         code="unsupported_profile",
                         message=(
-                            f"unsupported profile: {request.profile.id}. "
-                            f"Available: {available}"
+                            f"unsupported profile: {request.profile.id}. Available: {available}"
                         ),
                         retryable=False,
                     )
@@ -764,7 +761,9 @@ class HostedRunService:
 
         blob = storage.Client().bucket(bucket_name).get_blob(object_name)
         if blob is None or blob.size is None:
-            self._raise_source_fetch_failed(f"GCS object not found: gs://{bucket_name}/{object_name}")
+            self._raise_source_fetch_failed(
+                f"GCS object not found: gs://{bucket_name}/{object_name}"
+            )
         return int(blob.size)
 
     def _download_gcs_uri(self, parsed: ParseResult, download_root: Path) -> Path:
@@ -785,7 +784,9 @@ class HostedRunService:
         try:
             blob.download_to_filename(str(destination))
         except google_exceptions.NotFound:
-            self._raise_source_fetch_failed(f"GCS object not found: gs://{bucket_name}/{object_name}")
+            self._raise_source_fetch_failed(
+                f"GCS object not found: gs://{bucket_name}/{object_name}"
+            )
         except google_exceptions.GoogleAPIError as exc:
             self._raise_source_fetch_failed(
                 f"failed to download GCS source: gs://{bucket_name}/{object_name} ({exc})"
@@ -912,10 +913,16 @@ class HostedRunService:
 
             # Resolve agent profile for this request
             request_profile_id = _PROFILE_ALIASES.get(
-                record.request.profile.id, record.request.profile.id,
+                record.request.profile.id,
+                record.request.profile.id,
             )
             resolved_profile = self._profile_registry.get(request_profile_id)
             prompt_scope = resolved_profile.prompt_scope if resolved_profile else None
+
+            # Discover extension prompt fragments
+            from agent_forge.extensions.discovery import discover_extension_prompt_fragments
+
+            extension_prompts = discover_extension_prompt_fragments() or None
 
             # Determine LLM provider — profile can override service default
             provider_name = self._config.agent.default_provider
@@ -963,6 +970,7 @@ class HostedRunService:
                 sandbox_image=sandbox_config.image,
                 network_enabled=sandbox_config.network_enabled,
                 prompt_scope=prompt_scope,
+                extension_prompts=extension_prompts,
             )
             agent_config = AgentConfig(
                 model=model_name,
@@ -1011,7 +1019,11 @@ class HostedRunService:
                     # Carry forward conversation history so the model has context
                     recovery_run.messages = list(agent_run.messages)
                     await react_loop(
-                        recovery_run, llm, tools, sandbox, event_bus=self._event_bus,
+                        recovery_run,
+                        llm,
+                        tools,
+                        sandbox,
+                        event_bus=self._event_bus,
                     )
 
                 # Post-run validation: existence + JSON + schema
@@ -1204,12 +1216,8 @@ def create_app(  # noqa: C901
             sandbox_image=resolved_config.sandbox.image,
             instance_id=service._instance_id,
             persona=service._persona_id,
-            capabilities=(
-                resolved_profile.capabilities if resolved_profile else []
-            ),
-            llm_provider=(
-                resolved_profile.llm_provider if resolved_profile else None
-            ),
+            capabilities=(resolved_profile.capabilities if resolved_profile else []),
+            llm_provider=(resolved_profile.llm_provider if resolved_profile else None),
         )
 
     @app.post("/v1/runs", response_model=RunStatus, status_code=202)

@@ -67,10 +67,15 @@ async def react_loop(
     )
     tool_definitions = tools.list_definitions()
 
-    await _emit(event_bus, EventType.RUN_STARTED, run.id, {
-        "task": run.task,
-        "model": run.config.model,
-    })
+    await _emit(
+        event_bus,
+        EventType.RUN_STARTED,
+        run.id,
+        {
+            "task": run.task,
+            "model": run.config.model,
+        },
+    )
 
     try:
         while run.iterations < run.config.max_iterations:
@@ -81,9 +86,14 @@ async def react_loop(
                 iteration=run.iterations,
                 max_iterations=run.config.max_iterations,
             )
-            await _emit(event_bus, EventType.ITERATION_STARTED, run.id, {
-                "iteration": run.iterations,
-            })
+            await _emit(
+                event_bus,
+                EventType.ITERATION_STARTED,
+                run.id,
+                {
+                    "iteration": run.iterations,
+                },
+            )
 
             # 1. REASON — ask the LLM what to do next
             response = await llm.complete(
@@ -94,12 +104,17 @@ async def react_loop(
             run.total_tokens = run.total_tokens + response.usage
             tracker.record(response.usage, response.model)
 
-            await _emit(event_bus, EventType.TOKEN_USAGE, run.id, {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-                "model": response.model,
-            })
+            await _emit(
+                event_bus,
+                EventType.TOKEN_USAGE,
+                run.id,
+                {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                    "model": response.model,
+                },
+            )
 
             # 2. CHECK BUDGET
             if run.total_tokens.total_tokens > run.config.max_tokens_per_run:
@@ -129,12 +144,21 @@ async def react_loop(
 
             for tool_call in response.tool_calls:
                 await _execute_tool_call(
-                    run, tools, sandbox, tool_call, event_bus=event_bus,
+                    run,
+                    tools,
+                    sandbox,
+                    tool_call,
+                    event_bus=event_bus,
                 )
 
-            await _emit(event_bus, EventType.ITERATION_COMPLETED, run.id, {
-                "iteration": run.iterations,
-            })
+            await _emit(
+                event_bus,
+                EventType.ITERATION_COMPLETED,
+                run.id,
+                {
+                    "iteration": run.iterations,
+                },
+            )
 
         else:
             # Loop exhausted without breaking → max iterations
@@ -149,17 +173,27 @@ async def react_loop(
         logger.exception("unrecoverable_error", exc_info=exc)
         transition(run, RunState.FAILED)
         run.error = str(exc)
-        await _emit(event_bus, EventType.RUN_FAILED, run.id, {
-            "error": str(exc),
-        })
+        await _emit(
+            event_bus,
+            EventType.RUN_FAILED,
+            run.id,
+            {
+                "error": str(exc),
+            },
+        )
 
     run.completed_at = datetime.now(UTC)
 
     if run.state == RunState.COMPLETED:
-        await _emit(event_bus, EventType.RUN_COMPLETED, run.id, {
-            "iterations": run.iterations,
-            "total_tokens": run.total_tokens.total_tokens,
-        })
+        await _emit(
+            event_bus,
+            EventType.RUN_COMPLETED,
+            run.id,
+            {
+                "iterations": run.iterations,
+                "total_tokens": run.total_tokens.total_tokens,
+            },
+        )
 
     print_run_summary(run, tracker)
     save_summary(run, tracker)
@@ -187,11 +221,16 @@ async def _execute_tool_call(
 
     assert isinstance(tool_call, ToolCall)  # noqa: S101
 
-    await _emit(event_bus, EventType.TOOL_CALLED, run.id, {
-        "tool_name": tool_call.name,
-        "arguments": dict(tool_call.arguments),
-        "iteration": run.iterations,
-    })
+    await _emit(
+        event_bus,
+        EventType.TOOL_CALLED,
+        run.id,
+        {
+            "tool_name": tool_call.name,
+            "arguments": dict(tool_call.arguments),
+            "iteration": run.iterations,
+        },
+    )
 
     start_time = datetime.now(UTC)
 
@@ -223,11 +262,16 @@ async def _execute_tool_call(
                 duration_ms=0,
             )
         )
-        await _emit(event_bus, EventType.TOOL_COMPLETED, run.id, {
-            "tool_name": tool_call.name,
-            "error": error_result.error,
-            "duration_ms": 0,
-        })
+        await _emit(
+            event_bus,
+            EventType.TOOL_COMPLETED,
+            run.id,
+            {
+                "tool_name": tool_call.name,
+                "error": error_result.error,
+                "duration_ms": 0,
+            },
+        )
         return
 
     # Execute with retry on transient sandbox failures (spec § 7.2)
@@ -258,11 +302,16 @@ async def _execute_tool_call(
         )
     )
 
-    await _emit(event_bus, EventType.TOOL_COMPLETED, run.id, {
-        "tool_name": tool_call.name,
-        "duration_ms": duration_ms,
-        "has_error": result.error is not None,
-    })
+    await _emit(
+        event_bus,
+        EventType.TOOL_COMPLETED,
+        run.id,
+        {
+            "tool_name": tool_call.name,
+            "duration_ms": duration_ms,
+            "has_error": result.error is not None,
+        },
+    )
 
 
 async def _execute_with_retry(
@@ -290,7 +339,8 @@ async def _execute_with_retry(
                     logger.info("sandbox_restarted", task_id=run.id)
                 except Exception:
                     logger.exception(
-                        "sandbox_restart_failed", task_id=run.id,
+                        "sandbox_restart_failed",
+                        task_id=run.id,
                     )
                     return ToolResult(
                         output="",
@@ -326,7 +376,9 @@ async def _execute_with_retry(
 
     # Should not reach here, but satisfy type checker
     return ToolResult(  # pragma: no cover
-        output="", error="Unexpected retry exhaustion", exit_code=1,
+        output="",
+        error="Unexpected retry exhaustion",
+        exit_code=1,
     )
 
 
@@ -338,9 +390,11 @@ async def _emit(
 ) -> None:
     """Publish an event if an event bus is available."""
     if bus is not None:
-        await bus.publish(Event(
-            type=event_type,
-            run_id=run_id,
-            timestamp=datetime.now(UTC),
-            data=data,
-        ))
+        await bus.publish(
+            Event(
+                type=event_type,
+                run_id=run_id,
+                timestamp=datetime.now(UTC),
+                data=data,
+            )
+        )

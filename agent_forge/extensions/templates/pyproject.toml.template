@@ -25,6 +25,12 @@ $extension_name = "$package_name:extension_info"
 [project.entry-points."agent_forge.profiles"]
 $extension_name = "$package_name:PROFILES_DIR"
 
+[project.entry-points."agent_forge.prompts"]
+$extension_name = "$package_name:PROMPTS_DIR"
+
+[project.entry-points."agent_forge.workflows"]
+$extension_name = "$package_name:WORKFLOWS_DIR"
+
 [project.entry-points."agent_forge.tools"]
 # Register tools here, e.g.:
 # ${package_name}_sample = "$package_name.tools.sample_tool:${class_prefix}SampleTool"
@@ -34,3 +40,5 @@ packages = ["$package_name"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "$package_name/profiles" = "$package_name/profiles"
+"$package_name/prompts" = "$package_name/prompts"
+"$package_name/workflows" = "$package_name/workflows"
