@@ -64,6 +64,7 @@ class TestRunCommand:
             cfg: object,
             provider_name: str,
             api_key: str,
+            **kwargs: object,
         ) -> AgentRun:
             run = AgentRun(task=task, repo_path=repo, config=AgentConfig())
             run.state = RunState.COMPLETED

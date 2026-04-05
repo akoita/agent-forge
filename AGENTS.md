@@ -109,6 +109,77 @@ Document any new env var in `docs/spec.md § Configuration` and the project's `a
 
 ---
 
+## 🚨 Domain-Agnostic Core — Extension-First Architecture
+
+Agent Forge is a **generic coding agent framework** — comparable to Claude Code, Codex, or Antigravity.
+It must remain **domain-agnostic**. Any feature tied to a specific use case (smart contract auditing,
+web security scanning, code migration, etc.) belongs in the **extension layer**, never in the core packages.
+
+### The Boundary
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  CORE  (agent_forge/*)                                       │
+│  Generic, domain-agnostic capabilities:                      │
+│  LLM adapters, ReAct loop, sandbox, tools, profiles,         │
+│  orchestration, observability, CLI, hosted service shell      │
+├──────────────────────────────────────────────────────────────┤
+│  EXTENSION LAYER  (plugins/, skills/, workflows/)            │
+│  Domain-specific capabilities loaded at runtime:             │
+│  - plugins/proof-of-audit/  → audit profiles, detectors,    │
+│    report schemas, challenge evidence, multi-agent personas  │
+│  - plugins/<other-domain>/  → any future specialization      │
+│  - --profiles-dir, entry_points, skill files, workflows      │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Rules
+
+1. **Core packages must not import or reference domain-specific concepts.**
+   Terms like "reentrancy", "access control", "vulnerability", "finding", "severity",
+   "detector" are audit-domain vocabulary — they do not belong in `agent_forge.*`.
+
+2. **Use generic abstractions in core.** A profile has `prompt_scope` (generic),
+   not `detectors` (audit-specific). A report is a JSON artifact, not a
+   "proof-of-audit report".
+
+3. **Domain features are delivered via extensions:**
+   - **Profiles** → YAML files in a plugin's `profiles/` directory, loaded with `--profiles-dir`
+   - **Tools** → Python entry points registered under `agent_forge.tools`
+   - **Prompts** → Injected through the generic `prompt_scope` field on `AgentProfile`
+   - **Workflows** → Markdown files in `.agent/workflows/`
+
+4. **Test accordingly.** Core tests must not depend on any domain-specific profile
+   or plugin existing. Domain tests live alongside the plugin.
+
+### Example: Adding a New Domain
+
+To add a "web-security-scanner" domain, create `plugins/web-security-scanner/` with its own
+profiles, tools, and workflows. **Do not modify any file under `agent_forge/`** to add
+web-security concepts.
+
+### Distribution Model
+
+Extensions can be **separate installable packages** — they do not need to live in
+this monorepo. A user installs the core agent and then adds domain capabilities:
+
+```bash
+pip install agent-forge                        # core framework
+pip install agent-forge-proof-of-audit         # audit profiles, tools, report schemas
+pip install agent-forge-web-security           # hypothetical web-security extension
+```
+
+The `plugins/` directory in this repo is a **development convenience** for first-party
+extensions. At runtime, extensions are discovered through:
+
+- **`entry_points`** — Python's standard plugin mechanism (already used for tools
+  via the `agent_forge.tools` group in `tools/plugins.py`).
+  Future groups: `agent_forge.profiles`, `agent_forge.prompts`.
+- **`--profiles-dir`** — CLI flag pointing to a directory of profile YAMLs.
+- **Config** — `agent-forge.toml` can declare extension paths.
+
+---
+
 ## 🧪 Testing Standards
 
 ### File Naming

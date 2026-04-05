@@ -1,0 +1,8 @@
+id: reentrancy-only
+name: Reentrancy Specialist
+description: "Focuses exclusively on reentrancy vulnerabilities in smart contracts."
+prompt_scope: |
+  Focus exclusively on reentrancy vulnerabilities during this audit.
+  Ignore other vulnerability classes unless they directly enable a
+  reentrancy attack vector. Look for cross-function reentrancy,
+  read-only reentrancy, and cross-contract reentrancy patterns.

@@ -1,0 +1,8 @@
+id: full-spectrum
+name: Full Spectrum Audit
+description: "Comprehensive smart contract audit covering all vulnerability classes."
+prompt_scope: |
+  Perform a comprehensive smart contract security audit. Analyze for
+  all vulnerability classes including reentrancy, access control,
+  integer overflow/underflow, front-running, oracle manipulation,
+  flash loan attacks, and logic errors. Prioritize findings by severity.

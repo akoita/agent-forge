@@ -34,6 +34,7 @@ class AgentConfig:
     provider: str = "gemini"  # "gemini" | "openai" | "anthropic"
     temperature: float = 0.0
     system_prompt: str | None = None  # Override default system prompt
+    profile_id: str | None = None  # Active agent profile for this run
 
 
 @dataclass

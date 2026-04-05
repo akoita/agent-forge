@@ -1,0 +1,10 @@
+id: llm-deep-gemini
+name: LLM Deep Analysis (Gemini)
+description: "Full-spectrum audit with Gemini provider for enhanced reasoning."
+prompt_scope: |
+  Perform a comprehensive smart contract security audit with enhanced
+  reasoning depth. Use extended analysis to identify complex multi-step
+  attack vectors and subtle logic flaws.
+llm_provider: gemini
+llm_model: gemini-2.5-pro
+max_iterations: 50
