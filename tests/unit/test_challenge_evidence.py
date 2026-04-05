@@ -189,9 +189,7 @@ class TestCompareReports:
         )
 
         original = _make_report([{**shared_finding, "severity": "low"}])
-        challenger = _make_report(
-            [{**shared_finding, "severity": "high"}, new_finding]
-        )
+        challenger = _make_report([{**shared_finding, "severity": "high"}, new_finding])
 
         evidence = compare_reports(original, challenger)
 
@@ -332,12 +330,8 @@ class TestCLI:
         original = _make_report([])
         challenger = _make_report([_make_finding()])
 
-        (tmp_path / "original.json").write_text(
-            json.dumps(original), encoding="utf-8"
-        )
-        (tmp_path / "challenger.json").write_text(
-            json.dumps(challenger), encoding="utf-8"
-        )
+        (tmp_path / "original.json").write_text(json.dumps(original), encoding="utf-8")
+        (tmp_path / "challenger.json").write_text(json.dumps(challenger), encoding="utf-8")
         output = tmp_path / "evidence.json"
 
         runner = CliRunner()
@@ -345,9 +339,12 @@ class TestCLI:
             poa_cli,
             [
                 "challenge-evidence",
-                "--original", str(tmp_path / "original.json"),
-                "--challenger", str(tmp_path / "challenger.json"),
-                "--output", str(output),
+                "--original",
+                str(tmp_path / "original.json"),
+                "--challenger",
+                str(tmp_path / "challenger.json"),
+                "--output",
+                str(output),
             ],
         )
 
@@ -362,12 +359,8 @@ class TestCLI:
         finding = _make_finding()
         report = _make_report([finding])
 
-        (tmp_path / "original.json").write_text(
-            json.dumps(report), encoding="utf-8"
-        )
-        (tmp_path / "challenger.json").write_text(
-            json.dumps(report), encoding="utf-8"
-        )
+        (tmp_path / "original.json").write_text(json.dumps(report), encoding="utf-8")
+        (tmp_path / "challenger.json").write_text(json.dumps(report), encoding="utf-8")
         output = tmp_path / "evidence.json"
 
         runner = CliRunner()
@@ -375,9 +368,12 @@ class TestCLI:
             poa_cli,
             [
                 "challenge-evidence",
-                "--original", str(tmp_path / "original.json"),
-                "--challenger", str(tmp_path / "challenger.json"),
-                "--output", str(output),
+                "--original",
+                str(tmp_path / "original.json"),
+                "--challenger",
+                str(tmp_path / "challenger.json"),
+                "--output",
+                str(output),
             ],
         )
 
@@ -396,9 +392,12 @@ class TestCLI:
             poa_cli,
             [
                 "challenge-evidence",
-                "--original", str(tmp_path / "original.json"),
-                "--challenger", str(tmp_path / "challenger.json"),
-                "--output", str(output),
+                "--original",
+                str(tmp_path / "original.json"),
+                "--challenger",
+                str(tmp_path / "challenger.json"),
+                "--output",
+                str(output),
             ],
         )
 
@@ -410,9 +409,12 @@ class TestCLI:
             poa_cli,
             [
                 "challenge-evidence",
-                "--original", str(tmp_path / "nonexistent.json"),
-                "--challenger", str(tmp_path / "nonexistent2.json"),
-                "--output", str(tmp_path / "evidence.json"),
+                "--original",
+                str(tmp_path / "nonexistent.json"),
+                "--challenger",
+                str(tmp_path / "nonexistent2.json"),
+                "--output",
+                str(tmp_path / "evidence.json"),
             ],
         )
 

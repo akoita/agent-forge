@@ -120,8 +120,7 @@ class AnthropicProvider(LLMProvider):
                         yield parsed
         except httpx.TimeoutException as exc:
             raise LLMTimeoutError(
-                f"Anthropic streaming request timed out after "
-                f"{cfg.timeout_seconds}s"
+                f"Anthropic streaming request timed out after {cfg.timeout_seconds}s"
             ) from exc
 
     # ------------------------------------------------------------------
@@ -176,37 +175,45 @@ class AnthropicProvider(LLMProvider):
             if msg.role == Role.SYSTEM:
                 system_text = msg.content
             elif msg.role == Role.USER:
-                api_messages.append({
-                    "role": "user",
-                    "content": msg.content,
-                })
+                api_messages.append(
+                    {
+                        "role": "user",
+                        "content": msg.content,
+                    }
+                )
             elif msg.role == Role.ASSISTANT:
                 content: list[dict[str, Any]] = []
                 if msg.content:
                     content.append({"type": "text", "text": msg.content})
                 if msg.tool_calls:
                     for tc in msg.tool_calls:
-                        content.append({
-                            "type": "tool_use",
-                            "id": tc.id,
-                            "name": tc.name,
-                            "input": tc.arguments,
-                        })
-                api_messages.append({
-                    "role": "assistant",
-                    "content": content or msg.content,
-                })
+                        content.append(
+                            {
+                                "type": "tool_use",
+                                "id": tc.id,
+                                "name": tc.name,
+                                "input": tc.arguments,
+                            }
+                        )
+                api_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content or msg.content,
+                    }
+                )
             elif msg.role == Role.TOOL:
-                api_messages.append({
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": msg.tool_call_id or "",
-                            "content": msg.content,
-                        }
-                    ],
-                })
+                api_messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": msg.tool_call_id or "",
+                                "content": msg.content,
+                            }
+                        ],
+                    }
+                )
 
         return system_text, api_messages
 
@@ -214,9 +221,7 @@ class AnthropicProvider(LLMProvider):
     # Response Parsing
     # ------------------------------------------------------------------
 
-    def _parse_response(
-        self, data: dict[str, Any], model: str
-    ) -> LLMResponse:
+    def _parse_response(self, data: dict[str, Any], model: str) -> LLMResponse:
         """Parse an Anthropic Messages API response."""
         content_blocks = data.get("content", [])
         stop_reason = data.get("stop_reason", "end_turn")
@@ -256,9 +261,7 @@ class AnthropicProvider(LLMProvider):
             finish_reason=mapped_reason,
         )
 
-    def _parse_stream_event(
-        self, event: dict[str, Any], model: str
-    ) -> LLMResponse | None:
+    def _parse_stream_event(self, event: dict[str, Any], model: str) -> LLMResponse | None:
         """Parse a single SSE event from a streaming response."""
         event_type = event.get("type")
 
@@ -288,9 +291,7 @@ class AnthropicProvider(LLMProvider):
         return None
 
     @staticmethod
-    def _map_finish_reason(
-        anthropic_reason: str, tool_calls: list[ToolCall]
-    ) -> str:
+    def _map_finish_reason(anthropic_reason: str, tool_calls: list[ToolCall]) -> str:
         """Map Anthropic stop reason to our standard reasons."""
         if tool_calls:
             return "tool_calls"
@@ -306,14 +307,10 @@ class AnthropicProvider(LLMProvider):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _compute_delay(
-        attempt: int, resp: httpx.Response | None = None
-    ) -> float:
+    def _compute_delay(attempt: int, resp: httpx.Response | None = None) -> float:
         """Compute the retry delay, respecting Retry-After if present."""
         if resp is not None:
-            retry_after = resp.headers.get(
-                "Retry-After"
-            ) or resp.headers.get("retry-after")
+            retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
             if retry_after:
                 try:
                     parsed: float = float(retry_after)
@@ -356,12 +353,10 @@ class AnthropicProvider(LLMProvider):
                         continue
                     if resp.status_code == 429:
                         raise LLMRateLimitError(
-                            f"Anthropic rate limit exceeded after "
-                            f"{_MAX_RETRIES} retries"
+                            f"Anthropic rate limit exceeded after {_MAX_RETRIES} retries"
                         )
                     raise LLMResponseError(
-                        f"Anthropic API returned {resp.status_code} after "
-                        f"{_MAX_RETRIES} retries"
+                        f"Anthropic API returned {resp.status_code} after {_MAX_RETRIES} retries"
                     )
 
                 self._check_status(resp)
@@ -377,9 +372,7 @@ class AnthropicProvider(LLMProvider):
                         )
                         await asyncio.sleep(_BACKOFF_BASE)
                         continue
-                    raise LLMResponseError(
-                        "Malformed JSON response from Anthropic API"
-                    ) from exc
+                    raise LLMResponseError("Malformed JSON response from Anthropic API") from exc
 
             except httpx.TimeoutException as exc:
                 last_exc = exc
@@ -413,9 +406,7 @@ class AnthropicProvider(LLMProvider):
         if status_code >= 400:
             try:
                 body = resp.json()
-                detail = body.get("error", {}).get(
-                    "message", resp.text[:500]
-                )
+                detail = body.get("error", {}).get("message", resp.text[:500])
             except Exception:  # noqa: BLE001
                 detail = resp.text[:500]
             logger.error(
@@ -423,6 +414,4 @@ class AnthropicProvider(LLMProvider):
                 status_code=status_code,
                 detail=detail,
             )
-            raise LLMResponseError(
-                f"Anthropic API error (HTTP {status_code}): {detail}"
-            )
+            raise LLMResponseError(f"Anthropic API error (HTTP {status_code}): {detail}")

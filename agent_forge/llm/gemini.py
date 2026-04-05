@@ -387,6 +387,4 @@ class GeminiProvider(LLMProvider):
             except Exception:  # noqa: BLE001
                 detail = resp.text[:500]
             logger.error("gemini_api_error", status_code=status_code, detail=detail)
-            raise LLMResponseError(
-                f"Gemini API error (HTTP {status_code}): {detail}"
-            )
+            raise LLMResponseError(f"Gemini API error (HTTP {status_code}): {detail}")

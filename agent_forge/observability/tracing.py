@@ -24,14 +24,10 @@ class TraceContext:
     iteration: int | None = None
 
 
-_trace_ctx_var: ContextVar[TraceContext | None] = ContextVar(
-    "agent_forge_trace_ctx", default=None
-)
+_trace_ctx_var: ContextVar[TraceContext | None] = ContextVar("agent_forge_trace_ctx", default=None)
 
 
-def set_trace_context(
-    run_id: str, *, iteration: int | None = None
-) -> TraceContext:
+def set_trace_context(run_id: str, *, iteration: int | None = None) -> TraceContext:
     """Set the current trace context (thread/task-local).
 
     Returns the newly created ``TraceContext``.

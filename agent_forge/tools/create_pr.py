@@ -42,8 +42,7 @@ class CreatePRTool(Tool):
                 "base": {
                     "type": "string",
                     "description": (
-                        "Optional base branch name "
-                        "(defaults to repository default branch)"
+                        "Optional base branch name (defaults to repository default branch)"
                     ),
                 },
                 "head": {

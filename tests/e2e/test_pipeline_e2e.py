@@ -119,9 +119,7 @@ def _run_with_recorded_responses(
     Uses respx to intercept all POST requests to the Gemini
     ``generateContent`` endpoint, returning *responses* in order.
     """
-    side_effects = [
-        httpx.Response(200, json=r) for r in responses
-    ]
+    side_effects = [httpx.Response(200, json=r) for r in responses]
 
     with respx.mock(assert_all_called=False) as mock_router:
         # Route on the scoped router — NOT global respx
@@ -131,16 +129,17 @@ def _run_with_recorded_responses(
 
         args = [
             "run",
-            "--task", task,
-            "--repo", str(workspace),
-            "--max-iterations", "3",
+            "--task",
+            task,
+            "--repo",
+            str(workspace),
+            "--max-iterations",
+            "3",
         ]
         if extra_args:
             args.extend(extra_args)
 
-        with patch.dict(
-            "os.environ", {"GEMINI_API_KEY": "test-key-for-vcr"}
-        ):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key-for-vcr"}):
             return runner.invoke(main, args)
 
 
@@ -153,7 +152,9 @@ class TestPipelineDirect:
     """E2E: full pipeline in direct mode (no --queue)."""
 
     def test_fix_health_endpoint(
-        self, runner: CliRunner, workspace: Path,
+        self,
+        runner: CliRunner,
+        workspace: Path,
     ) -> None:
         """Agent reads app.py, sees the 500 bug, and produces a fix."""
         responses = _gemini_tool_then_stop(
@@ -166,7 +167,8 @@ class TestPipelineDirect:
         )
 
         result = _run_with_recorded_responses(
-            runner, workspace,
+            runner,
+            workspace,
             "Fix the health endpoint bug in app.py — it should return 200",
             responses,
         )
@@ -175,7 +177,9 @@ class TestPipelineDirect:
         assert result.exit_code in (0, 1), f"Crash: {result.output}"
 
     def test_add_type_hints(
-        self, runner: CliRunner, workspace: Path,
+        self,
+        runner: CliRunner,
+        workspace: Path,
     ) -> None:
         """Agent reads utils.py and reports about missing type hints."""
         responses = _gemini_tool_then_stop(
@@ -188,7 +192,8 @@ class TestPipelineDirect:
         )
 
         result = _run_with_recorded_responses(
-            runner, workspace,
+            runner,
+            workspace,
             "Add type hints to all functions in utils.py",
             responses,
         )
@@ -196,7 +201,9 @@ class TestPipelineDirect:
         assert result.exit_code in (0, 1), f"Crash: {result.output}"
 
     def test_add_input_validation(
-        self, runner: CliRunner, workspace: Path,
+        self,
+        runner: CliRunner,
+        workspace: Path,
     ) -> None:
         """Agent reads the greet endpoint and considers validation."""
         responses = _gemini_tool_then_stop(
@@ -209,7 +216,8 @@ class TestPipelineDirect:
         )
 
         result = _run_with_recorded_responses(
-            runner, workspace,
+            runner,
+            workspace,
             "Add input validation to the /greet/<name> endpoint in app.py",
             responses,
         )
@@ -226,13 +234,16 @@ class TestPipelineMemoryQueue:
     """E2E: full pipeline through memory queue."""
 
     def test_queue_mode_completes(
-        self, runner: CliRunner, workspace: Path,
+        self,
+        runner: CliRunner,
+        workspace: Path,
     ) -> None:
         """Task enqueued via --queue=memory completes the full pipeline."""
         responses = [_gemini_stop_response("Task done.")]
 
         result = _run_with_recorded_responses(
-            runner, workspace,
+            runner,
+            workspace,
             "List all files in the workspace",
             responses,
             extra_args=["--queue", "memory"],
@@ -241,7 +252,9 @@ class TestPipelineMemoryQueue:
         assert result.exit_code in (0, 1), f"Crash: {result.output}"
 
     def test_queue_mode_with_tool_call(
-        self, runner: CliRunner, workspace: Path,
+        self,
+        runner: CliRunner,
+        workspace: Path,
     ) -> None:
         """Queue mode: agent reads a file then completes."""
         responses = _gemini_tool_then_stop(
@@ -251,7 +264,8 @@ class TestPipelineMemoryQueue:
         )
 
         result = _run_with_recorded_responses(
-            runner, workspace,
+            runner,
+            workspace,
             "Read app.py and summarize it",
             responses,
             extra_args=["--queue", "memory"],
@@ -273,16 +287,16 @@ class TestPipelineRedisQueue:
     """
 
     def test_redis_queue_completes(
-        self, runner: CliRunner, workspace: Path,
+        self,
+        runner: CliRunner,
+        workspace: Path,
     ) -> None:
         """Task via --queue=redis completes (RedisQueue mocked)."""
         from agent_forge.orchestration.queue import InMemoryQueue
 
         responses = [_gemini_stop_response("Redis queue task done.")]
 
-        side_effects = [
-            httpx.Response(200, json=r) for r in responses
-        ]
+        side_effects = [httpx.Response(200, json=r) for r in responses]
 
         with (
             respx.mock(assert_all_called=False) as mock_router,
@@ -299,19 +313,29 @@ class TestPipelineRedisQueue:
                 url__regex=r".*generativelanguage.*generateContent.*",
             ).side_effect = side_effects
 
-            result = runner.invoke(main, [
-                "run",
-                "--task", "List all files",
-                "--repo", str(workspace),
-                "--max-iterations", "3",
-                "--queue", "redis",
-                "--redis-url", "redis://localhost:6379/0",
-            ])
+            result = runner.invoke(
+                main,
+                [
+                    "run",
+                    "--task",
+                    "List all files",
+                    "--repo",
+                    str(workspace),
+                    "--max-iterations",
+                    "3",
+                    "--queue",
+                    "redis",
+                    "--redis-url",
+                    "redis://localhost:6379/0",
+                ],
+            )
 
         assert result.exit_code in (0, 1), f"Crash: {result.output}"
 
     def test_redis_queue_with_tool_call(
-        self, runner: CliRunner, workspace: Path,
+        self,
+        runner: CliRunner,
+        workspace: Path,
     ) -> None:
         """Redis queue mode: agent reads a file then completes."""
         from agent_forge.orchestration.queue import InMemoryQueue
@@ -322,9 +346,7 @@ class TestPipelineRedisQueue:
             final_text="Read app.py via Redis queue mode.",
         )
 
-        side_effects = [
-            httpx.Response(200, json=r) for r in responses
-        ]
+        side_effects = [httpx.Response(200, json=r) for r in responses]
 
         with (
             respx.mock(assert_all_called=False) as mock_router,
@@ -341,15 +363,24 @@ class TestPipelineRedisQueue:
                 url__regex=r".*generativelanguage.*generateContent.*",
             ).side_effect = side_effects
 
-            result = runner.invoke(main, [
-                "run",
-                "--task", "Read app.py and summarize it",
-                "--repo", str(workspace),
-                "--max-iterations", "3",
-                "--queue", "redis",
-                "--redis-url", "redis://localhost:6379/0",
-                "--max-concurrent-runs", "2",
-            ])
+            result = runner.invoke(
+                main,
+                [
+                    "run",
+                    "--task",
+                    "Read app.py and summarize it",
+                    "--repo",
+                    str(workspace),
+                    "--max-iterations",
+                    "3",
+                    "--queue",
+                    "redis",
+                    "--redis-url",
+                    "redis://localhost:6379/0",
+                    "--max-concurrent-runs",
+                    "2",
+                ],
+            )
 
         assert result.exit_code in (0, 1), f"Crash: {result.output}"
 
@@ -463,9 +494,7 @@ class TestParallelAgents:
         assert await queue.get_status("ok-2") == TaskStatus.COMPLETED
 
         # Verify events
-        completed = [
-            e for e in events if e.type == EventType.RUN_COMPLETED
-        ]
+        completed = [e for e in events if e.type == EventType.RUN_COMPLETED]
         failed = [e for e in events if e.type == EventType.RUN_FAILED]
         assert len(completed) == 2
         assert len(failed) == 1

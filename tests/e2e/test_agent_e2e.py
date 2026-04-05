@@ -309,7 +309,11 @@ class TestAgentPersistence:
 
     @pytest.mark.asyncio
     async def test_agent_persistence_round_trip(
-        self, llm: GeminiProvider, tools: ToolRegistry, sandbox: DockerSandbox, workspace: Path,
+        self,
+        llm: GeminiProvider,
+        tools: ToolRegistry,
+        sandbox: DockerSandbox,
+        workspace: Path,
     ) -> None:
         """save_run + load_run produces identical state."""
         import tempfile

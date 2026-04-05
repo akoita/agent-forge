@@ -53,9 +53,7 @@ class EventBus:
     """
 
     def __init__(self) -> None:
-        self._handlers: dict[EventType, list[tuple[str, EventHandler]]] = (
-            defaultdict(list)
-        )
+        self._handlers: dict[EventType, list[tuple[str, EventHandler]]] = defaultdict(list)
 
     async def publish(self, event: Event) -> None:
         """Broadcast *event* to all subscribed handlers.

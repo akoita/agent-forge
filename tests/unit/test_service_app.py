@@ -75,7 +75,8 @@ def _write_clients_file(
     allow_local_path: bool = False,
     include_secondary_client: bool = False,
 ) -> None:
-    secondary = """
+    secondary = (
+        """
 [clients.other-client]
 api_key_env = "OTHER_SERVICE_API_KEY"
 allowed_profiles = ["proof-of-audit-solidity-v1"]
@@ -84,7 +85,10 @@ allowed_source_kinds = ["local_path"]
 max_active_runs = 1
 max_runs_per_day = 5
 allow_local_path = true
-""" if include_secondary_client else ""
+"""
+        if include_secondary_client
+        else ""
+    )
     path.write_text(
         f"""
 [clients.proof-of-audit-auditor]
@@ -236,7 +240,9 @@ async def test_service_materializes_gcs_zip_sources(
     monkeypatch.setattr(service, "_download_gcs_uri", fake_gcs_download)
     service._worker._task_runner = fake_runner
 
-    payload = _request_payload("gs://proof-of-audit-testnet-testnet-source-bundles/source-bundles/bundle.zip")
+    payload = _request_payload(
+        "gs://proof-of-audit-testnet-testnet-source-bundles/source-bundles/bundle.zip"
+    )
     payload["source"] = {
         "kind": "archive_uri",
         "uri": "gs://proof-of-audit-testnet-testnet-source-bundles/source-bundles/bundle.zip",

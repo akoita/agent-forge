@@ -44,9 +44,7 @@ class TestEventBus:
         await bus.subscribe(EventType.RUN_COMPLETED, handler_a)
         await bus.subscribe(EventType.RUN_COMPLETED, handler_b)
 
-        await bus.publish(
-            Event(type=EventType.RUN_COMPLETED, run_id="run-1")
-        )
+        await bus.publish(Event(type=EventType.RUN_COMPLETED, run_id="run-1"))
 
         assert calls == ["a", "b"]
 
@@ -61,9 +59,7 @@ class TestEventBus:
         sub_id = await bus.subscribe(EventType.RUN_FAILED, handler)
         await bus.unsubscribe(sub_id)
 
-        await bus.publish(
-            Event(type=EventType.RUN_FAILED, run_id="run-1")
-        )
+        await bus.publish(Event(type=EventType.RUN_FAILED, run_id="run-1"))
 
         assert len(received) == 0
 
@@ -71,9 +67,7 @@ class TestEventBus:
     async def test_publish_no_handlers(self) -> None:
         """Publishing to an event with no subscribers should not raise."""
         bus = EventBus()
-        await bus.publish(
-            Event(type=EventType.TOOL_CALLED, run_id="run-1")
-        )
+        await bus.publish(Event(type=EventType.TOOL_CALLED, run_id="run-1"))
 
     @pytest.mark.asyncio
     async def test_handler_exception_does_not_propagate(self) -> None:
@@ -91,9 +85,7 @@ class TestEventBus:
         await bus.subscribe(EventType.TOKEN_USAGE, bad_handler)
         await bus.subscribe(EventType.TOKEN_USAGE, good_handler)
 
-        await bus.publish(
-            Event(type=EventType.TOKEN_USAGE, run_id="run-1")
-        )
+        await bus.publish(Event(type=EventType.TOKEN_USAGE, run_id="run-1"))
 
         assert calls == ["ok"]
 
@@ -109,9 +101,7 @@ class TestEventBus:
         await bus.subscribe(EventType.ITERATION_STARTED, handler)
 
         # Publish a different event type
-        await bus.publish(
-            Event(type=EventType.ITERATION_COMPLETED, run_id="run-1")
-        )
+        await bus.publish(Event(type=EventType.ITERATION_COMPLETED, run_id="run-1"))
 
         assert len(received) == 0
 

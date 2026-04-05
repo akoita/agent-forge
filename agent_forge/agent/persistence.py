@@ -152,9 +152,7 @@ def load_run(run_id: str, *, base_dir: Path | str | None = None) -> AgentRun:
             )
 
     tokens = meta["total_tokens"]
-    completed_at = (
-        datetime.fromisoformat(meta["completed_at"]) if meta["completed_at"] else None
-    )
+    completed_at = datetime.fromisoformat(meta["completed_at"]) if meta["completed_at"] else None
 
     return AgentRun(
         task=meta["task"],

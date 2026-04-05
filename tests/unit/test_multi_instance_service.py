@@ -51,21 +51,13 @@ class TestWorkspaceIsolation:
 
     def test_service_root_with_instance_id(self, base_service_root: Path) -> None:
         """With instance_id, service_root includes the instance subdirectory."""
-        service = HostedRunService(
-            service_root=base_service_root, instance_id="agent-01"
-        )
+        service = HostedRunService(service_root=base_service_root, instance_id="agent-01")
         assert service._service_root == base_service_root / "agent-01"
 
-    def test_different_instances_get_different_roots(
-        self, base_service_root: Path
-    ) -> None:
+    def test_different_instances_get_different_roots(self, base_service_root: Path) -> None:
         """Two instances with different IDs get separate workspace roots."""
-        svc_a = HostedRunService(
-            service_root=base_service_root, instance_id="agent-01"
-        )
-        svc_b = HostedRunService(
-            service_root=base_service_root, instance_id="agent-02"
-        )
+        svc_a = HostedRunService(service_root=base_service_root, instance_id="agent-01")
+        svc_b = HostedRunService(service_root=base_service_root, instance_id="agent-02")
         assert svc_a._service_root != svc_b._service_root
         assert svc_a._service_root.name == "agent-01"
         assert svc_b._service_root.name == "agent-02"
@@ -95,10 +87,9 @@ class TestPersonaResolution:
             persona="reentrancy-only",
         )
 
-        with patch(
-            "agent_forge.service.app.load_profiles", return_value=fake_registry
-        ), patch(
-            "agent_forge.service.app.load_client_registry", return_value={}
+        with (
+            patch("agent_forge.service.app.load_profiles", return_value=fake_registry),
+            patch("agent_forge.service.app.load_client_registry", return_value={}),
         ):
             await service.start()
 
@@ -116,25 +107,24 @@ class TestPersonaResolution:
             persona="nonexistent-profile",
         )
 
-        with patch(
-            "agent_forge.service.app.load_profiles",
-            return_value={"gemini": AgentProfile(id="gemini", name="Gemini")},
-        ), patch(
-            "agent_forge.service.app.load_client_registry", return_value={}
-        ), pytest.raises(ValueError, match="unknown persona profile"):
+        with (
+            patch(
+                "agent_forge.service.app.load_profiles",
+                return_value={"gemini": AgentProfile(id="gemini", name="Gemini")},
+            ),
+            patch("agent_forge.service.app.load_client_registry", return_value={}),
+            pytest.raises(ValueError, match="unknown persona profile"),
+        ):
             await service.start()
 
     @pytest.mark.asyncio
-    async def test_no_persona_leaves_resolved_none(
-        self, base_service_root: Path
-    ) -> None:
+    async def test_no_persona_leaves_resolved_none(self, base_service_root: Path) -> None:
         """Without persona, _resolved_persona stays None."""
         service = HostedRunService(service_root=base_service_root)
 
-        with patch(
-            "agent_forge.service.app.load_profiles", return_value={}
-        ), patch(
-            "agent_forge.service.app.load_client_registry", return_value={}
+        with (
+            patch("agent_forge.service.app.load_profiles", return_value={}),
+            patch("agent_forge.service.app.load_client_registry", return_value={}),
         ):
             await service.start()
 
@@ -224,9 +214,7 @@ class TestCreateApp:
         service = app.state.service
         assert service._persona_id == "reentrancy-only"
 
-    def test_create_app_without_multi_instance(
-        self, base_service_root: Path
-    ) -> None:
+    def test_create_app_without_multi_instance(self, base_service_root: Path) -> None:
         """create_app works without multi-instance params (backward compat)."""
         app = create_app(service_root=base_service_root)
         service = app.state.service
@@ -277,12 +265,14 @@ class TestAgentProfileCapabilities:
 
     def test_capabilities_from_yaml_data(self) -> None:
         """Capabilities can be set from YAML-like dict data."""
-        profile = AgentProfile.model_validate({
-            "id": "reentrancy-only",
-            "name": "Reentrancy Specialist",
-            "capabilities": ["reentrancy"],
-            "llm_provider": "gemini",
-        })
+        profile = AgentProfile.model_validate(
+            {
+                "id": "reentrancy-only",
+                "name": "Reentrancy Specialist",
+                "capabilities": ["reentrancy"],
+                "llm_provider": "gemini",
+            }
+        )
         assert profile.capabilities == ["reentrancy"]
 
     def test_multiple_capabilities(self) -> None:
