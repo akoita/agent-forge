@@ -66,11 +66,12 @@ def build_system_prompt(
     sandbox_image: str = "agent-forge-sandbox:latest",
     network_enabled: bool = False,
     command_timeout_seconds: int = 300,
+    prompt_scope: str | None = None,
 ) -> str:
     """Render the system prompt with tool descriptions and task."""
     network_rule, network_status = _format_network_rule(network_enabled)
 
-    return _SYSTEM_PROMPT_TEMPLATE.format(
+    prompt = _SYSTEM_PROMPT_TEMPLATE.format(
         tool_descriptions=_format_tool_descriptions(tool_definitions),
         sandbox_backend=sandbox_backend,
         sandbox_image=sandbox_image,
@@ -79,6 +80,11 @@ def build_system_prompt(
         command_timeout_seconds=command_timeout_seconds,
         task_description=task,
     )
+
+    if prompt_scope:
+        prompt += f"\n\n## Profile Scope\n{prompt_scope}"
+
+    return prompt
 
 
 _HOSTED_POA_SYSTEM_PROMPT_TEMPLATE = """\
@@ -139,11 +145,12 @@ def build_hosted_poa_system_prompt(
     sandbox_image: str = "agent-forge-sandbox:latest",
     network_enabled: bool = False,
     command_timeout_seconds: int = 300,
+    prompt_scope: str | None = None,
 ) -> str:
     """Render the hosted Proof-of-Audit system prompt with strict report emission."""
     network_rule, network_status = _format_network_rule(network_enabled)
 
-    return _HOSTED_POA_SYSTEM_PROMPT_TEMPLATE.format(
+    prompt = _HOSTED_POA_SYSTEM_PROMPT_TEMPLATE.format(
         tool_descriptions=_format_tool_descriptions(tool_definitions),
         sandbox_backend=sandbox_backend,
         sandbox_image=sandbox_image,
@@ -152,3 +159,8 @@ def build_hosted_poa_system_prompt(
         command_timeout_seconds=command_timeout_seconds,
         task_description=task,
     )
+
+    if prompt_scope:
+        prompt += f"\n\n## Profile Scope\n{prompt_scope}"
+
+    return prompt

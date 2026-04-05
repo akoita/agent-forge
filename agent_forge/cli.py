@@ -87,6 +87,17 @@ def main() -> None:
     default=None,
     help="Write the machine-readable run result to a JSON file.",
 )
+@click.option(
+    "--profile",
+    default=None,
+    help="Agent profile ID (e.g. gemini, openai, thorough).",
+)
+@click.option(
+    "--profiles-dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Additional directory containing agent profile YAML files.",
+)
 def run(
     task: str,
     repo: str,
@@ -102,8 +113,31 @@ def run(
     max_concurrent_runs: int,
     output_format: str,
     report_file: Path | None,
+    profile: str | None,
+    profiles_dir: Path | None,
 ) -> None:
     """Run an agent task on a repository."""
+    # --- Resolve profile early so it can override provider/model ---
+    resolved_profile = None
+    if profile is not None:
+        from agent_forge.profiles import get_profile, load_profiles
+
+        extra_dirs = [profiles_dir] if profiles_dir else None
+        profile_registry = load_profiles(extra_dirs)
+        try:
+            resolved_profile = get_profile(profile, profile_registry)
+        except KeyError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            sys.exit(1)
+
+        # Profile can override provider/model (CLI flags still take precedence)
+        if provider is None and resolved_profile.llm_provider:
+            provider = resolved_profile.llm_provider
+        if model is None and resolved_profile.llm_model:
+            model = resolved_profile.llm_model
+        if max_iterations is None and resolved_profile.max_iterations:
+            max_iterations = resolved_profile.max_iterations
+
     cfg = load_config(
         cli_overrides=_build_cli_overrides(
             model=model,
@@ -152,8 +186,15 @@ def run(
             )
         )
     else:
-        result = asyncio.run(_run_agent(task, repo, cfg, provider_name, api_key))
-        _emit_run_output(result, output_format=output_format, report_file=report_file)
+        result = asyncio.run(
+            _run_agent(task, repo, cfg, provider_name, api_key, profile=resolved_profile),
+        )
+        _emit_run_output(
+            result,
+            output_format=output_format,
+            report_file=report_file,
+            profile=resolved_profile,
+        )
 
 
 async def _run_agent(
@@ -162,6 +203,8 @@ async def _run_agent(
     cfg: Any,
     provider_name: str,
     api_key: str,
+    *,
+    profile: Any | None = None,
 ) -> Any:
     """Execute the full agent pipeline (direct mode).
 
@@ -181,7 +224,11 @@ async def _run_agent(
         max_iterations=cfg.agent.max_iterations,
         max_tokens_per_run=cfg.agent.max_tokens_per_run,
         temperature=cfg.agent.temperature,
+        profile_id=profile.id if profile else None,
     )
+
+    # Resolve prompt_scope from profile
+    prompt_scope = profile.prompt_scope if profile else None
 
     event_bus = EventBus()
     llm = _create_llm(provider_name, api_key)
@@ -193,6 +240,7 @@ async def _run_agent(
         sandbox_image=sandbox_config.image,
         network_enabled=sandbox_config.network_enabled,
         command_timeout_seconds=sandbox_config.timeout_seconds,
+        prompt_scope=prompt_scope,
     )
     agent_run = AgentRun(task=task, repo_path=repo, config=agent_config)
     sandbox = create_sandbox(sandbox_config)
@@ -431,14 +479,14 @@ def _display_run_summary(run: Any) -> None:
     console.print(Panel(table, title="[bold]Agent Run Complete", border_style=state_color))
 
 
-def _run_output_payload(run: Any) -> dict[str, object]:
+def _run_output_payload(run: Any, *, profile: Any | None = None) -> dict[str, object]:
     """Build a stable machine-readable summary for a completed run."""
     duration_seconds: float | None = None
     if run.completed_at:
         duration_seconds = (run.completed_at - run.created_at).total_seconds()
 
     run_dir = USER_CONFIG_DIR / "runs" / run.id
-    return {
+    payload: dict[str, object] = {
         "schema_version": "agent-forge-run-result-v1",
         "run_id": run.id,
         "state": run.state.value,
@@ -462,6 +510,13 @@ def _run_output_payload(run: Any) -> dict[str, object]:
             "summary_json": str(run_dir / "summary.json"),
         },
     }
+    if profile is not None:
+        payload["profile"] = {
+            "id": profile.id,
+            "name": profile.name,
+            "description": profile.description,
+        }
+    return payload
 
 
 def _emit_run_output(
@@ -469,9 +524,10 @@ def _emit_run_output(
     *,
     output_format: str,
     report_file: Path | None,
+    profile: Any | None = None,
 ) -> None:
     """Emit either rich text or machine-readable JSON for a run."""
-    payload = _run_output_payload(run)
+    payload = _run_output_payload(run, profile=profile)
 
     if report_file is not None:
         report_file.parent.mkdir(parents=True, exist_ok=True)

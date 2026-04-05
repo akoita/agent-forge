@@ -33,6 +33,7 @@ dependencies = [
     "rich>=13.0",
     "structlog>=24.0",
     "uvicorn>=0.34",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -60,6 +61,12 @@ agent-forge = "agent_forge.cli:main"
 Homepage = "https://github.com/akoita/agent-forge"
 Repository = "https://github.com/akoita/agent-forge"
 Issues = "https://github.com/akoita/agent-forge/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent_forge"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"agent_forge/profiles/builtins" = "agent_forge/profiles/builtins"
 
 [tool.ruff]
 target-version = "py311"

@@ -1,0 +1,7 @@
+id: gemini
+name: Gemini Provider Override
+description: "Override the LLM provider to Gemini for deep analysis."
+prompt_scope: ""
+llm_provider: gemini
+llm_model: gemini-2.5-pro
+max_iterations: 30

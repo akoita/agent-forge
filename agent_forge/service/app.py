@@ -28,6 +28,7 @@ from agent_forge.config import USER_CONFIG_DIR, ForgeConfig, load_config
 from agent_forge.orchestration.events import EventBus
 from agent_forge.orchestration.queue import InMemoryQueue, Task, TaskStatus
 from agent_forge.orchestration.worker import Worker
+from agent_forge.profiles import AgentProfile, load_profiles
 from agent_forge.sandbox.base import SandboxConfig
 from agent_forge.sandbox.factory import create_sandbox
 from agent_forge.service.models import (
@@ -52,6 +53,12 @@ from agent_forge.tools import create_default_registry
 _REPORT_RELATIVE_PATH = Path(".agent-forge/report.json")
 
 _REPORT_REQUIRED_FIELDS = {"schema_version", "run_id", "summary", "confidence", "findings", "stats"}
+
+# Backward-compatible alias for legacy callers.
+# TODO: extract to proof-of-audit plugin — this is domain-specific.
+_PROFILE_ALIASES: dict[str, str] = {
+    "proof-of-audit-solidity-v1": "full-spectrum",
+}
 
 _REPORT_RECOVERY_PROMPT = (
     "The audit analysis is complete but you did not write the required report file. "
@@ -104,6 +111,7 @@ class HostedRunService:
         self._event_bus = EventBus()
         self._records: dict[str, HostedRunRecord] = {}
         self._client_policies: dict[str, ServiceClientPolicy] = {}
+        self._profile_registry: dict[str, AgentProfile] = {}
         self._audit_log_path = self._service_root / "audit" / "events.jsonl"
         self._worker = Worker(
             queue=self._queue,
@@ -117,6 +125,13 @@ class HostedRunService:
         self._service_root.mkdir(parents=True, exist_ok=True)
         clients_path = Path(self._config.service.clients_path).expanduser()
         self._client_policies = load_client_registry(clients_path)
+        # Load core + plugin profiles (auto-discover from plugins/ directory)
+        plugin_profile_dirs = list(
+            (Path(__file__).resolve().parents[2] / "plugins").glob("*/profiles")
+        )
+        self._profile_registry = load_profiles(
+            plugin_profile_dirs if plugin_profile_dirs else None
+        )
         await self._worker.start()
 
     async def stop(self) -> None:
@@ -631,13 +646,18 @@ class HostedRunService:
         return record
 
     def _validate_request(self, request: RunRequest) -> None:
-        if request.profile.id != "proof-of-audit-solidity-v1":
+        profile_id = _PROFILE_ALIASES.get(request.profile.id, request.profile.id)
+        if profile_id not in self._profile_registry:
+            available = ", ".join(sorted(self._profile_registry)) or "(none)"
             raise HTTPException(
                 status_code=400,
                 detail=ErrorResponse(
                     error=RunError(
                         code="unsupported_profile",
-                        message=f"unsupported profile: {request.profile.id}",
+                        message=(
+                            f"unsupported profile: {request.profile.id}. "
+                            f"Available: {available}"
+                        ),
                         retryable=False,
                     )
                 ).model_dump(),
@@ -872,7 +892,18 @@ class HostedRunService:
         async def _runner(task: Task) -> None:
             record = self._records[task.id]
             record.started_at = datetime.now(UTC)
+
+            # Resolve agent profile for this request
+            request_profile_id = _PROFILE_ALIASES.get(
+                record.request.profile.id, record.request.profile.id,
+            )
+            resolved_profile = self._profile_registry.get(request_profile_id)
+            prompt_scope = resolved_profile.prompt_scope if resolved_profile else None
+
+            # Determine LLM provider — profile can override service default
             provider_name = self._config.agent.default_provider
+            if resolved_profile and resolved_profile.llm_provider:
+                provider_name = resolved_profile.llm_provider
             provider_cfg = self._config.providers.get(provider_name)
             if provider_cfg is None:
                 record.error = RunError(
@@ -889,6 +920,11 @@ class HostedRunService:
                     retryable=False,
                 )
                 raise RuntimeError(record.error.message)
+
+            # Determine model — profile can override service default
+            model_name = task.config.model
+            if resolved_profile and resolved_profile.llm_model:
+                model_name = resolved_profile.llm_model
 
             llm = _create_llm(provider_name, api_key)
             tools = create_default_registry()
@@ -909,13 +945,15 @@ class HostedRunService:
                 sandbox_backend=sandbox_config.backend,
                 sandbox_image=sandbox_config.image,
                 network_enabled=sandbox_config.network_enabled,
+                prompt_scope=prompt_scope,
             )
             agent_config = AgentConfig(
-                model=task.config.model,
+                model=model_name,
                 max_iterations=task.config.max_iterations,
                 max_tokens_per_run=task.config.max_tokens_per_run,
                 temperature=task.config.temperature,
                 system_prompt=hosted_prompt,
+                profile_id=request_profile_id if resolved_profile else None,
             )
             agent_run = AgentRun(
                 task=task.task_description,

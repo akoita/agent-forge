@@ -1,0 +1,7 @@
+id: access-control-only
+name: Access Control Specialist
+description: "Focuses on access control and authorization vulnerabilities."
+prompt_scope: |
+  Focus exclusively on access control and authorization vulnerabilities.
+  Check for missing access modifiers, unprotected initializers,
+  privilege escalation, and improper role management patterns.

@@ -1,0 +1,10 @@
+id: llm-deep-openai
+name: LLM Deep Analysis (OpenAI)
+description: "Full-spectrum audit with OpenAI provider for enhanced reasoning."
+prompt_scope: |
+  Perform a comprehensive smart contract security audit with enhanced
+  reasoning depth. Use extended analysis to identify complex multi-step
+  attack vectors and subtle logic flaws.
+llm_provider: openai
+llm_model: gpt-4o
+max_iterations: 50

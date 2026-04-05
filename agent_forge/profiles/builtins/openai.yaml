@@ -1,0 +1,7 @@
+id: openai
+name: OpenAI Provider Override
+description: "Override the LLM provider to OpenAI for deep analysis."
+prompt_scope: ""
+llm_provider: openai
+llm_model: gpt-4o
+max_iterations: 30

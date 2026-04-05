@@ -1,0 +1,8 @@
+id: thorough
+name: Thorough Analysis
+description: "Extended iteration count with a deep analysis prompt scope."
+prompt_scope: |
+  Perform an especially thorough analysis. Spend extra iterations to
+  explore edge cases, verify assumptions, and produce detailed reasoning
+  before concluding.
+max_iterations: 50
