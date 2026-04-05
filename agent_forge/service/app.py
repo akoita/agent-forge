@@ -104,14 +104,21 @@ class HostedRunService:
         *,
         service_root: Path | None = None,
         config: ForgeConfig | None = None,
+        instance_id: str | None = None,
+        persona: str | None = None,
     ) -> None:
         self._config = config or load_config()
-        self._service_root = service_root or Path(self._config.service.root_dir).expanduser()
+        base_root = service_root or Path(self._config.service.root_dir).expanduser()
+        self._instance_id = instance_id
+        self._persona_id = persona
+        # Isolate workspace per instance when instance_id is set
+        self._service_root = base_root / instance_id if instance_id else base_root
         self._queue = InMemoryQueue()
         self._event_bus = EventBus()
         self._records: dict[str, HostedRunRecord] = {}
         self._client_policies: dict[str, ServiceClientPolicy] = {}
         self._profile_registry: dict[str, AgentProfile] = {}
+        self._resolved_persona: AgentProfile | None = None
         self._audit_log_path = self._service_root / "audit" / "events.jsonl"
         self._worker = Worker(
             queue=self._queue,
@@ -132,6 +139,16 @@ class HostedRunService:
         self._profile_registry = load_profiles(
             plugin_profile_dirs if plugin_profile_dirs else None
         )
+        # Validate and resolve persona if set
+        if self._persona_id is not None:
+            if self._persona_id not in self._profile_registry:
+                available = ", ".join(sorted(self._profile_registry)) or "(none)"
+                msg = (
+                    f"unknown persona profile: '{self._persona_id}'. "
+                    f"Available profiles: {available}"
+                )
+                raise ValueError(msg)
+            self._resolved_persona = self._profile_registry[self._persona_id]
         await self._worker.start()
 
     async def stop(self) -> None:
@@ -1128,10 +1145,17 @@ def create_app(  # noqa: C901
     *,
     service_root: Path | None = None,
     config: ForgeConfig | None = None,
+    instance_id: str | None = None,
+    persona: str | None = None,
 ) -> FastAPI:
     """Create the hosted service ASGI app."""
     resolved_config = config or load_config()
-    service = HostedRunService(service_root=service_root, config=resolved_config)
+    service = HostedRunService(
+        service_root=service_root,
+        config=resolved_config,
+        instance_id=instance_id,
+        persona=persona,
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> Any:
@@ -1172,11 +1196,20 @@ def create_app(  # noqa: C901
 
     @app.get(resolved_config.service.healthcheck_path, response_model=HealthResponse)
     async def healthcheck() -> HealthResponse:
+        resolved_profile = service._resolved_persona
         return HealthResponse(
             status="ok",
             service_root=str(service._service_root),
             queue_backend=resolved_config.queue.backend,
             sandbox_image=resolved_config.sandbox.image,
+            instance_id=service._instance_id,
+            persona=service._persona_id,
+            capabilities=(
+                resolved_profile.capabilities if resolved_profile else []
+            ),
+            llm_provider=(
+                resolved_profile.llm_provider if resolved_profile else None
+            ),
         )
 
     @app.post("/v1/runs", response_model=RunStatus, status_code=202)

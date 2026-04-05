@@ -37,6 +37,7 @@ class AgentProfile(BaseModel):
     llm_provider: str | None = None
     llm_model: str | None = None
     max_iterations: int | None = Field(default=None, ge=1)
+    capabilities: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

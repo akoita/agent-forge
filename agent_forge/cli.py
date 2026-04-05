@@ -658,7 +658,23 @@ def config() -> None:
     default=None,
     help="Override the hosted service root directory.",
 )
-def serve(host: str | None, port: int | None, service_root: Path | None) -> None:
+@click.option(
+    "--persona",
+    default=None,
+    help="Agent profile to bind this instance to (multi-instance mode).",
+)
+@click.option(
+    "--instance-id",
+    default=None,
+    help="Unique instance ID for workspace isolation (multi-instance mode).",
+)
+def serve(
+    host: str | None,
+    port: int | None,
+    service_root: Path | None,
+    persona: str | None,
+    instance_id: str | None,
+) -> None:
     """Run the hosted FastAPI service."""
     import uvicorn
 
@@ -674,7 +690,12 @@ def serve(host: str | None, port: int | None, service_root: Path | None) -> None
 
     from agent_forge.service import create_app
 
-    app = create_app(service_root=Path(cfg.service.root_dir).expanduser(), config=cfg)
+    app = create_app(
+        service_root=Path(cfg.service.root_dir).expanduser(),
+        config=cfg,
+        instance_id=instance_id,
+        persona=persona,
+    )
     uvicorn.run(app, host=cfg.service.host, port=cfg.service.port)
 
 

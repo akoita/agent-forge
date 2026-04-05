@@ -240,3 +240,8 @@ class HealthResponse(BaseModel):
     service_root: str
     queue_backend: str
     sandbox_image: str
+    # Multi-instance persona metadata
+    instance_id: str | None = None
+    persona: str | None = None
+    capabilities: list[str] = []
+    llm_provider: str | None = None
