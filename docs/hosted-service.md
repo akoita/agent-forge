@@ -64,6 +64,45 @@ deployments:
 - a persistent volume stores service data and audit artifacts
 - the Docker socket is mounted so the hosted service can start per-run sandboxes
 
+### Multi-Instance Mode
+
+For production deployments, multiple instances can run concurrently behind a
+load balancer, each bound to a specific **persona** (agent profile):
+
+```
+                    ┌─────────────────┐
+                    │   Load Balancer  │
+                    └────────┬────────┘
+         ┌──────────────┬────┴─────┬──────────────┐
+    ┌────┴────┐   ┌─────┴───┐ ┌───┴─────┐  ┌─────┴─────┐
+    │ :8001   │   │ :8002   │ │ :8003   │  │ :8004     │
+    │ reentry │   │ access  │ │ full    │  │ gemini    │
+    └─────────┘   └─────────┘ └─────────┘  └───────────┘
+```
+
+```bash
+# Instance 1: reentrancy specialist
+agent-forge serve --port 8001 --persona reentrancy-only --instance-id agent-01
+
+# Instance 2: access control specialist
+agent-forge serve --port 8002 --persona access-control-only --instance-id agent-02
+
+# Instance 3: full spectrum
+agent-forge serve --port 8003 --persona full-spectrum --instance-id agent-03
+```
+
+Key behavior:
+
+- **`--persona`**: binds the instance to a specific agent profile from the
+  profile registry. The persona is validated at startup — unknown profiles
+  cause an immediate error. The health endpoint reports the persona's
+  capabilities and LLM provider.
+- **`--instance-id`**: isolates the workspace under
+  `{service.root_dir}/{instance-id}/` so instances sharing a disk never
+  collide on source material, audit logs, or run artifacts.
+- Both flags are optional. Without them, the service runs in single-instance
+  mode exactly as before (backward compatible).
+
 ## Hosted Configuration
 
 Hosted mode extends the standard config with a `service` section:
@@ -159,7 +198,12 @@ variables explicitly or the service will fall back to repo defaults.
 ### 4. Run The Hosted Service
 
 ```bash
+# Single-instance mode (default)
 agent-forge serve --host 127.0.0.1 --port 8000
+
+# Multi-instance mode with persona binding
+agent-forge serve --host 0.0.0.0 --port 8001 \
+  --persona reentrancy-only --instance-id agent-01
 ```
 
 Or use compose:
@@ -186,6 +230,23 @@ curl -X POST http://127.0.0.1:8000/v1/runs \
 
 - `GET /healthz` returns readiness information for the current service process
 - compose uses this endpoint for container health
+
+The health response includes multi-instance persona metadata when available:
+
+```json
+{
+  "status": "ok",
+  "service_root": "/var/lib/agent-forge/service/agent-01",
+  "queue_backend": "memory",
+  "sandbox_image": "agent-forge-sandbox:latest",
+  "instance_id": "agent-01",
+  "persona": "reentrancy-only",
+  "capabilities": ["reentrancy"],
+  "llm_provider": "gemini"
+}
+```
+
+Without `--persona` / `--instance-id`, the extra fields default to `null` / `[]`.
 
 ### Artifact Locations
 
