@@ -75,7 +75,7 @@ Document any new env var in `docs/spec.md § Configuration` and the project's `a
 
 6. **Use the `/start-issue` workflow** when beginning work on any issue or task. Run the steps in `.agent/workflows/start-issue.md`.
 
-7. **Use the `/finish-issue` workflow** when completing work on an issue. Run the steps in `.agent/workflows/finish-issue.md`.
+7. **Automatically run `/finish-issue` when completing work.** When work on any issue or task is done, **always execute every step** in `.agents/workflows/finish-issue.md` — verify coverage, run tests, lint, commit, push, open PR, wait for CI green, and merge. This workflow is mandatory, not optional. Do not skip steps or ask whether to run it.
 
 ---
 

@@ -35,6 +35,8 @@ graph TD
         Loop --> LLM
         Loop --> Tools
         Loop --> Sandbox
+        Profiles["Profile System<br/>(YAML-based personas)"]
+        Profiles -.-> Loop
     end
 
     subgraph LLM["LLM Client"]
@@ -50,18 +52,65 @@ graph TD
         list_directory
         run_shell
         search_codebase
+        git_diff
+        git_commit
     end
 
     subgraph Sandbox["Sandbox Runtime"]
+        Factory["Sandbox Factory<br/>(auto / docker / bwrap)"]
         Docker["Docker Container<br/>(ephemeral, per-run)"]
+        Bwrap["Bubblewrap<br/>(lightweight, Linux-native)"]
+        Factory --> Docker
+        Factory --> Bwrap
     end
+
+    subgraph Plugins["Extension Layer"]
+        PluginProfiles["Plugin Profiles<br/>(YAML in plugins/*/profiles/)"]
+        PluginTools["Plugin Tools<br/>(entry_points)"]
+        PluginCLI["Plugin CLIs<br/>(standalone commands)"]
+    end
+
+    Plugins -.-> Core
 ```
+
+## Core vs Extension Layer
+
+Agent Forge follows a **domain-agnostic core** design. The core packages
+(`agent_forge/*`) provide generic coding-agent capabilities. Any
+domain-specific functionality (e.g., smart-contract auditing, security scanning)
+lives in the **extension layer** and is never imported by core.
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  CORE  (agent_forge/*)                                       │
+│  Generic, domain-agnostic capabilities:                      │
+│  LLM adapters, ReAct loop, sandbox, tools, profiles,         │
+│  orchestration, observability, CLI, hosted service shell      │
+├──────────────────────────────────────────────────────────────┤
+│  EXTENSION LAYER  (plugins/, skills/, workflows/)            │
+│  Domain-specific capabilities loaded at runtime:             │
+│  - plugins/proof_of_audit/  → audit profiles, comparison     │
+│    engine, challenge evidence CLI                            │
+│  - plugins/<other-domain>/  → any future specialization      │
+│  - --profiles-dir, entry_points, skill files, workflows      │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Extensions are discovered at runtime through:
+
+- **Entry points** — Python's standard plugin mechanism (used for tools via
+  the `agent_forge.tools` group)
+- **`--profiles-dir`** — CLI flag pointing to directories of profile YAMLs
+- **Config** — `agent-forge.toml` can declare extension paths
+
+Extensions can be **separate installable packages** — they do not need to live
+in this monorepo.
 
 ## Layer Responsibilities
 
 ### CLI Layer (`agent_forge/cli.py`)
 
-- Click-based commands: `run`, `status`, `list`, `config`
+- Click-based commands: `run`, `status`, `list`, `config`, `serve`
 - Two execution modes for `run`:
   - **Direct mode** (default) — CLI creates an `EventBus` and calls `react_loop()` directly
   - **Queue mode** (`--queue memory|redis`) — CLI enqueues a `Task`, a `Worker` dequeues and runs it
@@ -77,6 +126,20 @@ graph TD
 | `state.py`       | State machine with valid transitions (PENDING → RUNNING → COMPLETED/FAILED/TIMEOUT) |
 | `persistence.py` | Save/load runs to `~/.agent-forge/runs/<id>/` as JSON + JSONL                       |
 | `prompts.py`     | System prompt builder with tool descriptions                                        |
+
+### Profile System (`agent_forge/profiles/`)
+
+Configurable agent personas defined as YAML files:
+
+| Module       | Purpose                                                     |
+| ------------ | ----------------------------------------------------------- |
+| `profile.py` | `AgentProfile` Pydantic model + `load_profiles()` loader    |
+| `builtins/`  | Built-in profiles: `gemini.yaml`, `openai.yaml`, `thorough.yaml` |
+
+Each profile configures: `prompt_scope`, `llm_provider`, `llm_model`,
+`max_iterations`. Domain-specific profiles (e.g., audit detectors) live in
+plugin directories and are loaded via `--profiles-dir` or auto-discovery from
+`plugins/*/profiles/`.
 
 ### LLM Client Layer (`agent_forge/llm/`)
 
@@ -94,9 +157,13 @@ class LLMProvider(ABC):
     async def stream(messages, tools, config) -> AsyncIterator[LLMResponse]
 ```
 
+The `factory.py` module provides `create_provider(name, api_key)` for
+instantiating adapters by name. New providers are registered in the
+`_PROVIDERS` dict.
+
 ### Tool System (`agent_forge/tools/`)
 
-Ten built-in tools, each implementing the `Tool` ABC:
+Built-in tools, each implementing the `Tool` ABC:
 
 | Tool              | Description                     |
 | ----------------- | ------------------------------- |
@@ -111,14 +178,27 @@ Ten built-in tools, each implementing the `Tool` ABC:
 | `git_create_branch` | Create and check out a branch |
 | `create_pr`       | Open a GitHub pull request      |
 
-Tools are registered in `ToolRegistry` and their schemas are passed to the LLM as function declarations.
+Tools are registered in `ToolRegistry` and their schemas are passed to the LLM
+as function declarations. External tools can be loaded via **entry points** in
+the `agent_forge.tools` group (see [Extending](extending.md)).
 
 ### Sandbox Runtime (`agent_forge/sandbox/`)
 
-- Every tool invocation runs inside an **ephemeral Docker container**
+Agent Forge supports multiple sandbox backends, selected via the `factory.py`
+module:
+
+| Backend   | Module     | Description                                               |
+| --------- | ---------- | --------------------------------------------------------- |
+| `docker`  | `docker.py` | Ephemeral Docker containers — full isolation, cross-platform |
+| `bwrap`   | `bwrap.py`  | Linux bubblewrap — lightweight, no daemon, fast startup    |
+| `auto`    | `factory.py` | Prefer Docker, fallback to bwrap if Docker unavailable    |
+
+Common properties across backends:
+
 - Workspace is bind-mounted read/write
 - Configurable: CPU/memory limits, network access, timeout
-- Container is created per-run and destroyed after
+- Container/namespace is created per-run and destroyed after
+- Validated path security — all operations stay within `/workspace`
 
 ### Orchestration (`agent_forge/orchestration/`)
 
@@ -140,6 +220,9 @@ adds a FastAPI edge for machine clients plus client auth/policy enforcement.
 - `agent_forge/service/security.py` loads client policy from the hosted client registry
 - `agent_forge/service/client.py` provides the Proof-of-Audit compatibility harness
 
+The hosted service auto-discovers plugin profiles from `plugins/*/profiles/`
+and merges them with core built-in profiles for the profile registry.
+
 For deployment topology, trust boundaries, and rollout guidance, see the
 [Hosted Service Guide](hosted-service.md).
 
@@ -147,7 +230,7 @@ For deployment topology, trust boundaries, and rollout guidance, see the
 
 ```mermaid
 flowchart TD
-    A["Build system prompt<br/>(task + tool defs)"] --> B["Send user message to LLM"]
+    A["Build system prompt<br/>(task + tool defs + profile scope)"] --> B["Send user message to LLM"]
     B --> C["LLM returns response"]
     C --> D{"Tool calls?"}
     D -- No --> E["COMPLETED ✅"]
@@ -170,6 +253,6 @@ stateDiagram-v2
     RUNNING --> TIMEOUT : max iterations / tokens
     RUNNING --> FAILED : unrecoverable error
     RUNNING --> CANCELLED : user cancel
+```
 
 For the full technical specification, see [spec.md](spec.md).
-```
