@@ -52,13 +52,15 @@ graph TD
 
 ### Key Features
 
-- **🔒 Sandboxed Execution** — Every tool invocation runs in an ephemeral Docker container with resource limits — never on the host.
+- **🔒 Sandboxed Execution** — Every tool invocation runs in an ephemeral Docker container (or lightweight bubblewrap namespace) with resource limits — never on the host.
 - **🧠 Gemini 3.1 Ready** — Full support for thought signatures, exponential backoff with jitter, and `Retry-After` header.
-- **🔌 Extensible LLM Layer** — Gemini adapter built, OpenAI and Anthropic interfaces defined for easy addition.
+- **🔌 Multi-Provider LLM** — Gemini (primary), OpenAI, and Anthropic adapters, all wired through a pluggable factory.
+- **🎭 Agent Profiles** — YAML-based personas with configurable prompt scope, LLM overrides, and iteration limits.
 - **🌐 Hosted Service Mode** — Run Agent Forge as a versioned FastAPI service for external clients with API-key auth, policy controls, and Proof-of-Audit compatibility.
+- **🧩 Extension Architecture** — Domain-agnostic core with a plugin layer for specialized capabilities (profiles, tools, CLIs). Extensions can be separate installable packages.
 - **📊 Observability** — Structured JSON logs, trace IDs, token/cost tracking on every run.
 - **💾 Run Persistence** — Every agent run is saved to disk with full conversation history and tool invocations.
-- **🧩 Extensible Tools** — Add new tools by implementing a simple `Tool` ABC and registering them.
+- **🔧 Tool Plugins** — Add tools via the `Tool` ABC and ship them as entry-point packages that load automatically.
 
 ---
 
@@ -204,13 +206,17 @@ make format
 ```
 agent_forge/
 ├── agent/         # ReAct loop, state machine, prompts, persistence
-├── llm/           # LLM provider adapters (Gemini, OpenAI, Anthropic)
-├── tools/         # Built-in tools (read_file, write_file, run_shell, etc.)
-├── sandbox/       # Docker sandbox management
+├── llm/           # LLM provider adapters (Gemini, OpenAI, Anthropic) + factory
+├── profiles/      # Agent profile system (YAML personas + loader)
+├── tools/         # Built-in tools + entry-point plugin loader
+├── sandbox/       # Sandbox backends (Docker, bubblewrap) + factory
+├── service/       # Hosted FastAPI service (API, auth, client harness)
 ├── orchestration/ # Task queue, event bus, workers
 ├── observability/ # Structured logging, tracing, cost tracking
 ├── cli.py         # Click-based CLI entry point
 └── config.py      # Layered configuration system
+plugins/
+└── proof_of_audit/  # First-party domain extension (audit tools, profiles)
 ```
 
 ---
@@ -231,11 +237,11 @@ agent_forge/
 | Phase | Focus                                                             | Status         |
 | ----- | ----------------------------------------------------------------- | -------------- |
 | **1** | Core Agent MVP — ReAct loop + Docker sandbox + CLI                | ✅ Complete    |
-| **2** | Production Hardening — Observability, multi-provider, Redis queue | 🚧 In Progress |
-| **3** | Git-Aware Agent & Plugin System                                   | ⬜ Planned     |
+| **2** | Production Hardening — Observability, multi-provider, Redis queue | ✅ Complete    |
+| **3** | Git-Aware Agent & Plugin System                                   | ✅ Complete    |
 | **4** | Web Dashboard & REST API                                          | ⬜ Planned     |
 | **5** | Multi-Agent Collaboration                                         | ⬜ Planned     |
-| **6** | Advanced Isolation & Scaling (microVMs, K8s)                      | ⬜ Planned     |
+| **6** | Advanced Isolation & Scaling (microVMs, K8s)                      | 🚧 In Progress |
 | **7** | Platform & Ecosystem (MCP, marketplace, IDE plugins)              | 🚧 In Progress |
 
 See [spec.md § Roadmap](docs/spec.md#12-roadmap) for detailed milestones.
