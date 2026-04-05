@@ -77,6 +77,17 @@ Document any new env var in `docs/spec.md § Configuration` and the project's `a
 
 7. **Automatically run `/finish-issue` when completing work.** When work on any issue or task is done, **always execute every step** in `.agents/workflows/finish-issue.md` — verify coverage, run tests, lint, commit, push, open PR, wait for CI green, and merge. This workflow is mandatory, not optional. Do not skip steps or ask whether to run it.
 
+8. **Update documentation with every user-facing change.** Any change that
+   modifies CLI flags, API endpoints, configuration options, deployment
+   topology, or observable behavior **must** include corresponding documentation
+   updates in the same branch. Review and update as needed:
+   - `README.md` — features, project structure, usage examples
+   - `docs/` — architecture, configuration, hosted-service, extending, testing
+   - `docs/spec.md` — technical specification, interface contracts
+   - Inline docstrings in changed modules
+   
+   Skip only for purely internal refactors with zero user-facing impact.
+
 ---
 
 ## Architecture Conventions
