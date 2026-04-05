@@ -254,54 +254,101 @@ Profiles from `--profiles-dir` override built-ins on duplicate `id`.
 
 ### Plugin Profiles
 
-Domain-specific profiles live in the plugin's `profiles/` directory:
+Domain-specific profiles can be discovered from installed extensions via the
+`agent_forge.profiles` entry-point group (see [Extension SDK](#extension-sdk)
+below), or specified manually with `--profiles-dir`:
 
-```
-plugins/
-└── proof_of_audit/
-    └── profiles/
-        ├── full-spectrum.yaml
-        ├── reentrancy-only.yaml
-        └── access-control-only.yaml
+```bash
+agent-forge run --profiles-dir ./my-profiles --profile my-custom --task "..."
 ```
 
-The hosted service auto-discovers plugin profiles from `plugins/*/profiles/`
-at startup and merges them into the profile registry.
+Profile precedence (later wins on duplicate `id`):
+
+1. Built-in profiles (`agent_forge/profiles/builtins/`)
+2. Extension profiles (`agent_forge.profiles` entry-point group)
+3. User-provided directories (`--profiles-dir`)
 
 ---
 
-## Building Domain Extensions
+## Extension SDK
+
+Agent Forge includes a scaffolding CLI and auto-discovery system for building
+and installing domain-specific extensions as separate Python packages.
+
+### Quick Start
+
+```bash
+# Scaffold a new extension project
+agent-forge init-extension my-security-scanner
+
+# Develop and install locally
+cd my-security-scanner
+pip install -e '.[dev]'
+pytest
+
+# Verify it's discovered
+agent-forge extensions list
+```
+
+### Scaffold Structure
+
+Running `agent-forge init-extension my-security-scanner` creates:
+
+```
+my-security-scanner/
+├── pyproject.toml                        # entry_points pre-configured
+├── README.md
+├── my_security_scanner/
+│   ├── __init__.py                       # ExtensionInfo + PROFILES_DIR
+│   ├── profiles/
+│   │   └── default.yaml                  # Sample agent profile
+│   └── tools/
+│       ├── __init__.py
+│       └── sample_tool.py                # Sample Tool subclass
+└── tests/
+    └── test_sample_tool.py               # Sample test
+```
+
+### Entry-Point Groups
+
+Extensions register themselves via three Python entry-point groups in
+`pyproject.toml`:
+
+| Group                     | Purpose                          | Resolves To       |
+| ------------------------- | -------------------------------- | ------------------ |
+| `agent_forge.extensions`  | Extension metadata               | `ExtensionInfo`    |
+| `agent_forge.profiles`    | Profile directories              | `pathlib.Path`     |
+| `agent_forge.tools`       | Tool plugins                     | `Tool` subclass    |
+
+Example `pyproject.toml`:
+
+```toml
+[project.entry-points."agent_forge.extensions"]
+my-security-scanner = "my_security_scanner:extension_info"
+
+[project.entry-points."agent_forge.profiles"]
+my-security-scanner = "my_security_scanner:PROFILES_DIR"
+
+[project.entry-points."agent_forge.tools"]
+my_scanner_tool = "my_security_scanner.tools.scanner:ScannerTool"
+```
+
+### Managing Extensions
+
+```bash
+# List all installed extensions, profiles, and tools
+agent-forge extensions list
+```
+
+This displays a Rich table showing each extension's name, version, profiles,
+and tools.
+
+### Building Domain Extensions
 
 Agent Forge follows a **domain-agnostic core** design. All domain-specific
-functionality belongs in the **extension layer** (`plugins/`), never in
-`agent_forge/`.
+functionality belongs in the **extension layer**, never in `agent_forge/`.
 
-### Plugin Structure
-
-```
-plugins/
-└── my_domain/
-    ├── __init__.py           # Package init
-    ├── models.py             # Pydantic models
-    ├── logic.py              # Domain-specific logic
-    ├── cli.py                # Standalone Click CLI (optional)
-    ├── README.md             # Plugin documentation
-    └── profiles/             # Agent profiles (auto-discovered)
-        └── my-profile.yaml
-```
-
-### First-Party Example
-
-`plugins/proof_of_audit/` is the reference implementation:
-
-| Module        | Purpose                                                  |
-| ------------- | -------------------------------------------------------- |
-| `models.py`   | `ChallengeEvidence`, `MissedFinding` Pydantic models     |
-| `challenge.py`| Comparison engine (pure + LLM-enhanced)                  |
-| `cli.py`      | `agent-forge-poa challenge-evidence` Click CLI            |
-| `profiles/`   | Audit-specific agent profiles (full-spectrum, etc.)      |
-
-### Extension Rules
+#### Extension Rules
 
 1. **Core packages must not import domain-specific concepts.** Terms like
    "reentrancy", "vulnerability", "detector" belong in extension code only.
@@ -309,12 +356,11 @@ plugins/
    (generic), not `detectors` (audit-specific).
 3. **Domain features are delivered via extensions** — profiles, tools,
    prompts, and workflows.
-4. **Tests for extensions live alongside the plugin** or in
-   `tests/unit/test_<plugin>.py`.
+4. **Tests for extensions** live in the extension package.
 
-### Distribution Model
+#### Distribution Model
 
-Extensions can be **separate installable packages**:
+Extensions are **separate installable packages**:
 
 ```bash
 pip install agent-forge                        # core framework
@@ -322,11 +368,8 @@ pip install agent-forge-proof-of-audit         # audit profiles, tools
 pip install agent-forge-web-security           # hypothetical extension
 ```
 
-Runtime discovery uses:
-
-- **`entry_points`** — Python's standard plugin mechanism
-- **`--profiles-dir`** — CLI flag for profile directories
-- **Config** — `agent-forge.toml` can declare extension paths
+Runtime discovery uses Python's standard `entry_points` mechanism — no
+configuration needed. Install the extension and it's automatically available.
 
 ---
 

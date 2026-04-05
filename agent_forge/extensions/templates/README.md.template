@@ -1,0 +1,53 @@
+# $extension_name
+
+An [Agent Forge](https://github.com/akoita/agent-forge) extension.
+
+## Installation
+
+```bash
+pip install agent-forge-$extension_name
+```
+
+Or for development:
+
+```bash
+pip install -e .
+```
+
+## Usage
+
+Once installed, the extension is automatically discovered by Agent Forge:
+
+```bash
+# List installed extensions
+agent-forge extensions list
+
+# Use the default profile
+agent-forge run --profile $package_name-default --task "Your task" --repo ./your-repo
+```
+
+## Development
+
+```bash
+# Install in development mode with test dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+```
+
+## Project Structure
+
+```
+$extension_name/
+├── pyproject.toml
+├── README.md
+├── $package_name/
+│   ├── __init__.py           # Extension metadata
+│   ├── profiles/
+│   │   └── default.yaml      # Agent profiles
+│   └── tools/
+│       └── sample_tool.py    # Custom tools
+└── tests/
+    └── test_sample_tool.py
+```

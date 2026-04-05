@@ -1,0 +1,42 @@
+"""Sample tool for the $extension_name extension."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from agent_forge.tools.base import Tool, ToolResult
+
+if TYPE_CHECKING:
+    from agent_forge.sandbox.base import Sandbox
+
+
+class ${class_prefix}SampleTool(Tool):
+    """A sample tool — replace with your domain-specific implementation."""
+
+    @property
+    def name(self) -> str:
+        return "${package_name}_sample"
+
+    @property
+    def description(self) -> str:
+        return "Sample tool for $extension_name. Replace with your implementation."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "input": {
+                    "type": "string",
+                    "description": "Input to process.",
+                },
+            },
+            "required": ["input"],
+        }
+
+    async def execute(self, arguments: dict[str, Any], sandbox: Sandbox) -> ToolResult:
+        input_val = arguments.get("input", "")
+        return ToolResult(
+            output=f"Processed: {input_val}",
+            exit_code=0,
+        )

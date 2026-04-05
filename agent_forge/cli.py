@@ -699,5 +699,118 @@ def serve(
     uvicorn.run(app, host=cfg.service.host, port=cfg.service.port)
 
 
+# ---------------------------------------------------------------------------
+# extensions
+# ---------------------------------------------------------------------------
+
+
+@main.group()
+def extensions() -> None:
+    """Manage Agent Forge extensions."""
+
+
+@extensions.command("list")
+def extensions_list() -> None:
+    """List installed Agent Forge extensions."""
+    from agent_forge.extensions.discovery import (
+        discover_extension_profile_dirs,
+        discover_extensions,
+    )
+    from agent_forge.tools.plugins import discover_tool_plugins
+
+    exts = discover_extensions()
+
+    # Also discover standalone profile dirs and tool plugins for
+    # extensions that only register profiles or tools (no metadata).
+    profile_dirs = discover_extension_profile_dirs()
+    tool_plugins = discover_tool_plugins()
+
+    if not exts and not profile_dirs and not tool_plugins:
+        console.print("[dim]No extensions installed.[/dim]")
+        return
+
+    table = Table(title="Installed Extensions")
+    table.add_column("Extension", style="cyan")
+    table.add_column("Version", justify="center")
+    table.add_column("Profiles", style="green")
+    table.add_column("Tools", style="yellow")
+    table.add_column("Description")
+
+    for ext in exts:
+        table.add_row(
+            ext.name,
+            ext.version or "—",
+            ", ".join(ext.profiles) if ext.profiles else "—",
+            ", ".join(ext.tools) if ext.tools else "—",
+            ext.description or "—",
+        )
+
+    # Show orphan profile dirs (registered via agent_forge.profiles but
+    # not via agent_forge.extensions).
+    known_names = {ext.name for ext in exts}
+    for pdir in profile_dirs:
+        if pdir.name not in known_names:
+            table.add_row(
+                f"(profiles: {pdir.name})",
+                "—",
+                str(pdir),
+                "—",
+                "Profile directory (no extension metadata)",
+            )
+
+    # Show orphan tool plugins.
+    known_tools: set[str] = set()
+    for ext in exts:
+        known_tools.update(ext.tools)
+    for tp in tool_plugins:
+        if tp.name not in known_tools:
+            table.add_row(
+                f"(tool: {tp.name})",
+                "—",
+                "—",
+                tp.name,
+                f"Tool plugin ({tp.value})",
+            )
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# init-extension
+# ---------------------------------------------------------------------------
+
+
+@main.command("init-extension")
+@click.argument("name")
+@click.option(
+    "--target-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Parent directory to create the project in (defaults to cwd).",
+)
+def init_extension(name: str, target_dir: Path | None) -> None:
+    """Scaffold a new Agent Forge extension project.
+
+    Creates a canonical extension project structure with pre-configured
+    entry points, a sample profile, and a sample tool.
+    """
+    from agent_forge.extensions.scaffolding import ScaffoldError, scaffold_extension
+
+    try:
+        project_path = scaffold_extension(name, target_dir=target_dir)
+    except ScaffoldError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+
+    console.print(f"[green]✓[/green] Extension project created at [bold]{project_path}[/bold]")
+    console.print()
+    console.print("Next steps:")
+    console.print(f"  cd {project_path.name}")
+    console.print("  pip install -e '.[dev]'")
+    console.print("  pytest")
+    console.print("  agent-forge extensions list")
+
+
 if __name__ == "__main__":
     main()
+
