@@ -315,3 +315,116 @@ class TestCLIOutputPayload:
 
         payload = _run_output_payload(mock_run)
         assert "profile" not in payload
+
+
+# ---------------------------------------------------------------------------
+# Profile entry-point discovery
+# ---------------------------------------------------------------------------
+
+
+class TestProfileEntryPointDiscovery:
+    """Test profile auto-discovery from installed extensions (#120)."""
+
+    def test_load_profiles_discovers_entry_point_profiles(self, tmp_path: Path):
+        """Extension profiles are loaded from entry_point directories."""
+        from unittest.mock import patch
+
+        ext_profiles_dir = tmp_path / "ext_profiles"
+        ext_profiles_dir.mkdir()
+        yaml_content = textwrap.dedent("""\
+            id: ext-profile
+            name: Extension Profile
+            prompt_scope: "From an extension."
+        """)
+        (ext_profiles_dir / "ext.yaml").write_text(yaml_content)
+
+        with patch(
+            "agent_forge.extensions.discovery.discover_extension_profile_dirs",
+            return_value=[ext_profiles_dir],
+        ):
+            registry = load_profiles(include_builtins=False)
+
+        assert "ext-profile" in registry
+        assert registry["ext-profile"].name == "Extension Profile"
+
+    def test_load_profiles_entry_points_precedence(self, tmp_path: Path):
+        """User --profiles-dir overrides extension profiles on duplicate id."""
+        from unittest.mock import patch
+
+        # Extension profile
+        ext_dir = tmp_path / "ext"
+        ext_dir.mkdir()
+        (ext_dir / "shared.yaml").write_text(
+            textwrap.dedent("""\
+                id: shared
+                name: From Extension
+            """)
+        )
+
+        # User profile (higher precedence)
+        user_dir = tmp_path / "user"
+        user_dir.mkdir()
+        (user_dir / "shared.yaml").write_text(
+            textwrap.dedent("""\
+                id: shared
+                name: From User
+            """)
+        )
+
+        with patch(
+            "agent_forge.extensions.discovery.discover_extension_profile_dirs",
+            return_value=[ext_dir],
+        ):
+            registry = load_profiles([user_dir], include_builtins=False)
+
+        assert registry["shared"].name == "From User"
+
+    def test_load_profiles_skip_entry_points(self, tmp_path: Path):
+        """discover_entry_points=False disables extension profile discovery."""
+        from unittest.mock import patch
+
+        ext_dir = tmp_path / "ext"
+        ext_dir.mkdir()
+        (ext_dir / "ext-only.yaml").write_text(
+            textwrap.dedent("""\
+                id: ext-only
+                name: Extension Only
+            """)
+        )
+
+        with patch(
+            "agent_forge.extensions.discovery.discover_extension_profile_dirs",
+            return_value=[ext_dir],
+        ) as mock_discover:
+            registry = load_profiles(
+                include_builtins=False, discover_entry_points=False
+            )
+
+        # Should NOT have called discovery
+        mock_discover.assert_not_called()
+        assert "ext-only" not in registry
+
+    def test_load_profiles_builtins_plus_entry_points(self, tmp_path: Path):
+        """Extension profiles coexist with builtins."""
+        from unittest.mock import patch
+
+        ext_dir = tmp_path / "ext"
+        ext_dir.mkdir()
+        (ext_dir / "addon.yaml").write_text(
+            textwrap.dedent("""\
+                id: addon
+                name: Add-on Profile
+            """)
+        )
+
+        with patch(
+            "agent_forge.extensions.discovery.discover_extension_profile_dirs",
+            return_value=[ext_dir],
+        ):
+            registry = load_profiles()
+
+        # Builtins still present
+        assert "gemini" in registry
+        # Extension profile also present
+        assert "addon" in registry
+

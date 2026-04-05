@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-forge-$extension_name"
+version = "0.1.0"
+description = "Agent Forge extension: $extension_name"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "agent-forge",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.entry-points."agent_forge.extensions"]
+$extension_name = "$package_name:extension_info"
+
+[project.entry-points."agent_forge.profiles"]
+$extension_name = "$package_name:PROFILES_DIR"
+
+[project.entry-points."agent_forge.tools"]
+# Register tools here, e.g.:
+# ${package_name}_sample = "$package_name.tools.sample_tool:${class_prefix}SampleTool"
+
+[tool.hatch.build.targets.wheel]
+packages = ["$package_name"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"$package_name/profiles" = "$package_name/profiles"

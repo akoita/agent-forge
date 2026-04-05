@@ -1,0 +1,6 @@
+id: "$package_name-default"
+name: "$class_prefix Default Profile"
+description: "Default profile for the $extension_name extension."
+prompt_scope: |
+  You are an agent specialized for $extension_name tasks.
+  Follow best practices and produce actionable results.

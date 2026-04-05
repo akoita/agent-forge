@@ -57,7 +57,7 @@ graph TD
 - **🔌 Multi-Provider LLM** — Gemini (primary), OpenAI, and Anthropic adapters, all wired through a pluggable factory.
 - **🎭 Agent Profiles** — YAML-based personas with configurable prompt scope, LLM overrides, and iteration limits.
 - **🌐 Hosted Service Mode** — Run Agent Forge as a versioned FastAPI service for external clients with API-key auth, policy controls, and Proof-of-Audit compatibility.
-- **🧩 Extension Architecture** — Domain-agnostic core with a plugin layer for specialized capabilities (profiles, tools, CLIs). Extensions can be separate installable packages.
+- **🧩 Extension SDK** — Scaffold, build, and install domain-specific extensions as separate packages with `agent-forge init-extension`. Auto-discovers profiles, tools, and metadata via Python entry points.
 - **📊 Observability** — Structured JSON logs, trace IDs, token/cost tracking on every run.
 - **💾 Run Persistence** — Every agent run is saved to disk with full conversation history and tool invocations.
 - **🔧 Tool Plugins** — Add tools via the `Tool` ABC and ship them as entry-point packages that load automatically.
@@ -206,6 +206,7 @@ make format
 ```
 agent_forge/
 ├── agent/         # ReAct loop, state machine, prompts, persistence
+├── extensions/    # Extension SDK (discovery, scaffolding, templates)
 ├── llm/           # LLM provider adapters (Gemini, OpenAI, Anthropic) + factory
 ├── profiles/      # Agent profile system (YAML personas + loader)
 ├── tools/         # Built-in tools + entry-point plugin loader
@@ -227,7 +228,7 @@ plugins/
 - **[Configuration](docs/configuration.md)** — Full config reference (TOML, env vars, CLI flags, precedence).
 - **[Hosted Service](docs/hosted-service.md)** — Hosted architecture, trust boundaries, local-dev, and operations.
 - **[Testing](docs/testing.md)** — Running tests, writing new ones, CI workflows, coverage.
-- **[Extending](docs/extending.md)** — Adding tools, LLM providers, custom sandbox configs.
+- **[Extending](docs/extending.md)** — Adding tools, LLM providers, Extension SDK, custom sandbox configs.
 - **[Technical Spec](docs/spec.md)** — Full specification with interface contracts and data models.
 
 ---

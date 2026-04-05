@@ -1,0 +1,28 @@
+"""Tests for the $extension_name sample tool."""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock
+
+import pytest
+
+from $package_name.tools.sample_tool import ${class_prefix}SampleTool
+
+
+@pytest.mark.asyncio
+async def test_sample_tool_returns_output() -> None:
+    tool = ${class_prefix}SampleTool()
+    sandbox = AsyncMock()
+
+    result = await tool.execute({"input": "hello"}, sandbox)
+
+    assert result.output == "Processed: hello"
+    assert result.exit_code == 0
+
+
+def test_sample_tool_metadata() -> None:
+    tool = ${class_prefix}SampleTool()
+
+    assert tool.name == "${package_name}_sample"
+    assert tool.description
+    assert "input" in tool.parameters["properties"]

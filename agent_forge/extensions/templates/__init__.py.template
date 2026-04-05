@@ -1,0 +1,18 @@
+"""$extension_name — Agent Forge extension."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from agent_forge.extensions.discovery import ExtensionInfo
+
+PROFILES_DIR = Path(__file__).parent / "profiles"
+
+extension_info = ExtensionInfo(
+    name="$extension_name",
+    version="0.1.0",
+    description="Agent Forge extension: $extension_name",
+    package="agent-forge-$extension_name",
+    profiles=["$package_name-default"],
+    tools=[],
+)
