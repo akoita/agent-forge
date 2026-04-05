@@ -1,0 +1,9 @@
+# $extension_name — System Prompt Extension
+
+You are running with the **$extension_name** extension active.
+
+## Additional Instructions
+
+- Follow the domain-specific conventions defined by this extension.
+- Use any registered tools provided by this extension when applicable.
+- Refer to the extension's profiles for task-specific configurations.

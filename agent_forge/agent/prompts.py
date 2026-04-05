@@ -67,6 +67,7 @@ def build_system_prompt(
     network_enabled: bool = False,
     command_timeout_seconds: int = 300,
     prompt_scope: str | None = None,
+    extension_prompts: list[str] | None = None,
 ) -> str:
     """Render the system prompt with tool descriptions and task."""
     network_rule, network_status = _format_network_rule(network_enabled)
@@ -83,6 +84,11 @@ def build_system_prompt(
 
     if prompt_scope:
         prompt += f"\n\n## Profile Scope\n{prompt_scope}"
+
+    if extension_prompts:
+        prompt += "\n\n## Extension Prompts"
+        for fragment in extension_prompts:
+            prompt += f"\n{fragment}"
 
     return prompt
 
@@ -146,6 +152,7 @@ def build_hosted_poa_system_prompt(
     network_enabled: bool = False,
     command_timeout_seconds: int = 300,
     prompt_scope: str | None = None,
+    extension_prompts: list[str] | None = None,
 ) -> str:
     """Render the hosted Proof-of-Audit system prompt with strict report emission."""
     network_rule, network_status = _format_network_rule(network_enabled)
@@ -162,5 +169,10 @@ def build_hosted_poa_system_prompt(
 
     if prompt_scope:
         prompt += f"\n\n## Profile Scope\n{prompt_scope}"
+
+    if extension_prompts:
+        prompt += "\n\n## Extension Prompts"
+        for fragment in extension_prompts:
+            prompt += f"\n{fragment}"
 
     return prompt

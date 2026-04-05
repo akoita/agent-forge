@@ -99,6 +99,8 @@ def scaffold_extension(name: str, target_dir: Path | None = None) -> Path:
     # Create directory structure
     pkg_dir = project_root / package_name
     (pkg_dir / "profiles").mkdir(parents=True, exist_ok=True)
+    (pkg_dir / "prompts").mkdir(parents=True, exist_ok=True)
+    (pkg_dir / "workflows").mkdir(parents=True, exist_ok=True)
     (pkg_dir / "tools").mkdir(parents=True, exist_ok=True)
     (project_root / "tests").mkdir(parents=True, exist_ok=True)
 
@@ -109,6 +111,16 @@ def scaffold_extension(name: str, target_dir: Path | None = None) -> Path:
     _write_template(
         "profiles/default.yaml.template",
         pkg_dir / "profiles" / "default.yaml",
+        context,
+    )
+    _write_template(
+        "prompts/system_prompt.md.template",
+        pkg_dir / "prompts" / "system_prompt.md",
+        context,
+    )
+    _write_template(
+        "workflows/sample-workflow.md.template",
+        pkg_dir / "workflows" / "sample-workflow.md",
         context,
     )
     _write_template(

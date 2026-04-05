@@ -1,4 +1,4 @@
-"""Unit tests for the extension CLI commands (#120)."""
+"""Unit tests for the extension CLI commands (#120, #128)."""
 
 from __future__ import annotations
 
@@ -22,11 +22,9 @@ if TYPE_CHECKING:
 class TestExtensionsList:
     """Test the ``agent-forge extensions list`` CLI command."""
 
-    def test_no_extensions(self) -> None:
-        """Empty extensions → informative message."""
-        runner = CliRunner()
-
-        with (
+    def _patch_empty(self):
+        """Context manager that patches all discovery functions to empty."""
+        return (
             patch(
                 "agent_forge.extensions.discovery.discover_extensions",
                 return_value=[],
@@ -36,10 +34,21 @@ class TestExtensionsList:
                 return_value=[],
             ),
             patch(
+                "agent_forge.extensions.discovery.discover_extension_workflow_dirs",
+                return_value=[],
+            ),
+            patch(
                 "agent_forge.tools.plugins.discover_tool_plugins",
                 return_value=[],
             ),
-        ):
+        )
+
+    def test_no_extensions(self) -> None:
+        """Empty extensions → informative message."""
+        runner = CliRunner()
+
+        p1, p2, p3, p4 = self._patch_empty()
+        with p1, p2, p3, p4:
             result = runner.invoke(main, ["extensions", "list"])
 
         assert result.exit_code == 0
@@ -55,6 +64,8 @@ class TestExtensionsList:
             description="Smart contract audit tools",
             profiles=["full-spectrum", "reentrancy-only"],
             tools=["challenge_tool"],
+            prompts=["audit-prompt"],
+            workflows=["audit-flow"],
         )
 
         with (
@@ -67,6 +78,10 @@ class TestExtensionsList:
                 return_value=[],
             ),
             patch(
+                "agent_forge.extensions.discovery.discover_extension_workflow_dirs",
+                return_value=[],
+            ),
+            patch(
                 "agent_forge.tools.plugins.discover_tool_plugins",
                 return_value=[],
             ),
@@ -74,8 +89,47 @@ class TestExtensionsList:
             result = runner.invoke(main, ["extensions", "list"])
 
         assert result.exit_code == 0
-        assert "proof-of-audit" in result.output
+        # Rich may truncate long text in narrow terminals
+        assert "proof-o" in result.output
         assert "0.1.0" in result.output
+
+    def test_table_has_prompts_and_workflows_columns(self) -> None:
+        """Table output should include Prompts and Workflows columns."""
+        runner = CliRunner()
+
+        ext = ExtensionInfo(
+            name="test-ext",
+            version="1.0",
+            prompts=["sys-prompt"],
+            workflows=["deploy-flow"],
+        )
+
+        with (
+            patch(
+                "agent_forge.extensions.discovery.discover_extensions",
+                return_value=[ext],
+            ),
+            patch(
+                "agent_forge.extensions.discovery.discover_extension_profile_dirs",
+                return_value=[],
+            ),
+            patch(
+                "agent_forge.extensions.discovery.discover_extension_workflow_dirs",
+                return_value=[],
+            ),
+            patch(
+                "agent_forge.tools.plugins.discover_tool_plugins",
+                return_value=[],
+            ),
+        ):
+            result = runner.invoke(main, ["extensions", "list"])
+
+        assert result.exit_code == 0
+        assert "Prompts" in result.output
+        # Rich may truncate to "Workflo…" in a narrow terminal
+        assert "Workflo" in result.output
+        assert "sys-prompt" in result.output
+        assert "deploy-fl" in result.output
 
     def test_help(self) -> None:
         """extensions list --help should work."""

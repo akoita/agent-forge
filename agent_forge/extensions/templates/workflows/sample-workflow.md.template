@@ -1,0 +1,18 @@
+---
+description: Sample workflow for $extension_name
+---
+
+# $extension_name Sample Workflow
+
+This is a sample workflow provided by the **$extension_name** extension.
+
+## Steps
+
+1. **Analyse** — Review the target codebase or repository.
+2. **Execute** — Run the extension's tools against the target.
+3. **Report** — Generate findings and produce a summary report.
+
+## Notes
+
+- Customise this workflow to match your extension's domain.
+- Add more workflow files to the `workflows/` directory as needed.

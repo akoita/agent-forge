@@ -299,9 +299,13 @@ my-security-scanner/
 ├── pyproject.toml                        # entry_points pre-configured
 ├── README.md
 ├── my_security_scanner/
-│   ├── __init__.py                       # ExtensionInfo + PROFILES_DIR
+│   ├── __init__.py                       # ExtensionInfo + DIR exports
 │   ├── profiles/
 │   │   └── default.yaml                  # Sample agent profile
+│   ├── prompts/
+│   │   └── system_prompt.md              # Sample system prompt fragment
+│   ├── workflows/
+│   │   └── sample-workflow.md            # Sample workflow document
 │   └── tools/
 │       ├── __init__.py
 │       └── sample_tool.py                # Sample Tool subclass
@@ -311,7 +315,7 @@ my-security-scanner/
 
 ### Entry-Point Groups
 
-Extensions register themselves via three Python entry-point groups in
+Extensions register themselves via five Python entry-point groups in
 `pyproject.toml`:
 
 | Group                     | Purpose                          | Resolves To       |
@@ -319,6 +323,8 @@ Extensions register themselves via three Python entry-point groups in
 | `agent_forge.extensions`  | Extension metadata               | `ExtensionInfo`    |
 | `agent_forge.profiles`    | Profile directories              | `pathlib.Path`     |
 | `agent_forge.tools`       | Tool plugins                     | `Tool` subclass    |
+| `agent_forge.prompts`     | System prompt fragments          | `str`, `Path`, or callable |
+| `agent_forge.workflows`   | Workflow directories             | `pathlib.Path`     |
 
 Example `pyproject.toml`:
 
@@ -329,19 +335,50 @@ my-security-scanner = "my_security_scanner:extension_info"
 [project.entry-points."agent_forge.profiles"]
 my-security-scanner = "my_security_scanner:PROFILES_DIR"
 
+[project.entry-points."agent_forge.prompts"]
+my-security-scanner = "my_security_scanner:PROMPTS_DIR"
+
+[project.entry-points."agent_forge.workflows"]
+my-security-scanner = "my_security_scanner:WORKFLOWS_DIR"
+
 [project.entry-points."agent_forge.tools"]
 my_scanner_tool = "my_security_scanner.tools.scanner:ScannerTool"
 ```
 
+### Prompt Injection
+
+Extensions can contribute **system prompt fragments** that are automatically
+appended to the agent's system prompt at runtime. Fragments appear in an
+`## Extension Prompts` section after the profile's `prompt_scope`.
+
+Prompt entry points can resolve to:
+
+| Type       | Behaviour                                      |
+| ---------- | ---------------------------------------------- |
+| `str`      | Used directly as a prompt fragment             |
+| `Path`     | Read as a text file and used as a fragment     |
+| callable   | Called with no arguments; must return a `str`   |
+
+Prompt fragments are **additive** — they are appended after the profile scope
+and never replace it. This allows extensions to layer domain-specific
+instructions on top of any base profile.
+
+### Workflow Discovery
+
+Extensions can ship **workflow directories** containing `.md` workflow files.
+These workflows are listed in `agent-forge extensions list` for reference but
+are not auto-injected into the agent runtime. This preserves the domain-agnostic
+core principle while making extension-provided workflows discoverable.
+
 ### Managing Extensions
 
 ```bash
-# List all installed extensions, profiles, and tools
+# List all installed extensions, profiles, tools, prompts, and workflows
 agent-forge extensions list
 ```
 
 This displays a Rich table showing each extension's name, version, profiles,
-and tools.
+tools, prompts, and workflows.
 
 ### Building Domain Extensions
 
