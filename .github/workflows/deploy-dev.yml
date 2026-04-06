@@ -85,6 +85,7 @@ jobs:
           gcloud compute ssh "${DEV_GCP_VM_NAME}" \
             --zone "${DEV_GCP_ZONE}" \
             --project "${DEV_GCP_PROJECT}" \
+            --tunnel-through-iap \
             --command "${REMOTE_COMMAND}"
 
       - name: Verify hosted service health
@@ -99,4 +100,5 @@ jobs:
           gcloud compute ssh "${DEV_GCP_VM_NAME}" \
             --zone "${DEV_GCP_ZONE}" \
             --project "${DEV_GCP_PROJECT}" \
+            --tunnel-through-iap \
             --command "${REMOTE_COMMAND}"

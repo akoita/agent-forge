@@ -1360,7 +1360,8 @@ manual dispatches.
 ### 11.3 GitHub Actions Dev Deployment
 
 The dev deployment workflow uses GitHub's OIDC token with Google Cloud Workload
-Identity Federation, then runs a remote deploy script on the dev VM over SSH.
+Identity Federation, then runs a remote deploy script on the dev VM over SSH
+through IAP TCP forwarding.
 
 Required GitHub environment configuration for `dev`:
 
@@ -1380,12 +1381,14 @@ Workflow behavior:
 2. Resolve the deploy ref from the manual input when present, otherwise use the
    triggering commit SHA
 3. Authenticate to Google Cloud with Workload Identity Federation
-4. SSH to the configured VM and invoke the remote deploy script with the ref
+4. SSH to the configured VM with `gcloud compute ssh --tunnel-through-iap` and
+   invoke the remote deploy script with the ref
 5. Verify the hosted service health endpoint from the VM after deploy
 
 The deploy workflow depends on infrastructure managed outside this repository:
 the VM deploy script must already exist, the service account must have VM login
-permissions, and the WIF provider must trust `repo:akoita/agent-forge:*`.
+permissions, the service account must have IAP tunnel access, and the WIF
+provider must trust `repo:akoita/agent-forge:*`.
 
 ### 11.4 Docker Compose (Development)
 

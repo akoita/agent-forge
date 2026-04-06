@@ -220,10 +220,23 @@ Operational contract:
 
 - the VM must already expose the deploy script at
   `DEV_DEPLOY_SCRIPT_PATH`
-- the GitHub identity must be allowed to SSH to the VM through OS Login
+- the GitHub identity must be allowed to SSH to the VM through IAP and OS Login
 - the remote deploy script is responsible for fetching the requested ref,
   rebuilding the hosted runtime, restarting services, and leaving the service
   ready for the health probe
+
+The supported deploy path is:
+
+- `gcloud compute ssh --tunnel-through-iap`
+
+That requires the target project to have:
+
+- `iap.googleapis.com` enabled
+- `roles/iap.tunnelResourceAccessor` on the deploy service account
+- `roles/compute.osAdminLogin` on the deploy service account
+
+Direct SSH from a GitHub-hosted runner to the VM external IP is not the
+supported deploy path.
 
 If the paired `agent-forge-iac` work has not been applied yet, the workflow can
 still be merged here, but live deployment attempts will fail until the VM
