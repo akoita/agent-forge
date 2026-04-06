@@ -1353,7 +1353,41 @@ The multi-instance deployment example lives in `docker-compose.extensions.yml`
 and layers on top of `docker-compose.yml` to bind specific personas to
 individual service instances.
 
-### 11.3 Docker Compose (Development)
+The repository also includes `.github/workflows/deploy-dev.yml`, which deploys
+the dev hosted environment from GitHub Actions after pushes to `main` and via
+manual dispatches.
+
+### 11.3 GitHub Actions Dev Deployment
+
+The dev deployment workflow uses GitHub's OIDC token with Google Cloud Workload
+Identity Federation, then runs a remote deploy script on the dev VM over SSH.
+
+Required GitHub environment configuration for `dev`:
+
+- Secrets:
+  - `GCP_WORKLOAD_IDENTITY_PROVIDER`
+  - `GCP_SERVICE_ACCOUNT`
+- Variables:
+  - `DEV_GCP_PROJECT`
+  - `DEV_GCP_ZONE`
+  - `DEV_GCP_VM_NAME`
+  - `DEV_DEPLOY_SCRIPT_PATH`
+  - `DEV_DEPLOY_HEALTHCHECK_URL`
+
+Workflow behavior:
+
+1. Trigger on `push` to `main` and `workflow_dispatch`
+2. Resolve the deploy ref from the manual input when present, otherwise use the
+   triggering commit SHA
+3. Authenticate to Google Cloud with Workload Identity Federation
+4. SSH to the configured VM and invoke the remote deploy script with the ref
+5. Verify the hosted service health endpoint from the VM after deploy
+
+The deploy workflow depends on infrastructure managed outside this repository:
+the VM deploy script must already exist, the service account must have VM login
+permissions, and the WIF provider must trust `repo:akoita/agent-forge:*`.
+
+### 11.4 Docker Compose (Development)
 
 ```yaml
 # docker-compose.yml
@@ -1376,7 +1410,7 @@ volumes:
   redis_data:
 ```
 
-### 11.4 Makefile
+### 11.5 Makefile
 
 ```makefile
 .PHONY: setup build test lint run clean

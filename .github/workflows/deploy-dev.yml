@@ -1,0 +1,102 @@
+name: Deploy Dev
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to deploy (defaults to the triggering commit SHA)
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: dev
+    env:
+      DEV_DEPLOY_HEALTHCHECK_URL: ${{ vars.DEV_DEPLOY_HEALTHCHECK_URL }}
+      DEV_DEPLOY_SCRIPT_PATH: ${{ vars.DEV_DEPLOY_SCRIPT_PATH }}
+      DEV_GCP_PROJECT: ${{ vars.DEV_GCP_PROJECT }}
+      DEV_GCP_VM_NAME: ${{ vars.DEV_GCP_VM_NAME }}
+      DEV_GCP_ZONE: ${{ vars.DEV_GCP_ZONE }}
+    steps:
+      - name: Resolve deploy ref
+        id: deploy_ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.ref }}" ]]; then
+            echo "ref=${{ inputs.ref }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate deploy configuration
+        shell: bash
+        env:
+          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        run: |
+          set -euo pipefail
+          for name in \
+            GCP_WORKLOAD_IDENTITY_PROVIDER \
+            GCP_SERVICE_ACCOUNT \
+            DEV_GCP_PROJECT \
+            DEV_GCP_ZONE \
+            DEV_GCP_VM_NAME \
+            DEV_DEPLOY_SCRIPT_PATH \
+            DEV_DEPLOY_HEALTHCHECK_URL; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing required deploy setting: ${name}"
+              exit 1
+            fi
+          done
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.DEV_GCP_PROJECT }}
+
+      - name: Run remote deploy script
+        shell: bash
+        env:
+          DEPLOY_REF: ${{ steps.deploy_ref.outputs.ref }}
+        run: |
+          set -euo pipefail
+          REMOTE_COMMAND=$(printf "sudo %q %q" "${DEV_DEPLOY_SCRIPT_PATH}" "${DEPLOY_REF}")
+          gcloud compute ssh "${DEV_GCP_VM_NAME}" \
+            --zone "${DEV_GCP_ZONE}" \
+            --project "${DEV_GCP_PROJECT}" \
+            --command "${REMOTE_COMMAND}"
+
+      - name: Verify hosted service health
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 10
+          REMOTE_COMMAND=$(printf \
+            "curl --fail --silent --show-error --retry 5 --retry-delay 2 %q >/dev/null" \
+            "${DEV_DEPLOY_HEALTHCHECK_URL}"
+          )
+          gcloud compute ssh "${DEV_GCP_VM_NAME}" \
+            --zone "${DEV_GCP_ZONE}" \
+            --project "${DEV_GCP_PROJECT}" \
+            --command "${REMOTE_COMMAND}"

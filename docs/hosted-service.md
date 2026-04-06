@@ -71,6 +71,10 @@ the repository by installing one or more extension distributions via the
 `EXTENSIONS` build arg. `docker-compose.extensions.yml` is an override for
 running multiple persona-bound service instances from that image.
 
+The repository also includes `.github/workflows/deploy-dev.yml`, which deploys
+the hosted service to the dev GCE VM on every push to `main` and supports
+manual redeploys through `workflow_dispatch`.
+
 ### Multi-Instance Mode
 
 For production deployments, multiple instances can run concurrently behind a
@@ -181,6 +185,49 @@ export ANTHROPIC_API_KEY="..."
 
 Unset variables are passed through as empty strings, so only export the
 providers your personas need.
+
+## GitHub Actions Dev Deployment
+
+The `Deploy Dev` workflow is the repo-side deployment entrypoint for the dev
+hosted environment. It uses Workload Identity Federation to authenticate to
+Google Cloud, then calls the VM-local deploy script over SSH.
+
+Trigger modes:
+
+- automatic deploy on every push to `main`
+- manual deploy from the GitHub Actions UI with an optional `ref` override
+
+The workflow expects the following GitHub **environment secrets** on the `dev`
+environment:
+
+| Secret | Purpose |
+| --- | --- |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full Workload Identity Provider resource for GitHub Actions |
+| `GCP_SERVICE_ACCOUNT` | Service account email used for deploy authentication |
+
+The workflow also expects the following GitHub **environment variables** on the
+same `dev` environment:
+
+| Variable | Example |
+| --- | --- |
+| `DEV_GCP_PROJECT` | `agent-forge-dev` |
+| `DEV_GCP_ZONE` | `europe-west1-b` |
+| `DEV_GCP_VM_NAME` | `agent-forge-dev-vm` |
+| `DEV_DEPLOY_SCRIPT_PATH` | `/opt/agent-forge-deploy.sh` |
+| `DEV_DEPLOY_HEALTHCHECK_URL` | `http://localhost:8080/healthz` |
+
+Operational contract:
+
+- the VM must already expose the deploy script at
+  `DEV_DEPLOY_SCRIPT_PATH`
+- the GitHub identity must be allowed to SSH to the VM through OS Login
+- the remote deploy script is responsible for fetching the requested ref,
+  rebuilding the hosted runtime, restarting services, and leaving the service
+  ready for the health probe
+
+If the paired `agent-forge-iac` work has not been applied yet, the workflow can
+still be merged here, but live deployment attempts will fail until the VM
+script, IAM grants, and WIF trust policy are ready.
 
 ## Hosted Configuration
 
