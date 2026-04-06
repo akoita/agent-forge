@@ -178,7 +178,8 @@ network_enabled = false
 See the [Configuration Guide](docs/configuration.md) for full reference.
 For hosted deployments, auth, and operations, see the
 [Hosted Service Guide](docs/hosted-service.md), including the extension-aware
-image build and multi-instance compose workflow.
+image build, multi-instance compose workflow, and GitHub Actions dev deploy
+pipeline.
 
 ---
 
