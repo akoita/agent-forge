@@ -51,10 +51,12 @@ The current hosted deployment model assumes:
 - persistent disk for `service.root_dir` and `~/.agent-forge/runs`
 - optional Redis if you move beyond the in-memory queue backend
 
-The repository includes a service-oriented container image and compose service:
+The repository includes service-oriented deployment artifacts:
 
 - `Dockerfile.service`
 - `docker-compose.yml`
+- `Dockerfile.extension`
+- `docker-compose.extensions.yml`
 
 The compose topology is intended for local development and small hosted
 deployments:
@@ -63,6 +65,11 @@ deployments:
 - `redis` is available for queue-backed execution if enabled
 - a persistent volume stores service data and audit artifacts
 - the Docker socket is mounted so the hosted service can start per-run sandboxes
+
+`Dockerfile.extension` produces an extension-aware hosted image directly from
+the repository by installing one or more extension distributions via the
+`EXTENSIONS` build arg. `docker-compose.extensions.yml` is an override for
+running multiple persona-bound service instances from that image.
 
 ### Multi-Instance Mode
 
@@ -102,6 +109,78 @@ Key behavior:
   collide on source material, audit logs, or run artifacts.
 - Both flags are optional. Without them, the service runs in single-instance
   mode exactly as before (backward compatible).
+
+## Deploy With Extensions
+
+### 1. Build An Extension-Aware Image
+
+Use the extension Dockerfile when you want the hosted image to include
+installable extension packages:
+
+```bash
+docker build -f Dockerfile.extension \
+  --build-arg EXTENSIONS="agent-forge-proof-of-audit" \
+  -t agent-forge-poa:latest .
+```
+
+You can install multiple distributions in one image:
+
+```bash
+docker build -f Dockerfile.extension \
+  --build-arg EXTENSIONS="agent-forge-proof-of-audit agent-forge-web-security" \
+  -t agent-forge-extensions:latest .
+```
+
+The build runs `agent-forge extensions list` before it finishes so packaging
+and `entry_points` problems fail fast.
+
+For local extension development, the build context also includes `examples/`, so
+you can verify an in-repo extension package with a path such as
+`./examples/my-extension`.
+
+### 2. Verify Discovery Inside The Container
+
+Once the image is built, confirm the extensions are visible inside the runtime:
+
+```bash
+docker run --rm agent-forge-poa:latest agent-forge extensions list
+```
+
+If the extension is installed correctly, the output should include its
+profiles, tools, prompts, and workflows.
+
+### 3. Start The Multi-Instance Topology
+
+The compose override demonstrates a shared-Redis deployment where each service
+instance is pinned to a persona provided by an installed extension:
+
+```bash
+export AGENT_FORGE_EXTENSIONS="agent-forge-proof-of-audit"
+docker compose -f docker-compose.yml -f docker-compose.extensions.yml up --build
+```
+
+By default the override starts:
+
+- `agent-reentrancy` on port `8001`
+- `agent-access-control` on port `8002`
+- `agent-full-spectrum` on port `8003`
+
+Each instance gets its own persistent volume under `/var/lib/agent-forge`,
+while Redis is shared for queue-backed execution.
+
+### 4. Forward Provider Credentials
+
+The compose override forwards provider credentials from the host shell into each
+service container:
+
+```bash
+export GEMINI_API_KEY="..."
+export OPENAI_API_KEY="..."
+export ANTHROPIC_API_KEY="..."
+```
+
+Unset variables are passed through as empty strings, so only export the
+providers your personas need.
 
 ## Hosted Configuration
 
@@ -212,6 +291,9 @@ Or use compose:
 docker compose up agent-forge-service
 ```
 
+For extension-aware multi-instance deployments, prefer the override workflow in
+`docker-compose.extensions.yml`.
+
 ### 5. Exercise The API
 
 You can use the compatibility helper in `agent_forge.service.client` or a raw
@@ -267,6 +349,20 @@ Hosted mode writes useful state to disk:
 - `report_generation_failed`: agent completed (including recovery pass) without ever writing the report file
 - `report_invalid_json`: report.json exists but contains malformed JSON
 - `report_schema_invalid`: report.json is valid JSON but is missing required schema fields (e.g., `schema_version`, `summary`, `findings`, `stats`)
+
+### Extension Deployment Troubleshooting
+
+- `agent-forge extensions list` is empty inside the container: confirm the
+  package named in `EXTENSIONS` actually installs an `agent_forge.extensions`
+  entry point.
+- Profile lookup fails for `--persona`: verify the extension publishes the
+  expected `agent_forge.profiles` entry point and that the profile id matches
+  the value passed to `--persona`.
+- Workflow or prompt files are missing: ensure the wheel includes the
+  extension's `profiles/`, `prompts/`, and `workflows/` directories.
+- Local path resolution fails after installing an extension: inspect the
+  package's exported `Path` entry points and verify they resolve relative to the
+  installed package, not the source checkout.
 
 #### Report Recovery Pass
 

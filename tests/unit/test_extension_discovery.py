@@ -305,6 +305,26 @@ class TestDiscoverExtensionPromptFragments:
         result = discover_extension_prompt_fragments(entry_points_factory=factory)
         assert result == ["Check access controls."]
 
+    def test_discover_from_prompt_directory(self, tmp_path: Path) -> None:
+        """A Path entry_point can point to a directory of markdown fragments."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "01_scope.md").write_text("Check access controls.", encoding="utf-8")
+        (prompts_dir / "02_style.md").write_text(
+            "Prefer concrete remediation steps.",
+            encoding="utf-8",
+        )
+
+        ep = _mock_ep("my-ext", load_return=prompts_dir)
+
+        def factory(group: str) -> list[MagicMock]:
+            if group == PROMPT_PLUGIN_GROUP:
+                return [ep]
+            return []
+
+        result = discover_extension_prompt_fragments(entry_points_factory=factory)
+        assert result == ["Check access controls.\n\nPrefer concrete remediation steps."]
+
     def test_discover_from_callable(self) -> None:
         """A callable entry_point returning a string is resolved."""
 

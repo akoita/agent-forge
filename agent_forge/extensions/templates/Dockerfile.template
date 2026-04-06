@@ -1,0 +1,18 @@
+# Dockerfile — install $extension_name into an Agent Forge service image
+#
+# Usage:
+#   docker build \
+#     --build-arg AGENT_FORGE_IMAGE=agent-forge-service:latest \
+#     -t agent-forge-$extension_name:latest .
+
+ARG AGENT_FORGE_IMAGE=agent-forge-service:latest
+FROM ${AGENT_FORGE_IMAGE}
+
+WORKDIR /opt/$package_name
+
+COPY pyproject.toml README.md ./
+COPY $package_name ./$package_name
+
+RUN pip install --no-cache-dir .
+
+RUN agent-forge extensions list
