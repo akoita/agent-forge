@@ -78,21 +78,21 @@ When the user says "finish issue", "wrap up", or indicates the work is done, fol
 - Push to remote: `git push -u origin <branch-name>`
 - Verify the push succeeded
 
-## 9. Verify CI passes on the branch
-
-- After pushing, check the CI/CD status on the branch commit using `pull_request_read` with `method: get_status`
-- **Poll until CI is conclusive:** if `state` is `pending` and `total_count > 0`, wait 30 seconds and re-check (repeat up to 10 times)
-- If `total_count == 0` (no CI checks configured), **ask the user** whether to proceed without CI — do NOT auto-proceed
-- If any check fails, fix the issues locally, commit, push, and re-poll from the beginning
-- Do NOT proceed to step 10 until CI state is `success`
-
-## 10. Create PR and merge
+## 9. Create PR
 
 - Create a Pull Request targeting `main` with:
   - Title: concise description (referencing the issue number if one exists)
   - Body: summary of changes (+ `Closes #N` only if an issue exists)
-- **Wait for PR CI checks:** poll `pull_request_read` with `method: get_status` until the PR's status is conclusive (same polling logic as step 9)
-- **ONLY merge when CI state is `success`** (prefer squash merge for clean history)
+- Verify the PR was created successfully before continuing
+
+## 10. Verify PR CI passes and merge
+
+- Check the PR's required status checks after the PR is open
+- Prefer the repo's summary gate when configured: the `build` check must pass before merge
+- **Poll until CI is conclusive:** if checks are pending, wait 30 seconds and re-check (repeat up to 10 times)
+- If no CI checks are configured on the PR, **stop and ask the user** before proceeding
+- If any required check fails, fix the issues locally, commit, push, and re-poll from the beginning
+- **ONLY merge when the PR's required checks are green** (prefer squash merge for clean history)
 - If CI fails on the PR, fix on the branch, push, and re-poll
 - **NEVER merge a PR with pending or failing CI** — this is a hard stop
 
@@ -127,6 +127,6 @@ When the user says "finish issue", "wrap up", or indicates the work is done, fol
 - **NEVER commit or push before user approval** — always ask first
 - **NEVER force-push to `main`**
 - **NEVER delete `main`** — only delete feature and fix branches
-- **ALWAYS verify CI** before and after merging
+- **ALWAYS verify PR CI** before merging, and main CI after merging
 - If in doubt about sensitive files, ask the user before committing
 - If the merge creates conflicts, resolve them on the feature branch before merging

@@ -73,6 +73,7 @@ class TestScaffoldExtension:
         assert (pkg / "tools" / "__init__.py").is_file()
         assert (pkg / "tools" / "sample_tool.py").is_file()
         assert (result / "pyproject.toml").is_file()
+        assert (result / "Dockerfile").is_file()
         assert (result / "README.md").is_file()
         assert (result / "tests").is_dir()
         assert (result / "tests" / "test_sample_tool.py").is_file()
@@ -210,3 +211,13 @@ class TestScaffoldExtension:
         init = (tmp_path / "init-check" / "init_check" / "__init__.py").read_text()
         assert "PROMPTS_DIR" in init
         assert "WORKFLOWS_DIR" in init
+
+    def test_creates_extension_dockerfile_template(self, tmp_path: Path) -> None:
+        """Scaffolded projects should include a hosted-service Dockerfile."""
+        scaffold_extension("deploy-ext", target_dir=tmp_path)
+
+        dockerfile = (tmp_path / "deploy-ext" / "Dockerfile").read_text()
+        assert "ARG AGENT_FORGE_IMAGE=agent-forge-service:latest" in dockerfile
+        assert "FROM ${AGENT_FORGE_IMAGE}" in dockerfile
+        assert "RUN pip install --no-cache-dir ." in dockerfile
+        assert "RUN agent-forge extensions list" in dockerfile

@@ -190,7 +190,7 @@ def discover_extension_prompt_fragments(
     point should resolve to one of:
 
     - A ``str`` — raw markdown prompt fragment.
-    - A ``Path`` — pointing to a ``.md`` file containing the fragment.
+    - A ``Path`` — pointing to a ``.md`` file or a directory of ``.md`` files.
     - A callable returning a ``str``.
 
     Args:
@@ -227,12 +227,20 @@ def _resolve_prompt_fragment(name: str, loaded: Any) -> str | None:
     if isinstance(loaded, str):
         return loaded
 
-    # Path to a .md file
+    # Path to a .md file or directory of .md files
     if isinstance(loaded, Path):
         if loaded.is_file():
             return loaded.read_text(encoding="utf-8").strip()
+        if loaded.is_dir():
+            fragments = [
+                path.read_text(encoding="utf-8").strip()
+                for path in sorted(loaded.iterdir())
+                if path.suffix == ".md" and path.is_file()
+            ]
+            if fragments:
+                return "\n\n".join(fragment for fragment in fragments if fragment)
         logger.warning(
-            "Prompt entry point '%s' resolved to a non-file path: %s",
+            "Prompt entry point '%s' resolved to an invalid path: %s",
             name,
             loaded,
         )

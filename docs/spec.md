@@ -1220,8 +1220,10 @@ pytest --cov=agent_forge --cov-report=html
 agent-forge/
 ├── pyproject.toml                   # Project metadata, dependencies
 ├── agent-forge.toml                 # Default configuration
-├── Dockerfile                       # Sandbox base image
-├── docker-compose.yml               # Full stack (app + Redis)
+├── Dockerfile.service               # Hosted service image
+├── Dockerfile.extension             # Hosted image with extension packages
+├── docker-compose.yml               # Hosted stack (service + Redis)
+├── docker-compose.extensions.yml    # Multi-instance hosted override with extensions
 ├── Makefile                         # Common commands
 ├── README.md                        # Project documentation
 ├── spec.md                          # This specification
@@ -1338,7 +1340,20 @@ dev = [
 ]
 ```
 
-### 11.2 Docker Compose (Development)
+### 11.2 Hosted Images And Compose
+
+Hosted deployments use two top-level Dockerfiles:
+
+- `Dockerfile.service` builds the base hosted runtime for `agent-forge serve`
+- `Dockerfile.extension` installs one or more extension distributions via
+  `--build-arg EXTENSIONS="pkg-one pkg-two"` and verifies discovery with
+  `agent-forge extensions list`
+
+The multi-instance deployment example lives in `docker-compose.extensions.yml`
+and layers on top of `docker-compose.yml` to bind specific personas to
+individual service instances.
+
+### 11.3 Docker Compose (Development)
 
 ```yaml
 # docker-compose.yml
@@ -1361,7 +1376,7 @@ volumes:
   redis_data:
 ```
 
-### 11.3 Makefile
+### 11.4 Makefile
 
 ```makefile
 .PHONY: setup build test lint run clean

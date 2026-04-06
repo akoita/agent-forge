@@ -296,6 +296,7 @@ Running `agent-forge init-extension my-security-scanner` creates:
 
 ```
 my-security-scanner/
+├── Dockerfile                          # Extend a base Agent Forge image
 ├── pyproject.toml                        # entry_points pre-configured
 ├── README.md
 ├── my_security_scanner/
@@ -356,7 +357,7 @@ Prompt entry points can resolve to:
 | Type       | Behaviour                                      |
 | ---------- | ---------------------------------------------- |
 | `str`      | Used directly as a prompt fragment             |
-| `Path`     | Read as a text file and used as a fragment     |
+| `Path`     | Read from a `.md` file or a directory of `.md` files |
 | callable   | Called with no arguments; must return a `str`   |
 
 Prompt fragments are **additive** — they are appended after the profile scope
@@ -379,6 +380,20 @@ agent-forge extensions list
 
 This displays a Rich table showing each extension's name, version, profiles,
 tools, prompts, and workflows.
+
+### Deployment Template
+
+Scaffolded extensions also include a `Dockerfile` that installs the extension
+into an existing Agent Forge service image:
+
+```bash
+docker build \
+  --build-arg AGENT_FORGE_IMAGE=agent-forge-service:latest \
+  -t agent-forge-my-security-scanner:latest .
+```
+
+This keeps deployment logic in the extension project while relying on the core
+service image for the hosted runtime and CLI entry points.
 
 ### Building Domain Extensions
 

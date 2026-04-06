@@ -26,6 +26,14 @@ agent-forge extensions list
 agent-forge run --profile $package_name-default --task "Your task" --repo ./your-repo
 ```
 
+To build a hosted-service image with this extension installed:
+
+```bash
+docker build \
+  --build-arg AGENT_FORGE_IMAGE=agent-forge-service:latest \
+  -t agent-forge-$extension_name:latest .
+```
+
 ## Development
 
 ```bash
@@ -40,6 +48,7 @@ pytest
 
 ```
 $extension_name/
+├── Dockerfile
 ├── pyproject.toml
 ├── README.md
 ├── $package_name/

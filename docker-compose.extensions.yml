@@ -1,0 +1,95 @@
+# -----------------------------------------------------------------------
+# docker-compose.extensions.yml — multi-instance topology with extensions
+#
+# Use with the base docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.extensions.yml up --build
+#
+# The override disables the single default service and replaces it with
+# persona-bound instances built from Dockerfile.extension.
+# -----------------------------------------------------------------------
+
+x-agent-forge-extension-service: &agent-forge-extension-service
+  image: ${AGENT_FORGE_EXTENSION_IMAGE:-agent-forge-extensions:latest}
+  build:
+    context: .
+    dockerfile: Dockerfile.extension
+    args:
+      EXTENSIONS: ${AGENT_FORGE_EXTENSIONS:-agent-forge-proof-of-audit}
+  environment: &agent-forge-extension-env
+    AGENT_FORGE_SERVICE_HOST: "0.0.0.0"
+    AGENT_FORGE_SERVICE_PORT: "8000"
+    AGENT_FORGE_SERVICE_ROOT_DIR: "/var/lib/agent-forge/service"
+    AGENT_FORGE_SERVICE_AUTH_ENABLED: "true"
+    AGENT_FORGE_SERVICE_CLIENTS_PATH: "/var/lib/agent-forge/service/clients.toml"
+    AGENT_FORGE_QUEUE_BACKEND: "redis"
+    AGENT_FORGE_QUEUE_REDIS_URL: "redis://redis:6379/0"
+    GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+    OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+    ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+  depends_on:
+    redis:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+    interval: 10s
+    timeout: 5s
+    retries: 5
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+
+services:
+  agent-forge-service:
+    profiles: ["disabled"]
+
+  agent-reentrancy:
+    <<: *agent-forge-extension-service
+    command:
+      - "sh"
+      - "-lc"
+      - >-
+        agent-forge serve
+        --host 0.0.0.0 --port 8000
+        --persona reentrancy-only
+        --instance-id agent-reentrancy
+    ports:
+      - "8001:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent_reentrancy_data:/var/lib/agent-forge
+
+  agent-access-control:
+    <<: *agent-forge-extension-service
+    command:
+      - "sh"
+      - "-lc"
+      - >-
+        agent-forge serve
+        --host 0.0.0.0 --port 8000
+        --persona access-control-only
+        --instance-id agent-access-control
+    ports:
+      - "8002:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent_access_control_data:/var/lib/agent-forge
+
+  agent-full-spectrum:
+    <<: *agent-forge-extension-service
+    command:
+      - "sh"
+      - "-lc"
+      - >-
+        agent-forge serve
+        --host 0.0.0.0 --port 8000
+        --persona full-spectrum
+        --instance-id agent-full-spectrum
+    ports:
+      - "8003:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent_full_spectrum_data:/var/lib/agent-forge
+
+volumes:
+  agent_reentrancy_data:
+  agent_access_control_data:
+  agent_full_spectrum_data:

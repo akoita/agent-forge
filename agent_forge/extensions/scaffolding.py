@@ -105,6 +105,7 @@ def scaffold_extension(name: str, target_dir: Path | None = None) -> Path:
     (project_root / "tests").mkdir(parents=True, exist_ok=True)
 
     # Render and write templates
+    _write_template("Dockerfile.template", project_root / "Dockerfile", context)
     _write_template("pyproject.toml.template", project_root / "pyproject.toml", context)
     _write_template("README.md.template", project_root / "README.md", context)
     _write_template("__init__.py.template", pkg_dir / "__init__.py", context)
