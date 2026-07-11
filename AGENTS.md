@@ -2,8 +2,9 @@
 
 > This file is read by every AI coding assistant working in this repo
 > (Claude Code, Codex CLI, Gemini Code Assist, GitHub Copilot, etc.).
-> Keep it concise and current. Tool-specific notes live in `CLAUDE.md`,
-> `.codex/config.toml`, and `.claude/settings.json`.
+> `CLAUDE.md` is a symlink to this file — there is one source of truth.
+> Keep it concise and current. Tool-specific configuration lives in
+> `.codex/config.toml` and `.claude/settings.json`.
 
 ## 1. Mission & direction
 
@@ -45,6 +46,7 @@ one merge policy, stated once below.
   session) satisfies the approval half — record that standing approval in the
   PR. Absent standing approval, request review and stop; do not merge.
 - **Never force-push `main`.** Force-push feature branches only when necessary.
+- **Use git worktrees for parallel tasks** so concurrent branches stay isolated.
 - **Clean up after merge** — delete the merged feature branch (local + remote)
   and realign local `main`.
 
@@ -166,7 +168,7 @@ Runners: `make test-unit`, `make test-integration`, `make test` (all + coverage)
 
 ## 7. Code quality
 
-- Run `make lint` (ruff check + mypy) before committing.
+- Run `make lint` (ruff check + mypy) and `make test-unit` before committing.
 - Run `make format` (ruff format) to auto-format.
 - All public functions and methods have **type hints**.
 - Use **Google-style docstrings** for public APIs.
