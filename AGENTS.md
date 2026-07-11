@@ -1,43 +1,71 @@
 # Agent Forge — AI Agent Coding Standards
 
-> This file is read by AI coding assistants (GitHub Copilot, Gemini Code Assist, Claude, etc.)
-> to enforce project-wide conventions. Keep it up to date.
+> This file is read by every AI coding assistant working in this repo
+> (Claude Code, Codex CLI, Gemini Code Assist, GitHub Copilot, etc.).
+> Keep it concise and current. Tool-specific notes live in `CLAUDE.md`,
+> `.codex/config.toml`, and `.claude/settings.json`.
 
-## 🚨 No Hardcoded Configuration Values
+## 1. Mission & direction
 
-**NEVER hardcode** URLs, ports, secrets, API keys, or any
-environment-dependent values directly in source code.
+Agent Forge is a **small, measurable, high-correctness coding harness** — not a
+broad agent platform. Every change should make the harness more correct or
+better measured, not merely broader.
 
-### Rules
+- **Canonical roadmap:** `docs/roadmap.md`
+- **Pivot decision:** `docs/adr/002-harness-first-reset.md`
 
-1. **Always use environment variables** with a sensible local-dev fallback:
+**Quality gates for every substantive change** (state each in the PR body):
 
-   ```python
-   # ✅ CORRECT
-   api_key = os.environ.get("GEMINI_API_KEY")
+1. **Evidence** — benchmark/eval results, or an explicit `N/A` with a reason.
+2. **Boundary check green** — `python scripts/check_boundaries.py` passes.
+3. **ADR** — architecture-affecting decisions get an ADR in `docs/adr/`.
+4. **Docs in the same branch** — behavior changes ship with their doc updates.
 
-   # ❌ WRONG — hardcoded key
-   api_key = "AIzaSy..."
+---
 
-   # ❌ WRONG — hardcoded URL
-   redis_url = "redis://production-host:6379/0"
-   ```
+## 2. Authority boundaries — git workflow
 
-2. **Use the configuration system** — don't redeclare config in every file:
+This section is the single source of truth for git authority. There is exactly
+one merge policy, stated once below.
 
-   ```python
-   # ✅ Import from the canonical source
-   from agent_forge.config import load_config
-   config = load_config()
+- **Never push to `main`.** All work happens on a feature branch. Naming:
+  - `feat/<issue-number>-<short-description>` — features
+  - `fix/<issue-number>-<short-description>` — bug fixes
+  - `docs/<issue-number>-<short-description>` — documentation
+  - `refactor/<short-description>` — refactoring
+  - `test/<short-description>` — test additions
+- **Commit and push autonomously on a feature branch.** No per-commit approval
+  is needed. Use [Conventional Commits](https://www.conventionalcommits.org/)
+  (`feat(#N): ...`, `fix(#N): ...`) and keep commits atomic.
+- **Open PRs autonomously**, targeting `main`, referencing the issue
+  (`Closes #N`). The PR body follows the template: evidence, benchmark impact,
+  boundary analysis, rollback.
+- **MERGE GATE:** merging requires **CI green AND developer approval**. A
+  developer's *standing approval* (pre-authorizing merges for a task or
+  session) satisfies the approval half — record that standing approval in the
+  PR. Absent standing approval, request review and stop; do not merge.
+- **Never force-push `main`.** Force-push feature branches only when necessary.
+- **Clean up after merge** — delete the merged feature branch (local + remote)
+  and realign local `main`.
 
-   # ❌ Don't redeclare per-file
-   REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-   ```
+Use the workflows in `.agents/workflows/start-issue.md` and
+`.agents/workflows/finish-issue.md`.
 
-3. **Never commit secrets** — API keys, tokens, and credentials must come from
-   environment variables, never from source. The `.env` file is in `.gitignore`.
+---
 
-### Environment Variable Naming
+## 3. No hardcoded configuration
+
+**Never hardcode** URLs, ports, secrets, API keys, or environment-dependent
+values in source.
+
+- **Use environment variables** with a sensible local-dev fallback
+  (`os.environ.get("GEMINI_API_KEY")`), never a literal key or URL.
+- **Load config through `agent_forge.config`** (`load_config()`) — do not
+  redeclare config per file.
+- **Never commit secrets.** Keys, tokens, and credentials come from the
+  environment. `.env` is gitignored.
+- **Document new env vars** in `docs/spec.md § Configuration` and the
+  `agent-forge.toml` defaults.
 
 | Prefix              | Purpose                              | Example                            |
 | ------------------- | ------------------------------------ | ---------------------------------- |
@@ -46,61 +74,55 @@ environment-dependent values directly in source code.
 | `OPENAI_API_KEY`    | LLM provider key (direct, no prefix) | `OPENAI_API_KEY`                   |
 | `ANTHROPIC_API_KEY` | LLM provider key (direct, no prefix) | `ANTHROPIC_API_KEY`                |
 
-### Required Environment Variables
+---
 
-Document any new env var in `docs/spec.md § Configuration` and the project's `agent-forge.toml` defaults.
+## 4. Domain-agnostic core — extension-first
+
+Agent Forge's core is a **generic coding harness**. Anything tied to a specific
+use case (smart-contract auditing, web-security scanning, migration, etc.)
+lives in the extension layer, never in `agent_forge/*`.
+
+```
+CORE  (agent_forge/*)        Generic: LLM adapters, ReAct loop, sandbox,
+                             tools, profiles, orchestration, observability,
+                             CLI, hosted-service shell.
+EXTENSION LAYER              Domain features loaded at runtime:
+(plugins/, skills/,          plugins/proof-of-audit/ (audit profiles,
+ workflows/)                 detectors, report schemas), other domains,
+                             --profiles-dir, entry_points, prompt_scope.
+```
+
+**Rules**
+
+1. **No domain vocabulary in `agent_forge/*`.** Terms like `audit`, `solidity`,
+   `severity`, `finding`, `detector`, `reentrancy`, `vulnerability` are
+   audit-domain vocabulary and must not appear in core packages.
+2. **Use generic abstractions in core.** A profile carries `prompt_scope`
+   (generic), not `detectors`. A report is a JSON artifact, not a
+   "proof-of-audit report".
+3. **Deliver domain features via extensions** — profiles as YAML under a
+   plugin's `profiles/` (`--profiles-dir`), tools via `agent_forge.tools` entry
+   points, prompts through the generic `prompt_scope` field, workflows as
+   markdown under `.agents/workflows/`.
+4. **Test accordingly.** Core tests must not depend on any domain profile or
+   plugin existing; domain tests live with the plugin.
+
+**Enforcement is mechanical.** `scripts/check_boundaries.py` runs in CI.
+`scripts/boundary_baseline.txt` lists the historical violations being extracted
+(issue #140) — it may only **shrink**, never grow. To mark a deliberate false
+positive, add `# boundary-ok` on that line.
 
 ---
 
-## 🚨 Git Workflow — Branch & PR Only
+## 5. Architecture conventions
 
-**NEVER push directly to `main`.** All changes must go through a feature branch and Pull Request.
+**Python**
 
-### Rules
-
-1. **Always work on a branch** — use the naming conventions:
-   - `feat/<issue-number>-<short-description>` for features
-   - `fix/<issue-number>-<short-description>` for bug fixes
-   - `docs/<issue-number>-<short-description>` for documentation
-   - `refactor/<short-description>` for refactoring
-   - `test/<short-description>` for test additions
-
-2. **Submit a Pull Request** targeting `main` — include a clear description and reference the issue (`Closes #N`).
-
-3. **Merge only on explicit developer request** — never merge a PR autonomously. Wait for the developer to say "merge", "you can merge", or equivalent.
-
-4. **Never force-push to `main`** — only force-push on feature branches if absolutely necessary.
-
-5. **Clean up after merge** — delete the feature branch (local + remote) and align local `main`.
-
-6. **Use the `/start-issue` workflow** when beginning work on any issue or task. Run the steps in `.agent/workflows/start-issue.md`.
-
-7. **Automatically run `/finish-issue` when completing work.** When work on any issue or task is done, **always execute every step** in `.agents/workflows/finish-issue.md` — verify coverage, run tests, lint, commit, push, open PR, wait for CI green, and merge. This workflow is mandatory, not optional. Do not skip steps or ask whether to run it.
-
-8. **Update documentation with every user-facing change.** Any change that
-   modifies CLI flags, API endpoints, configuration options, deployment
-   topology, or observable behavior **must** include corresponding documentation
-   updates in the same branch. Review and update as needed:
-   - `README.md` — features, project structure, usage examples
-   - `docs/` — architecture, configuration, hosted-service, extending, testing
-   - `docs/spec.md` — technical specification, interface contracts
-   - Inline docstrings in changed modules
-   
-   Skip only for purely internal refactors with zero user-facing impact.
-
----
-
-## Architecture Conventions
-
-### Python
-
-- **Python 3.11+** — use modern syntax: `X | Y` unions, `match` statements, `tomllib`
-- **Async-first** — use `async/await` for I/O-bound operations (LLM calls, Docker, file I/O)
-- **ABCs for interfaces** — all providers and tools implement abstract base classes
-- **Pydantic for validation** — use Pydantic models for external data (config, API responses)
-- **Dataclasses for internals** — use `@dataclass` for internal data structures
-
-### Module Layout
+- **Python 3.11+** — modern syntax: `X | Y` unions, `match`, `tomllib`.
+- **Async-first** — `async/await` for I/O (LLM calls, Docker, file I/O).
+- **ABCs for interfaces** — providers and tools implement abstract base classes.
+- **Pydantic for external data** (config, API responses); `@dataclass` for
+  internal structures.
 
 | Package                     | Purpose                                      |
 | --------------------------- | -------------------------------------------- |
@@ -111,89 +133,13 @@ Document any new env var in `docs/spec.md § Configuration` and the project's `a
 | `agent_forge.orchestration` | Task queue, event bus, workers               |
 | `agent_forge.observability` | Structured logging, tracing, cost tracking   |
 
-### Docker / Sandbox
-
-- Sandbox containers use `--network none` by default
-- Never pass API keys into the sandbox
-- Resource limits are mandatory: `--cpus`, `--memory`, `--pids-limit`
-- All file operations are validated to stay within `/workspace`
+**Docker / sandbox** — containers run `--network none` by default; never pass
+API keys into the sandbox; resource limits (`--cpus`, `--memory`,
+`--pids-limit`) are mandatory; all file ops stay within `/workspace`.
 
 ---
 
-## 🚨 Domain-Agnostic Core — Extension-First Architecture
-
-Agent Forge is a **generic coding agent framework** — comparable to Claude Code, Codex, or Antigravity.
-It must remain **domain-agnostic**. Any feature tied to a specific use case (smart contract auditing,
-web security scanning, code migration, etc.) belongs in the **extension layer**, never in the core packages.
-
-### The Boundary
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  CORE  (agent_forge/*)                                       │
-│  Generic, domain-agnostic capabilities:                      │
-│  LLM adapters, ReAct loop, sandbox, tools, profiles,         │
-│  orchestration, observability, CLI, hosted service shell      │
-├──────────────────────────────────────────────────────────────┤
-│  EXTENSION LAYER  (plugins/, skills/, workflows/)            │
-│  Domain-specific capabilities loaded at runtime:             │
-│  - plugins/proof-of-audit/  → audit profiles, detectors,    │
-│    report schemas, challenge evidence, multi-agent personas  │
-│  - plugins/<other-domain>/  → any future specialization      │
-│  - --profiles-dir, entry_points, skill files, workflows      │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### Rules
-
-1. **Core packages must not import or reference domain-specific concepts.**
-   Terms like "reentrancy", "access control", "vulnerability", "finding", "severity",
-   "detector" are audit-domain vocabulary — they do not belong in `agent_forge.*`.
-
-2. **Use generic abstractions in core.** A profile has `prompt_scope` (generic),
-   not `detectors` (audit-specific). A report is a JSON artifact, not a
-   "proof-of-audit report".
-
-3. **Domain features are delivered via extensions:**
-   - **Profiles** → YAML files in a plugin's `profiles/` directory, loaded with `--profiles-dir`
-   - **Tools** → Python entry points registered under `agent_forge.tools`
-   - **Prompts** → Injected through the generic `prompt_scope` field on `AgentProfile`
-   - **Workflows** → Markdown files in `.agent/workflows/`
-
-4. **Test accordingly.** Core tests must not depend on any domain-specific profile
-   or plugin existing. Domain tests live alongside the plugin.
-
-### Example: Adding a New Domain
-
-To add a "web-security-scanner" domain, create `plugins/web-security-scanner/` with its own
-profiles, tools, and workflows. **Do not modify any file under `agent_forge/`** to add
-web-security concepts.
-
-### Distribution Model
-
-Extensions can be **separate installable packages** — they do not need to live in
-this monorepo. A user installs the core agent and then adds domain capabilities:
-
-```bash
-pip install agent-forge                        # core framework
-pip install agent-forge-proof-of-audit         # audit profiles, tools, report schemas
-pip install agent-forge-web-security           # hypothetical web-security extension
-```
-
-The `plugins/` directory in this repo is a **development convenience** for first-party
-extensions. At runtime, extensions are discovered through:
-
-- **`entry_points`** — Python's standard plugin mechanism (already used for tools
-  via the `agent_forge.tools` group in `tools/plugins.py`).
-  Future groups: `agent_forge.profiles`, `agent_forge.prompts`.
-- **`--profiles-dir`** — CLI flag pointing to a directory of profile YAMLs.
-- **Config** — `agent-forge.toml` can declare extension paths.
-
----
-
-## 🧪 Testing Standards
-
-### File Naming
+## 6. Testing standards
 
 | Pattern                       | Purpose                                      | Runner                  |
 | ----------------------------- | -------------------------------------------- | ----------------------- |
@@ -201,52 +147,28 @@ extensions. At runtime, extensions are discovered through:
 | `tests/integration/test_*.py` | Tests with real Docker containers            | `make test-integration` |
 | `tests/e2e/test_*.py`         | Full agent run on sample repos               | `make test` (all)       |
 
-### Rules
+**Rules**
 
-1. **Mock LLM responses, not tools.** Tools should be tested against a real sandbox when possible. Use recorded/cached LLM responses (VCR pattern) for deterministic tests.
+1. **Mock LLM responses, not tools.** Test tools against a real sandbox where
+   possible; use recorded/cached LLM responses (VCR pattern) for determinism.
+2. **Use `pytest` fixtures** for sandbox setup/teardown — no manual setup in
+   the test body.
+3. **Never mock the sandbox in integration tests** — they exist to verify real
+   Docker interactions.
+4. **Use `respx`** for HTTP mocking in LLM adapter unit tests.
+5. **e2e and eval tests must assert outcomes.** A "fix" test asserts the patch
+   exists/applies and verification passes. Asserting only exit codes or "the
+   agent ran" is not acceptable.
 
-2. **Use `pytest` fixtures** for sandbox setup/teardown:
-
-   ```python
-   # ✅ CORRECT — use fixture
-   @pytest.fixture
-   async def sandbox():
-       sb = DockerSandbox()
-       await sb.start("./tests/fixtures/sample_repo", SandboxConfig())
-       yield sb
-       await sb.stop()
-
-   # ❌ WRONG — manual setup in test body
-   ```
-
-3. **Never mock the sandbox in integration tests.** Integration tests exist to verify real Docker interactions.
-
-4. **Use `respx` for HTTP mocking** in LLM adapter unit tests:
-
-   ```python
-   # ✅ CORRECT — mock HTTP, not the adapter
-   respx.post("https://generativelanguage.googleapis.com/...").respond(json={...})
-   ```
-
-### Running Tests
-
-```bash
-# Unit tests only (fast, no Docker needed)
-make test-unit
-
-# Integration tests (requires Docker)
-make test-integration
-
-# All tests with coverage
-make test
-```
+Runners: `make test-unit`, `make test-integration`, `make test` (all + coverage).
 
 ---
 
-## Code Quality
+## 7. Code quality
 
-- Run `make lint` before committing (ruff check + mypy)
-- Run `make format` to auto-format (ruff format)
-- All public functions and methods must have **type hints**
-- Use **Google-style docstrings** for public APIs
-- Follow [Conventional Commits](https://www.conventionalcommits.org/) for all commit messages
+- Run `make lint` (ruff check + mypy) before committing.
+- Run `make format` (ruff format) to auto-format.
+- All public functions and methods have **type hints**.
+- Use **Google-style docstrings** for public APIs.
+- Follow [Conventional Commits](https://www.conventionalcommits.org/) for
+  all commit messages.

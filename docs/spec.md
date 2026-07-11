@@ -1452,86 +1452,17 @@ clean:                     ## Clean up containers and build artifacts
 
 ## 12. Roadmap
 
-### Phase 1 — Core Agent MVP
+The roadmap has moved. The canonical roadmap now lives in
+[`docs/roadmap.md`](roadmap.md), and its direction is set by
+[ADR-002: Harness-First Strategic Reset](adr/002-harness-first-reset.md).
 
-> **Goal:** A working end-to-end agent that can modify code inside a Docker sandbox.
+The former Phase 1–7 checklist that occupied this section is **superseded**.
+Phases 1 and 2 were in fact delivered (the unchecked boxes were stale). The
+remaining phases were re-scoped into the harness-first milestones (M0–M6) in
+[`docs/roadmap.md`](roadmap.md) or moved to the `agent-forge-cloud` backlog
+(umbrella issue [#142](https://github.com/akoita/agent-forge/issues/142)) — web
+dashboard, multi-tenant RBAC/billing/quotas, Kubernetes scheduling, warm-pool
+scaling, and the tool marketplace among them.
 
-- [ ] Project scaffolding (`pyproject.toml`, directory structure, Makefile)
-- [ ] Configuration system (TOML loading, env var override, CLI flags)
-- [ ] LLM client base classes + Gemini adapter (with streaming)
-- [ ] Tool system base classes + `read_file`, `write_file`, `list_directory`
-- [ ] Sandbox Docker image + `DockerSandbox` implementation
-- [ ] `run_shell`, `search_codebase`, `edit_file` tools
-- [ ] ReAct loop implementation with termination conditions
-- [ ] State machine for run lifecycle
-- [ ] Click CLI with `run`, `status`, `list`, `config` commands
-- [ ] Unit + integration tests
-- [ ] README with architecture diagram and quick start
-
-### Phase 2 — Production Hardening
-
-> **Goal:** Reliability, observability, and multi-provider support ready for real-world use.
-
-- [ ] Structured logging with `structlog` (JSON + colored console)
-- [ ] Token/cost tracking and run summary reports
-- [ ] OpenAI + Anthropic LLM adapters
-- [ ] In-memory task queue + worker
-- [ ] Event bus for run lifecycle events
-- [ ] Exponential backoff, timeout handling, graceful degradation
-- [ ] Redis task queue backend for concurrent agent runs
-- [ ] End-to-end tests with sample repos + recorded LLM responses
-- [ ] asciinema demo recording
-
-### Phase 3 — Git-Aware Agent & Plugin System
-
-> **Goal:** The agent understands git workflows and users can extend it with custom tools.
-
-- [x] Git-aware tools: `git_diff`, `git_commit`, `git_create_branch`, `create_pr`
-- [x] Plugin system: load custom tools from external Python packages
-- [ ] Tool dependency resolution (e.g., a tool that requires another tool's output)
-- [ ] Custom system prompt templates (per-project `.agent-forge/prompts/`)
-- [ ] Agent memory: persist learnings across runs (file-based initially)
-
-### Phase 4 — Web Dashboard & REST API
-
-> **Goal:** A real-time web interface for monitoring and controlling agent runs.
-
-- [ ] REST API layer (FastAPI) for agent run management
-- [ ] WebSocket streaming for live run observation
-- [ ] Web dashboard (Next.js): run list, live logs, tool invocation timeline
-- [ ] Cost guardrails UI: budget alerts, auto-pause when cost exceeds threshold
-- [ ] Run history browser with diff viewer for file changes
-
-### Phase 5 — Multi-Agent Collaboration
-
-> **Goal:** Agents can delegate sub-tasks to other agents and coordinate complex workflows.
-
-- [ ] Agent-to-agent communication protocol
-- [ ] Hierarchical task delegation: parent agent breaks task into sub-tasks
-- [ ] Parallel agent execution with shared workspace coordination
-- [ ] Conflict resolution when multiple agents modify the same files
-- [ ] Orchestration DSL or YAML-based workflow definitions
-
-### Phase 6 — Advanced Isolation & Scaling
-
-> **Goal:** Enterprise-grade isolation and horizontal scaling.
-
-- [ ] Firecracker microVM sandbox backend (replacing Docker for stronger isolation)
-- [ ] Kubernetes-native sandbox provisioning (pod-per-task)
-- [ ] Distributed task queue with worker auto-scaling
-- [ ] Sandbox image caching and warm pool for sub-second startup
-- [ ] Resource usage analytics and capacity planning dashboard
-
-### Phase 7 — Platform & Ecosystem
-
-> **Goal:** Agent Forge becomes a platform others can build on.
-
-- [x] Hosted service mode for external clients (versioned run API, headless report contract, deployment model, auth and policy controls, compatibility client, operations guide)
-- [ ] MCP (Model Context Protocol) tool server: expose tools for interop with external agents
-- [ ] Multi-tenant auth + RBAC (team workspaces, API keys, usage quotas)
-- [ ] Custom LLM routing: cost/latency-based model selection per tool call
-- [ ] Human-in-the-loop approval gates for destructive operations
-- [ ] Persistent vector-backed memory for cross-run RAG context
-- [ ] Community tool marketplace
-- [ ] Self-hosted model support (Ollama, vLLM) as LLM backend
-- [ ] IDE plugins (VS Code, JetBrains) for in-editor agent invocation
+See [`docs/roadmap.md`](roadmap.md) for current milestones, exit criteria, and
+tracking issues.

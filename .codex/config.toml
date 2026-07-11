@@ -1,0 +1,4 @@
+# Project-scoped Codex CLI configuration (applies when this repo is trusted).
+# Keep model tracking OpenAI's current flagship coding model.
+model = "gpt-5.6"  # alias routes to gpt-5.6-sol (flagship, verified 2026-07-11)
+model_reasoning_effort = "high"
