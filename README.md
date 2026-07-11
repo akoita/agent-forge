@@ -235,20 +235,21 @@ plugins/
 
 ---
 
-## Roadmap
+## Direction
 
-| Phase | Focus                                                             | Status         |
-| ----- | ----------------------------------------------------------------- | -------------- |
-| **1** | Core Agent MVP — ReAct loop + Docker sandbox + CLI                | ✅ Complete    |
-| **2** | Production Hardening — Observability, multi-provider, Redis queue | ✅ Complete    |
-| **3** | Git-Aware Agent & Plugin System                                   | ✅ Complete    |
-| **4** | Web Dashboard & REST API                                          | ⬜ Planned     |
-| **5** | Multi-Agent Collaboration                                         | ⬜ Planned     |
-| **6** | Advanced Isolation & Scaling (microVMs, K8s)                      | 🚧 In Progress |
-| **7** | Platform & Ecosystem (MCP, marketplace, IDE plugins)              | 🚧 In Progress |
+Agent Forge is being reset to a **harness-first** strategy: a small, measurable,
+high-correctness coding harness that competes on correctness and verified task
+completion rather than feature breadth. The rationale is recorded in
+[ADR-002: Harness-First Strategic Reset](docs/adr/002-harness-first-reset.md).
 
-See [spec.md § Roadmap](docs/spec.md#12-roadmap) for detailed milestones.
-Hosted service support for external clients is the first completed Phase 7 milestone.
+The work is now organized into milestones **M0–M6** — starting with an evaluation
+harness and quality gate (M0), then the agent-computer interface, context engine,
+provider API, policy engine, durable execution, and standards interop. Hosted,
+multi-tenant, and scaling concerns (web dashboard, RBAC, Kubernetes, fleet
+scaling) move to a separate `agent-forge-cloud` project.
+
+See the **[Roadmap](docs/roadmap.md)** for milestones, exit criteria, and tracking
+issues. The former Phase 1–7 plan is superseded.
 
 ---
 

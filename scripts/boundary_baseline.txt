@@ -1,0 +1,19 @@
+# Boundary ratchet baseline for scripts/check_boundaries.py
+#
+# The domain-agnostic-core rule (AGENTS.md) forbids audit-domain vocabulary in
+# packages under agent_forge/. The files below are KNOWN, pre-existing
+# violations that are being extracted into plugins/proof-of-audit/ under
+# issue #140. They are exempt from the checker until that work lands.
+#
+# This baseline is a ratchet: it may ONLY shrink. Adding a new file here is not
+# allowed for new work — new violations must be fixed, not baselined. When a
+# file below is cleaned up, delete its line; the checker fails on a stale entry
+# so the baseline cannot drift out of date.
+#
+# Verified against the tree on 2026-07-11 (six violating core modules).
+agent_forge/agent/prompts.py
+agent_forge/profiles/profile.py
+agent_forge/service/__init__.py
+agent_forge/service/app.py
+agent_forge/service/client.py
+agent_forge/service/models.py

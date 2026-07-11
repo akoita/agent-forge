@@ -28,8 +28,8 @@ When the user says "start issue #N", "work on #N", or references working on a sp
 
 ## 4. Plan the work
 
-- Create an implementation plan artifact
-- Request user review before coding
+- Create an implementation plan artifact in `.agents/plans/` for non-trivial issues
+- Proceed once the plan is written; request review only when requirements are ambiguous
 
 ## 5. Commit conventions
 
@@ -47,7 +47,8 @@ When the user says "start issue #N", "work on #N", or references working on a sp
 
 ## Important rules
 
-- **NEVER commit or push before user approval** — always ask first
+- **Commits and pushes on the feature branch are autonomous** — no per-commit approval is needed
+- **NEVER push to `main`** — always use a feature branch; the merge gate is defined in `AGENTS.md`
 - **NEVER commit directly to `main`** — always use a feature branch
 - **ALWAYS check current branch** before starting work with `git branch --show-current`
 - If already on a feature branch for the issue, continue working there — don't create a new one

@@ -37,10 +37,12 @@ When the user says "finish issue", "wrap up", or indicates the work is done, fol
 - If any tests fail, fix the code or tests and re-run
 - Do NOT proceed until all tests pass
 
-## 5. Run linters
+## 5. Run linters and boundary check
 
 - Run `make lint` to check code quality
 - Fix any lint errors before proceeding
+- Run `python scripts/check_boundaries.py` — the architecture-boundary check
+  must be green. `scripts/boundary_baseline.txt` may only shrink, never grow.
 
 ## 6. Update documentation
 
@@ -82,21 +84,29 @@ When the user says "finish issue", "wrap up", or indicates the work is done, fol
 
 - Create a Pull Request targeting `main` with:
   - Title: concise description (referencing the issue number if one exists)
-  - Body: summary of changes (+ `Closes #N` only if an issue exists)
+  - Body follows the PR template: evidence, **benchmark/eval impact** (results
+    or `N/A` with a reason), boundary analysis, rollback, and `Closes #N`
+    (only if an issue exists)
 - Verify the PR was created successfully before continuing
 
-## 10. Verify PR CI passes and merge
+## 10. Verify CI, then merge only with developer approval
+
+The merge gate is defined in `AGENTS.md`: merging requires **CI green AND
+developer approval**.
 
 - Check the PR's required status checks after the PR is open
 - Prefer the repo's summary gate when configured: the `build` check must pass before merge
 - **Poll until CI is conclusive:** if checks are pending, wait 30 seconds and re-check (repeat up to 10 times)
 - If no CI checks are configured on the PR, **stop and ask the user** before proceeding
 - If any required check fails, fix the issues locally, commit, push, and re-poll from the beginning
-- **ONLY merge when the PR's required checks are green** (prefer squash merge for clean history)
-- If CI fails on the PR, fix on the branch, push, and re-poll
-- **NEVER merge a PR with pending or failing CI** — this is a hard stop
+- **A PR with pending or failing CI must not be merged** — this is a hard stop
+- **Merge ONLY once CI is green AND the developer has approved.** A developer's
+  *standing approval* (pre-authorizing merges for this task or session) counts —
+  note that standing approval in the PR before merging.
+- **Absent standing approval, request review and stop.** Do not merge
+  autonomously. Prefer squash merge for clean history.
 
-## 11. Verify main branch CI
+## 11. Verify main branch CI (only if the merge happened)
 
 - After merge, check that CI passes on the updated `main` branch
 - If CI fails on main:
@@ -104,14 +114,15 @@ When the user says "finish issue", "wrap up", or indicates the work is done, fol
   - Fix the issue, push, create PR, merge
   - Repeat until main CI is green
 
-## 12. Clean up branches
+## 12. Clean up branches (only if the merge happened)
 
+- Skip this step entirely while the PR is still open awaiting review/approval
 - Delete the feature branch remotely: `git push origin --delete <branch-name>`
 - Delete the feature branch locally: `git branch -d <branch-name>`
 - Delete any fix branches (remote + local) the same way
 - **NEVER delete `main`**
 
-## 13. Align local main
+## 13. Align local main (only if the merge happened)
 
 // turbo
 
@@ -124,8 +135,9 @@ When the user says "finish issue", "wrap up", or indicates the work is done, fol
 ## Important rules
 
 - **NEVER push a file that contains clear private data** — no hardcoded credentials, API keys, passwords, private keys, or tokens in ANY file, regardless of file type. Scan every file before staging.
-- **NEVER commit or push before user approval** — always ask first
-- **NEVER force-push to `main`**
+- **Commits and pushes on the feature branch are autonomous** — no per-commit approval is needed
+- **The merge gate requires CI green AND developer approval** — see `AGENTS.md`. Standing approval counts; absent it, request review and stop
+- **NEVER push to `main`** and **NEVER force-push to `main`**
 - **NEVER delete `main`** — only delete feature and fix branches
 - **ALWAYS verify PR CI** before merging, and main CI after merging
 - If in doubt about sensitive files, ask the user before committing
