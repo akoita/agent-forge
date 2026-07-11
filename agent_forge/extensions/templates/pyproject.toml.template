@@ -37,8 +37,3 @@ $extension_name = "$package_name:WORKFLOWS_DIR"
 
 [tool.hatch.build.targets.wheel]
 packages = ["$package_name"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"$package_name/profiles" = "$package_name/profiles"
-"$package_name/prompts" = "$package_name/prompts"
-"$package_name/workflows" = "$package_name/workflows"
