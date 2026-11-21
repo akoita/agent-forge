@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
+import sys
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
+import pytest
 from click.testing import CliRunner
 
 from agent_forge.cli import main
@@ -309,3 +312,43 @@ class TestMainGroup:
         runner = _runner()
         result = runner.invoke(main, ["--version"])
         assert result.exit_code == 0
+
+
+@pytest.mark.parametrize("state", ["completed", "failed"])
+def test_run_json_stdout_contains_only_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
+) -> None:
+    """Keep runtime diagnostics separate from the machine-readable result."""
+    from agent_forge.agent.models import AgentConfig, AgentRun, RunState
+
+    async def noisy_run(*args: object, **kwargs: object) -> AgentRun:
+        print("runtime log")
+        print("run summary", file=sys.stderr)
+        return AgentRun("Check a fixture", str(tmp_path), AgentConfig(), state=RunState(state))
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    runner_options = (
+        {"mix_stderr": False} if "mix_stderr" in inspect.signature(CliRunner).parameters else {}
+    )
+    report = tmp_path / "run.json"
+    with patch("agent_forge.cli._run_agent", side_effect=noisy_run):
+        result = CliRunner(**runner_options).invoke(
+            main,
+            [
+                "run",
+                "--task",
+                "Check a fixture",
+                "--repo",
+                str(tmp_path),
+                "--output-format",
+                "json",
+                "--report-file",
+                str(report),
+            ],
+        )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload == json.loads(report.read_text())
+    assert payload["state"] == state
+    assert result.stderr.splitlines() == ["runtime log", "run summary"]

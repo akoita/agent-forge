@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any
 
@@ -186,9 +187,14 @@ def run(
             )
         )
     else:
-        result = asyncio.run(
-            _run_agent(task, repo, cfg, provider_name, api_key, profile=resolved_profile),
-        )
+        diagnostics = sys.stderr if output_format == "json" else sys.stdout
+        with redirect_stdout(diagnostics):
+            try:
+                result = asyncio.run(
+                    _run_agent(task, repo, cfg, provider_name, api_key, profile=resolved_profile),
+                )
+            finally:
+                diagnostics.flush()
         _emit_run_output(
             result,
             output_format=output_format,
