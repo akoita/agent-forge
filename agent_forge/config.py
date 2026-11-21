@@ -166,7 +166,7 @@ _SECTION_MODELS: dict[str, type[BaseModel]] = {
 }
 
 
-def _coerce_value(field_type: type[Any], raw: str) -> Any:
+def _coerce_value(field_type: object, raw: str) -> Any:
     """Coerce a raw string env value to the target field type."""
     if field_type is bool:
         return raw.lower() in ("true", "1", "yes")
