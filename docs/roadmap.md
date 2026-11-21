@@ -5,6 +5,11 @@
 [`docs/adr/002-harness-first-reset.md`](adr/002-harness-first-reset.md).
 **Date:** 2026-07-11.
 
+
+The [product vision](vision.md) and [delivery strategy](strategy.md) guide
+changes to this roadmap. The [delivery proposal](delivery-plan.md) maps the
+existing milestones and issues to the local and hosted releases for review.
+
 ---
 
 ## Mission

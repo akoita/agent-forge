@@ -12,8 +12,15 @@ Agent Forge is a **small, measurable, high-correctness coding harness** — not 
 broad agent platform. Every change should make the harness more correct or
 better measured, not merely broader.
 
+- **Product references:** [vision](docs/vision.md) and [strategy](docs/strategy.md).
 - **Canonical roadmap:** `docs/roadmap.md`
 - **Pivot decision:** `docs/adr/002-harness-first-reset.md`
+
+For a substantive change, link the vision or strategy objective and its
+verification evidence in the issue or PR. Update the reference when an
+accepted decision changes direction. Use an RFC to compare options for
+significant changes and an ADR in `docs/adr/` to record accepted architectural
+decisions. Follow the [reference maintenance guide](docs/strategy.md#maintain-the-references).
 
 **Quality gates for every substantive change** (state each in the PR body):
 
