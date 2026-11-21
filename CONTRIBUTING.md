@@ -125,6 +125,8 @@ test(agent): add ReAct loop termination tests
 
 ## Style Guide
 
+For documentation changes, use the [documentation format guide](docs/documentation-format.md) to choose a page, structure a procedure, and verify examples.
+
 ### Python
 
 - **Formatter:** [Ruff](https://github.com/astral-sh/ruff) (auto-format with `make format`)

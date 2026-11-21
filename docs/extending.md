@@ -126,7 +126,7 @@ for the CLI and hosted service.
 
 ### Example Package
 
-See [`examples/echo-tool-plugin`](/home/koita/dev/ai/agent-forge/examples/echo-tool-plugin)
+See [`examples/echo-tool-plugin`](../examples/echo-tool-plugin/)
 for a minimal working plugin package.
 
 ---
