@@ -48,8 +48,13 @@ def save_run(run: AgentRun, *, base_dir: Path | str | None = None) -> Path:
         "created_at": run.created_at.isoformat(),
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         "error": run.error,
+        "verification": asdict(run.verification) if run.verification else None,
     }
     (run_dir / "run.json").write_text(json.dumps(run_meta, indent=2) + "\n")
+    if run.verification and run.verification.patch:
+        (run_dir / "change.patch").write_bytes(
+            run.verification.patch.encode(errors="surrogateescape")
+        )
 
     # ── messages.jsonl ────────────────────────────────────────────
     with (run_dir / "messages.jsonl").open("w") as f:
@@ -92,6 +97,7 @@ def load_run(run_id: str, *, base_dir: Path | str | None = None) -> AgentRun:
     """
     from datetime import datetime
 
+    from agent_forge.agent.verification import VerificationResult
     from agent_forge.tools.base import ToolResult
 
     runs_dir = Path(base_dir) if base_dir is not None else _default_runs_dir()
@@ -152,6 +158,7 @@ def load_run(run_id: str, *, base_dir: Path | str | None = None) -> AgentRun:
             )
 
     tokens = meta["total_tokens"]
+    verification = meta.get("verification")
     completed_at = datetime.fromisoformat(meta["completed_at"]) if meta["completed_at"] else None
 
     return AgentRun(
@@ -171,4 +178,5 @@ def load_run(run_id: str, *, base_dir: Path | str | None = None) -> AgentRun:
         created_at=datetime.fromisoformat(meta["created_at"]),
         completed_at=completed_at,
         error=meta.get("error"),
+        verification=VerificationResult(**verification) if verification is not None else None,
     )

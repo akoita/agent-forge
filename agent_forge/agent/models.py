@@ -9,6 +9,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agent_forge.agent.verification import VerificationResult
     from agent_forge.llm.base import Message, TokenUsage
     from agent_forge.tools.base import ToolResult
 
@@ -69,6 +70,7 @@ class AgentRun:
     )
     completed_at: datetime | None = None
     error: str | None = None
+    verification: VerificationResult | None = None
 
 
 def _zero_usage() -> TokenUsage:

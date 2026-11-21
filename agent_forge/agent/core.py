@@ -23,6 +23,9 @@ from agent_forge.observability import (
 from agent_forge.orchestration.events import Event, EventBus, EventType
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from agent_forge.agent.verification import VerificationResult
     from agent_forge.llm.base import LLMProvider
     from agent_forge.sandbox.base import Sandbox
     from agent_forge.tools.base import ToolRegistry, ToolResult
@@ -41,11 +44,12 @@ async def react_loop(
     sandbox: Sandbox,
     *,
     event_bus: EventBus | None = None,
+    verify: Callable[[], Awaitable[VerificationResult]] | None = None,
 ) -> AgentRun:
     """Execute the ReAct loop: Observe → Reason (LLM) → Act (Tool) → Repeat.
 
     Terminates when:
-    - LLM returns no tool calls (task complete → COMPLETED)
+    - LLM stops and any configured verification passes (→ COMPLETED)
     - Max iterations reached (→ TIMEOUT)
     - Token budget exceeded (→ TIMEOUT)
     - Unrecoverable error (→ FAILED)
@@ -130,7 +134,7 @@ async def react_loop(
             # 3. CHECK COMPLETION
             if response.finish_reason == "stop" and not response.tool_calls:
                 run.messages.append(Message(role=Role.ASSISTANT, content=response.content or ""))
-                transition(run, RunState.COMPLETED)
+                await _finish_run(run, verify, event_bus)
                 break
 
             # 4. ACT — execute each tool call
@@ -199,6 +203,21 @@ async def react_loop(
     save_summary(run, tracker)
     save_run(run)
     return run
+
+
+async def _finish_run(
+    run: AgentRun,
+    verify: Callable[[], Awaitable[VerificationResult]] | None,
+    event_bus: EventBus | None,
+) -> None:
+    if verify is not None:
+        run.verification = await verify()
+        if not run.verification.passed:
+            run.error = run.verification.reason
+            transition(run, RunState.FAILED)
+            await _emit(event_bus, EventType.RUN_FAILED, run.id, {"error": run.error})
+            return
+    transition(run, RunState.COMPLETED)
 
 
 async def _execute_tool_call(

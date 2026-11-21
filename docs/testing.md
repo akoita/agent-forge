@@ -11,6 +11,30 @@
 | **E2E**         | `make test-e2e`         | Docker + `GEMINI_API_KEY` | `@pytest.mark.e2e`             |
 | **All non-E2E** | `make test`             | Docker                    | excludes `e2e` + `integration` |
 
+## Verify a coding run
+
+Use the direct CLI with a committed Git repository. Choose a verification
+command that covers the requested change. The sandbox image needs the tools
+and dependencies for that command before the run begins.
+
+```sh
+agent-forge run --task "Fix the health endpoint" --repo ./my-app \
+  --verify-command "python -m pytest -q" --report-file ./run-result.json
+```
+
+The agent starts from the repository's committed `HEAD`. Existing local
+changes stay in the original checkout. The verifier applies the generated
+patch to a second checkout and runs the command with network access and
+writable dependency caches disabled. A missing patch, a patch application
+error, or a failed check produces a nonzero exit status. For an independent
+test of correctness, use a check whose assertions remain under your control.
+
+The report includes the base revision, terminal verification reason, and
+check output. When a patch exists, the result points to `change.patch` in the
+run directory. To review and apply the patch, use a clean checkout of the
+reported base revision and run `git apply --check` before `git apply`.
+For an investigation, omit `--verify-command`.
+
 ## Running Tests
 
 ```bash
