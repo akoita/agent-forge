@@ -10,11 +10,12 @@ Covers all execution configurations:
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent_forge.orchestration.events import EventBus
+from agent_forge.orchestration.events import Event, EventBus, EventType
 from agent_forge.orchestration.queue import Task, TaskStatus
 from agent_forge.sandbox.base import SandboxConfig
 
@@ -514,3 +515,45 @@ class TestMakeTaskRunner:
             mock_sandbox.start.assert_called_once()
             mock_sandbox.stop.assert_called_once()
             mock_llm.close.assert_called_once()
+
+
+@pytest.mark.parametrize("state", ["failed", "timeout", "completed"])
+@pytest.mark.asyncio
+async def test_worker_preserves_cli_agent_outcome(state: str) -> None:
+    """The queue uses the agent result and preserves its artifact identity."""
+    from agent_forge.agent.models import AgentRun, RunState
+    from agent_forge.cli import _make_task_runner
+    from agent_forge.orchestration.queue import InMemoryQueue
+    from agent_forge.orchestration.worker import Worker
+
+    queue = InMemoryQueue()
+    bus = EventBus()
+    observed: list[tuple[EventType, str]] = []
+
+    async def record(event: Event) -> None:
+        observed.append((event.type, event.run_id))
+
+    for event in (EventType.RUN_STARTED, EventType.RUN_COMPLETED, EventType.RUN_FAILED):
+        await bus.subscribe(event, record)
+    task = Task(
+        id="queued-run", task_description="Fix a bug", repo_path="/tmp/repo", config=MagicMock()
+    )
+    await queue.enqueue(task)
+    result = AgentRun(task.task_description, task.repo_path, task.config, state=RunState(state))
+    with (
+        patch("agent_forge.cli._create_llm", return_value=AsyncMock()),
+        patch("agent_forge.sandbox.factory.create_sandbox", return_value=AsyncMock()),
+        patch("agent_forge.agent.core.react_loop", return_value=result) as react,
+    ):
+        runner = _make_task_runner(_fake_config(), "gemini", "key", bus)
+        worker = Worker(queue, bus, runner)
+        queued = await queue.dequeue()
+        assert queued is not None
+        await asyncio.wait_for(worker._process_task(queued), timeout=3)
+
+    assert await queue.get_status(task.id) == TaskStatus(state)
+    started_run = react.call_args.args[0]
+    assert started_run.id == task.id
+    assert react.call_args.kwargs["emit_lifecycle"] is False
+    terminal = EventType.RUN_COMPLETED if state == "completed" else EventType.RUN_FAILED
+    assert observed == [(EventType.RUN_STARTED, task.id), (terminal, task.id)]

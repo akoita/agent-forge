@@ -11,6 +11,12 @@
 | **E2E**         | `make test-e2e`         | Docker + `GEMINI_API_KEY` | `@pytest.mark.e2e`             |
 | **All non-E2E** | `make test`             | Docker                    | excludes `e2e` + `integration` |
 
+## Check queued run outcomes
+
+The queued CLI uses the queued task ID as the persisted run ID. A model run
+that fails or times out produces the matching queue status and a failing CLI
+exit code. Use `agent-forge status <run-id>` to inspect the saved result.
+
 ## Running Tests
 
 ```bash

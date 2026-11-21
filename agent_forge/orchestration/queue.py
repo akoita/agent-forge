@@ -26,6 +26,8 @@ class TaskStatus(Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -57,6 +59,10 @@ class TaskQueue(ABC):
     async def dequeue(self) -> Task | None:
         """Get the next highest-priority task, or ``None`` if empty."""
         ...
+
+    async def finish(self, task: Task, status: TaskStatus) -> None:
+        """Persist a terminal status for a dequeued task."""
+        task.status = status
 
     @abstractmethod
     async def get_status(self, task_id: str) -> TaskStatus:

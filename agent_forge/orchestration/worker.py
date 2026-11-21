@@ -12,9 +12,10 @@ from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
 from typing import Any
 
+from agent_forge.agent.models import AgentRun, RunState
 from agent_forge.observability import get_logger
 from agent_forge.orchestration.events import Event, EventBus, EventType
-from agent_forge.orchestration.queue import TaskQueue, TaskStatus
+from agent_forge.orchestration.queue import Task, TaskQueue, TaskStatus
 
 logger = get_logger("worker")
 
@@ -91,7 +92,7 @@ class Worker:
 
             await self._process_task(task)
 
-    async def _process_task(self, task: Any) -> None:
+    async def _process_task(self, task: Task) -> None:
         """Execute a single task and publish lifecycle events."""
         # Publish RUN_STARTED
         await self._event_bus.publish(
@@ -104,27 +105,32 @@ class Worker:
         )
 
         try:
-            await self._task_runner(task)
-            task.status = TaskStatus.COMPLETED
-
-            await self._event_bus.publish(
-                Event(
-                    type=EventType.RUN_COMPLETED,
-                    run_id=task.id,
-                    timestamp=datetime.now(UTC),
-                )
-            )
-            logger.info("task_completed", task_id=task.id)
-
+            result = await self._task_runner(task)
         except Exception as exc:
-            task.status = TaskStatus.FAILED
-
-            await self._event_bus.publish(
-                Event(
-                    type=EventType.RUN_FAILED,
-                    run_id=task.id,
-                    timestamp=datetime.now(UTC),
-                    data={"error": str(exc)},
-                )
-            )
+            await self._finish_task(task, TaskStatus.FAILED, str(exc))
             logger.exception("task_failed", task_id=task.id, exc_info=exc)
+            return
+
+        status = TaskStatus.COMPLETED
+        error = None
+        if isinstance(result, AgentRun) and result.state != RunState.COMPLETED:
+            status = {
+                RunState.TIMEOUT: TaskStatus.TIMEOUT,
+                RunState.CANCELLED: TaskStatus.CANCELLED,
+            }.get(result.state, TaskStatus.FAILED)
+            error = result.error or f"Agent run ended with state {result.state.value}"
+        await self._finish_task(task, status, error)
+
+    async def _finish_task(self, task: Task, status: TaskStatus, error: str | None) -> None:
+        await self._queue.finish(task, status)
+        await self._event_bus.publish(
+            Event(
+                type=EventType.RUN_COMPLETED
+                if status == TaskStatus.COMPLETED
+                else EventType.RUN_FAILED,
+                run_id=task.id,
+                timestamp=datetime.now(UTC),
+                data={"state": status.value, "error": error} if error else {},
+            )
+        )
+        logger.info("task_finished", task_id=task.id, status=status.value)

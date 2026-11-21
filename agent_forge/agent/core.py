@@ -41,6 +41,7 @@ async def react_loop(
     sandbox: Sandbox,
     *,
     event_bus: EventBus | None = None,
+    emit_lifecycle: bool = True,
 ) -> AgentRun:
     """Execute the ReAct loop: Observe → Reason (LLM) → Act (Tool) → Repeat.
 
@@ -66,9 +67,10 @@ async def react_loop(
         temperature=run.config.temperature,
     )
     tool_definitions = tools.list_definitions()
+    lifecycle_bus = event_bus if emit_lifecycle else None
 
     await _emit(
-        event_bus,
+        lifecycle_bus,
         EventType.RUN_STARTED,
         run.id,
         {
@@ -174,7 +176,7 @@ async def react_loop(
         transition(run, RunState.FAILED)
         run.error = str(exc)
         await _emit(
-            event_bus,
+            lifecycle_bus,
             EventType.RUN_FAILED,
             run.id,
             {
@@ -186,7 +188,7 @@ async def react_loop(
 
     if run.state == RunState.COMPLETED:
         await _emit(
-            event_bus,
+            lifecycle_bus,
             EventType.RUN_COMPLETED,
             run.id,
             {
