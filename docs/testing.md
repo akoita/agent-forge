@@ -11,6 +11,23 @@
 | **E2E**         | `make test-e2e`         | Docker + `GEMINI_API_KEY` | `@pytest.mark.e2e`             |
 | **All non-E2E** | `make test`             | Docker                    | excludes `e2e` + `integration` |
 
+## Grade a fixture patch
+
+From the repository root, install the development dependencies and the sample
+app requirements, then run the deterministic evaluation.
+
+```sh
+python -m pip install -e '.[dev]'
+python -m pip install -r tests/fixtures/sample_repo/requirements.txt
+make eval
+```
+
+The grader applies each curated patch to a fresh copy of the sample app and
+runs the original tests from a separate directory. The base, empty patch, and
+incorrect patch must fail the health check. The known-good patch must pass the
+health check and the two existing regression tests. CI runs this evaluation
+on Python 3.13 without a provider key. This suite measures the grader itself.
+
 ## Running Tests
 
 ```bash
