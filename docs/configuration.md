@@ -141,6 +141,11 @@ agent-forge run --task "Fix the health endpoint" --repo ./my-app
 
 ### OpenAI Provider
 
+Direct CLI runs, queued runs, and hosted runs use the same adapter registry
+for Gemini, OpenAI, and Anthropic. Configure both the provider and a model
+identifier supported by its API. When switching providers in the CLI, set
+both `--provider` and `--model` to override the configured defaults.
+
 ```toml
 # agent-forge.toml
 [agent]

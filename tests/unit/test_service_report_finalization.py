@@ -165,6 +165,7 @@ class TestReportRecoveryIntegration:
     ) -> None:
         """When recovery writes the report file, the run should succeed."""
         from agent_forge.agent.models import AgentConfig
+        from agent_forge.llm.anthropic import AnthropicProvider
         from agent_forge.orchestration.queue import Task
 
         service = _make_service(tmp_path)
@@ -172,7 +173,8 @@ class TestReportRecoveryIntegration:
         repo.mkdir()
         (repo / "Vault.sol").write_text("contract Vault {}\n", encoding="utf-8")
 
-        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        service._config.agent.default_provider = "anthropic"
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
         task_config = AgentConfig(model="test-model", max_iterations=5)
         task = Task(
@@ -194,6 +196,7 @@ class TestReportRecoveryIntegration:
 
         async def fake_react_loop(run, llm, tools, sandbox, *, event_bus=None):
             nonlocal call_count
+            assert isinstance(llm, AnthropicProvider)
             call_count += 1
             if call_count == 2:
                 # Recovery pass writes the report
@@ -209,12 +212,8 @@ class TestReportRecoveryIntegration:
         mock_sandbox.stop = AsyncMock()
         mock_sandbox.is_alive = AsyncMock(return_value=True)
 
-        mock_llm = AsyncMock()
-        mock_llm.close = AsyncMock()
-
         with (
             patch("agent_forge.service.app.react_loop", side_effect=fake_react_loop),
-            patch("agent_forge.service.app._create_llm", return_value=mock_llm),
             patch("agent_forge.service.app.create_sandbox", return_value=mock_sandbox),
             patch("agent_forge.service.app.create_default_registry"),
         ):
@@ -270,7 +269,7 @@ class TestReportRecoveryIntegration:
 
         with (
             patch("agent_forge.service.app.react_loop", side_effect=fake_react_loop),
-            patch("agent_forge.service.app._create_llm", return_value=mock_llm),
+            patch("agent_forge.service.app.create_provider", return_value=mock_llm),
             patch("agent_forge.service.app.create_sandbox", return_value=mock_sandbox),
             patch("agent_forge.service.app.create_default_registry"),
         ):
@@ -335,7 +334,7 @@ class TestReportRecoveryIntegration:
 
         with (
             patch("agent_forge.service.app.react_loop", side_effect=fake_react_loop),
-            patch("agent_forge.service.app._create_llm", return_value=mock_llm),
+            patch("agent_forge.service.app.create_provider", return_value=mock_llm),
             patch("agent_forge.service.app.create_sandbox", return_value=mock_sandbox),
             patch("agent_forge.service.app.create_default_registry"),
         ):
