@@ -162,3 +162,69 @@ async def test_live_probe_does_not_retry_service_errors(monkeypatch: pytest.Monk
     assert result.status == "failed"
     assert result.reason == "LLMResponseError"
     assert route.call_count == result.requests == 1
+
+
+@pytest.mark.parametrize("reason", ["verified", "check_failed"])
+def test_qualification_reports_independent_fix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str
+) -> None:
+    from agent_forge.agent.models import AgentConfig, AgentRun, RunState
+    from agent_forge.agent.verification import VerificationResult
+
+    (tmp_path / "agent-forge.toml").write_text(
+        '[model_profiles.candidate]\nprovider = "openai"\nmodel = "candidate-v1"\n'
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "recorded-key")
+    passed = reason == "verified"
+    run = AgentRun(
+        "Fix the fixture",
+        str(tmp_path),
+        AgentConfig(),
+        state=RunState.COMPLETED if passed else RunState.FAILED,
+        verification=VerificationResult(
+            "base", "recorded patch", reason, "fixture-check", int(not passed)
+        ),
+    )
+    report = {"live_tool_exchange": {"status": "passed"}, "independent_fix": {"status": "not_run"}}
+    with (
+        patch("agent_forge.llm.qualification.qualification_report", return_value=report),
+        patch("agent_forge.cli._run_agent", return_value=run) as run_agent,
+    ):
+        result = CliRunner().invoke(
+            main,
+            [
+                "models",
+                "validate",
+                "candidate",
+                "--live",
+                "--fix-repo",
+                str(tmp_path),
+                "--fix-task",
+                "Fix the fixture",
+                "--verify-command",
+                "fixture-check",
+            ],
+        )
+    assert result.exit_code == int(not passed), result.output
+    grade = json.loads(result.stdout)["independent_fix"]
+    assert grade["status"] == ("passed" if passed else "failed")
+    assert grade["reason"] == reason
+    assert grade["base_revision"] == "base"
+    assert grade["run_id"] == run.id
+    assert grade["check_exit_code"] == int(not passed)
+    task, repo, config, provider, _ = run_agent.call_args.args
+    assert (task, repo, provider) == ("Fix the fixture", str(tmp_path), "openai")
+    assert config.agent.default_model == "candidate-v1"
+    assert config.agent.max_iterations == 6
+    assert config.agent.max_tokens_per_run == 24_000
+    assert config.sandbox.network_enabled is False
+    assert run_agent.call_args.kwargs["verify_command"] == "fixture-check"
+
+
+def test_qualification_fix_requires_all_options(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        main, ["models", "validate", "candidate", "--fix-repo", str(tmp_path)]
+    )
+    assert result.exit_code == 2
+    assert "A coding probe requires" in result.output

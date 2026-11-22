@@ -181,9 +181,20 @@ optional live command needs the provider's configured API key and can incur
 API charges. It sends at most two requests with retries disabled, a 45-second
 overall deadline, and a requested maximum of 256 output tokens per request.
 The JSON report records usage and any provider-reported model versions. A
-failed probe returns a nonzero exit code. The independent coding check is
-recorded as `not_run`. Use the [verified coding workflow](testing.md#verify-a-coding-run)
-to test whether the model can deliver a fix.
+failed probe returns a nonzero exit code. Add a committed fixture, a task, and an independent check to grade a coding fix.
+
+```sh
+agent-forge models validate candidate --live \
+  --fix-repo ./fixture-repo --fix-task "Fix the failing health check" \
+  --verify-command "python -m pytest -q"
+```
+
+The coding stage runs after a passing tool exchange. It uses the [verified
+coding workflow](testing.md#verify-a-coding-run), a six-iteration cap, a
+24,000-token run threshold, and a 180-second deadline. A lower configured
+iteration or token limit still applies. The report links the run and patch
+and records the base revision and check exit code. A failed check gives the
+qualification command a nonzero exit code.
 
 Pass `--model-profile candidate` to `agent-forge run` to select the alias's provider
 and model together. The alias takes precedence over the other provider and model
