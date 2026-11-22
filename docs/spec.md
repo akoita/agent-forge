@@ -1018,10 +1018,12 @@ run completion or failure. Each record captures client identity, request origin,
 request and run identifiers, profile id, submit time, lifecycle status, and any
 rejection or failure reason.
 
-The hosted API also ships with a Proof-of-Audit compatibility harness in
-`agent_forge.service.client`, including a client helper that submits the
-versioned request contract, polls `/v1/runs/{run_id}`, retrieves the stable
-report artifact, and preserves machine-readable failure codes for regressions.
+The hosted API also ships with a generic async client (`HostedServiceClient`)
+in `agent_forge.service.client`, while domain-specific compatibility adapters
+such as `ProofOfAuditHostedClient` and `build_proof_of_audit_request` live in
+`plugins.proof_of_audit.client`. Together they submit the versioned request
+contract, poll `/v1/runs/{run_id}`, retrieve the report artifact, and preserve
+machine-readable failure codes for regressions.
 
 ### 5.1 Configuration File Schema
 

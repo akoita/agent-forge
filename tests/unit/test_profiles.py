@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import textwrap
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -14,9 +14,6 @@ from agent_forge.profiles.profile import (
     get_profile,
     load_profiles,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # AgentProfile model
@@ -238,10 +235,10 @@ class TestPromptScopeIntegration:
         assert "## Profile Scope" not in prompt
 
     def test_hosted_prompt_includes_scope(self):
-        from agent_forge.agent.prompts import build_hosted_poa_system_prompt
+        from agent_forge.agent.prompts import build_hosted_system_prompt
 
-        prompt = build_hosted_poa_system_prompt(
-            "Analyze this contract",
+        prompt = build_hosted_system_prompt(
+            "Analyze this repository",
             [],
             prompt_scope="Perform a comprehensive analysis.",
         )
@@ -249,10 +246,11 @@ class TestPromptScopeIntegration:
         assert "Perform a comprehensive analysis." in prompt
 
     def test_hosted_prompt_no_scope_when_none(self):
-        from agent_forge.agent.prompts import build_hosted_poa_system_prompt
+        from agent_forge.agent.prompts import build_hosted_system_prompt
 
-        prompt = build_hosted_poa_system_prompt("Analyze this contract", [])
+        prompt = build_hosted_system_prompt("Analyze this repository", [])
         assert "## Profile Scope" not in prompt
+        assert "agent-forge-report-v1" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -425,3 +423,38 @@ class TestProfileEntryPointDiscovery:
         assert "gemini" in registry
         # Extension profile also present
         assert "addon" in registry
+
+    def test_load_profiles_registers_aliases(self, tmp_path: Path):
+        """Profile aliases resolve to the same AgentProfile instance."""
+        profile_dir = tmp_path / "profiles"
+        profile_dir.mkdir()
+        (profile_dir / "primary.yaml").write_text(
+            textwrap.dedent("""\
+                id: primary-id
+                name: Primary Profile
+                aliases: ["legacy-alias-v1", "compat-alias"]
+            """)
+        )
+
+        registry = load_profiles(
+            dirs=[profile_dir],
+            include_builtins=False,
+            discover_entry_points=False,
+        )
+
+        assert registry["primary-id"].id == "primary-id"
+        assert registry["legacy-alias-v1"] is registry["primary-id"]
+        assert registry["compat-alias"] is registry["primary-id"]
+
+    def test_poa_plugin_alias_resolves_full_spectrum(self):
+        """Proof-of-Audit plugin registers proof-of-audit-solidity-v1 alias."""
+        poa_profiles = (
+            Path(__file__).resolve().parents[2] / "plugins" / "proof_of_audit" / "profiles"
+        )
+        registry = load_profiles(
+            dirs=[poa_profiles],
+            include_builtins=False,
+            discover_entry_points=False,
+        )
+        assert "full-spectrum" in registry
+        assert registry["proof-of-audit-solidity-v1"] is registry["full-spectrum"]

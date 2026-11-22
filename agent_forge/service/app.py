@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from agent_forge import __version__
 from agent_forge.agent.core import react_loop
 from agent_forge.agent.models import AgentConfig, AgentRun
-from agent_forge.agent.prompts import build_hosted_poa_system_prompt
+from agent_forge.agent.prompts import build_hosted_system_prompt
 from agent_forge.config import USER_CONFIG_DIR, ForgeConfig, load_config
 from agent_forge.llm.factory import create_provider, provider_names
 from agent_forge.orchestration.event_stream import (
@@ -41,16 +41,13 @@ from agent_forge.service.models import (
     ErrorResponse,
     HealthResponse,
     LogsResponse,
-    ProofOfAuditReport,
     ReportProvenance,
-    ReportStats,
     ReportTarget,
     RunArtifactRef,
     RunError,
+    RunReport,
     RunRequest,
     RunStatus,
-    SeverityBreakdown,
-    SeverityLevel,
     TargetRef,
 )
 from agent_forge.service.security import ServiceClientPolicy, load_client_registry
@@ -63,22 +60,14 @@ if TYPE_CHECKING:
 
 _REPORT_RELATIVE_PATH = Path(".agent-forge/report.json")
 
-_REPORT_REQUIRED_FIELDS = {"schema_version", "run_id", "summary", "confidence", "findings", "stats"}
-
-# Backward-compatible alias for legacy callers.
-# TODO: extract to proof-of-audit plugin — this is domain-specific.
-_PROFILE_ALIASES: dict[str, str] = {
-    "proof-of-audit-solidity-v1": "full-spectrum",
-}
+_REPORT_REQUIRED_FIELDS = {"schema_version", "run_id", "summary"}
 
 _REPORT_RECOVERY_PROMPT = (
-    "The audit analysis is complete but you did not write the required report file. "
+    "The task is complete but you did not write the required report file. "
     "You MUST now write a valid JSON report to .agent-forge/report.json using the "
-    'write_file tool. The report must use schema_version "proof-of-audit-report-v1" '
-    "and include the fields: run_id, summary, confidence, findings (array), and stats "
-    "(object with finding_count, max_severity, severity_breakdown with critical/high/"
-    "medium/low counts). If you found no issues, use an empty findings array and "
-    "stats with finding_count=0. Write the file NOW — this is your only chance."
+    "write_file tool. The report must include the required schema_version, run_id, "
+    "and summary fields along with any profile-required fields. Write the file NOW — "
+    "this is your only chance."
 )
 
 
@@ -133,7 +122,7 @@ class HostedRunService:
         self._client_policies: dict[str, ServiceClientPolicy] = {}
         self._profile_registry: dict[str, AgentProfile] = {}
         self._resolved_persona: AgentProfile | None = None
-        self._audit_log_path = self._service_root / "audit" / "events.jsonl"
+        self._access_log_path = self._service_root / "audit" / "events.jsonl"  # boundary-ok
         self._worker = Worker(
             queue=self._queue,
             event_bus=self._event_bus,
@@ -217,7 +206,7 @@ class HostedRunService:
             user_agent=user_agent,
         )
         self._records[run_id] = record
-        self._append_audit_event(
+        self._append_access_event(
             event="run.accepted",
             client_service_id=request.client.service_id,
             run_id=run_id,
@@ -271,7 +260,7 @@ class HostedRunService:
         headers: dict[str, str] | None = None,
         request_origin: str | None = None,
         user_agent: str | None = None,
-    ) -> ProofOfAuditReport:
+    ) -> RunReport:
         """Return the machine report for a completed run."""
         client_service_id, _ = self._authenticate_headers(
             headers,
@@ -291,7 +280,7 @@ class HostedRunService:
             raise RuntimeError("run_not_completed")
         payload = json.loads(record.report_path.read_text(encoding="utf-8"))
         if "schema_version" not in payload:
-            payload["schema_version"] = "proof-of-audit-report-v1"
+            payload["schema_version"] = record.request.profile.report_schema
         if "run_id" not in payload:
             payload["run_id"] = run_id
         if "target" not in payload:
@@ -301,9 +290,7 @@ class HostedRunService:
                 profile_id=record.request.profile.id,
                 source_digest=record.request.source.source_digest,
             ).model_dump()
-        if "stats" not in payload:
-            payload["stats"] = self._compute_stats(payload.get("findings", []))
-        return ProofOfAuditReport.model_validate(payload)
+        return RunReport.model_validate(payload)
 
     def get_logs(
         self,
@@ -454,7 +441,7 @@ class HostedRunService:
             return
 
         if request.client.service_id != client_service_id:
-            self._append_audit_event(
+            self._append_access_event(
                 event="run.denied",
                 client_service_id=client_service_id,
                 request_id=request.client.request_id,
@@ -474,7 +461,7 @@ class HostedRunService:
             )
 
         if request.profile.id not in client_policy.allowed_profiles:
-            self._append_audit_event(
+            self._append_access_event(
                 event="run.denied",
                 client_service_id=client_service_id,
                 request_id=request.client.request_id,
@@ -494,7 +481,7 @@ class HostedRunService:
             )
 
         if request.profile.report_schema not in client_policy.allowed_report_schemas:
-            self._append_audit_event(
+            self._append_access_event(
                 event="run.denied",
                 client_service_id=client_service_id,
                 request_id=request.client.request_id,
@@ -514,7 +501,7 @@ class HostedRunService:
             )
 
         if request.source.kind not in client_policy.allowed_source_kinds:
-            self._append_audit_event(
+            self._append_access_event(
                 event="run.denied",
                 client_service_id=client_service_id,
                 request_id=request.client.request_id,
@@ -537,7 +524,7 @@ class HostedRunService:
             self._config.service.allow_local_path_sources and client_policy.allow_local_path
         )
         if request.source.kind == "local_path" and not local_path_allowed:
-            self._append_audit_event(
+            self._append_access_event(
                 event="run.denied",
                 client_service_id=client_service_id,
                 request_id=request.client.request_id,
@@ -558,7 +545,7 @@ class HostedRunService:
 
         source_size_bytes = self._source_size_bytes(request.source.uri)
         if source_size_bytes > self._config.service.max_source_size_bytes:
-            self._append_audit_event(
+            self._append_access_event(
                 event="run.denied",
                 client_service_id=client_service_id,
                 request_id=request.client.request_id,
@@ -589,7 +576,7 @@ class HostedRunService:
             return
         if record.request.client.service_id == client_service_id:
             return
-        self._append_audit_event(
+        self._append_access_event(
             event="run.denied",
             client_service_id=client_service_id,
             run_id=record.run_id,
@@ -641,7 +628,7 @@ class HostedRunService:
                 daily_runs += 1
 
         if active_runs >= policy.max_active_runs:
-            self._append_audit_event(
+            self._append_access_event(
                 event="run.denied",
                 client_service_id=client_service_id,
                 request_id=request.client.request_id,
@@ -661,7 +648,7 @@ class HostedRunService:
             )
 
         if daily_runs >= policy.max_runs_per_day:
-            self._append_audit_event(
+            self._append_access_event(
                 event="run.denied",
                 client_service_id=client_service_id,
                 request_id=request.client.request_id,
@@ -689,7 +676,7 @@ class HostedRunService:
             return sum(child.stat().st_size for child in path.rglob("*") if child.is_file())
         return path.stat().st_size
 
-    def _append_audit_event(
+    def _append_access_event(
         self,
         *,
         event: str,
@@ -716,8 +703,8 @@ class HostedRunService:
             "request_origin": request_origin,
             "user_agent": user_agent,
         }
-        self._audit_log_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._audit_log_path.open("a", encoding="utf-8") as handle:
+        self._access_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._access_log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload) + "\n")
 
     def _deny(
@@ -748,8 +735,7 @@ class HostedRunService:
         return record
 
     def _validate_request(self, request: RunRequest) -> None:
-        profile_id = _PROFILE_ALIASES.get(request.profile.id, request.profile.id)
-        if profile_id not in self._profile_registry:
+        if request.profile.id not in self._profile_registry:
             available = ", ".join(sorted(self._profile_registry)) or "(none)"
             raise HTTPException(
                 status_code=400,
@@ -946,21 +932,21 @@ class HostedRunService:
         )
 
     def _build_task_prompt(self, request: RunRequest) -> str:
-        entry_contract = request.source.entry_contract or "the primary contract"
-        target = request.target.contract_address if request.target else None
-        target_context = f" at deployed address {target}" if target else ""
+        entry_target = request.source.entry_contract
+        contract_address = request.target.contract_address if request.target else None
+        focus_parts: list[str] = []
+        if entry_target:
+            focus_parts.append(f"Focus on {entry_target}")
+        if contract_address:
+            focus_parts.append(f"target address {contract_address}")
+        focus_clause = f" {' at '.join(focus_parts)}." if focus_parts else ""
         return (
-            "Audit this smart contract repository for three issue classes: "
-            "reentrancy, access control, and unchecked external calls. "
-            f"Focus first on the contract named {entry_contract}{target_context}. "
-            "Do not modify the source code except for writing a valid JSON report to "
-            ".agent-forge/report.json. The report must use schema_version "
-            '"proof-of-audit-report-v1" and include the fields run_id, summary, '
-            "confidence, findings, stats, optional benchmark_id, optional target, and "
-            "optional provenance. Each finding must include finding_id, title, severity, "
-            "category, description, impact, recommendation, confidence, and optional "
-            "detector, affected_function, source_path, start_line, end_line, and evidence_uri. "
-            "If no finding is confirmed, write an empty findings array and matching stats."
+            f"Analyze the workspace repository using profile {request.profile.id}."
+            f"{focus_clause} "
+            "Follow the active profile scope and extension instructions. "
+            "Write the required valid JSON report to .agent-forge/report.json with "
+            f'schema_version "{request.profile.report_schema}" and include run_id '
+            "and summary along with any schema-required fields."
         )
 
     def _validate_report_artifact(self, record: HostedRunRecord) -> None:
@@ -999,10 +985,7 @@ class HostedRunService:
             record.started_at = datetime.now(UTC)
 
             # Resolve agent profile for this request
-            request_profile_id = _PROFILE_ALIASES.get(
-                record.request.profile.id,
-                record.request.profile.id,
-            )
+            request_profile_id = record.request.profile.id
             resolved_profile = self._profile_registry.get(request_profile_id)
             prompt_scope = resolved_profile.prompt_scope if resolved_profile else None
 
@@ -1049,9 +1032,10 @@ class HostedRunService:
             )
             sandbox = create_sandbox(sandbox_config)
             tool_definitions = tools.list_definitions()
-            hosted_prompt = build_hosted_poa_system_prompt(
+            hosted_prompt = build_hosted_system_prompt(
                 task.task_description,
                 tool_definitions,
+                report_schema=record.request.profile.report_schema,
                 sandbox_backend=sandbox_config.backend,
                 sandbox_image=sandbox_config.image,
                 network_enabled=sandbox_config.network_enabled,
@@ -1064,7 +1048,7 @@ class HostedRunService:
                 max_tokens_per_run=task.config.max_tokens_per_run,
                 temperature=task.config.temperature,
                 system_prompt=hosted_prompt,
-                profile_id=request_profile_id if resolved_profile else None,
+                profile_id=resolved_profile.id if resolved_profile else None,
             )
             agent_run = AgentRun(
                 task=task.task_description,
@@ -1079,7 +1063,7 @@ class HostedRunService:
 
                 # Report finalization: recovery pass if report is missing
                 if not record.report_path.exists():
-                    self._append_audit_event(
+                    self._append_access_event(
                         event="run.report_recovery_started",
                         client_service_id=record.request.client.service_id,
                         run_id=record.run_id,
@@ -1117,7 +1101,7 @@ class HostedRunService:
                 self._validate_report_artifact(record)
 
                 record.completed_at = datetime.now(UTC)
-                self._append_audit_event(
+                self._append_access_event(
                     event="run.completed",
                     client_service_id=record.request.client.service_id,
                     run_id=record.run_id,
@@ -1136,7 +1120,7 @@ class HostedRunService:
                         retryable=False,
                     )
                 record.completed_at = datetime.now(UTC)
-                self._append_audit_event(
+                self._append_access_event(
                     event="run.failed",
                     client_service_id=record.request.client.service_id,
                     run_id=record.run_id,
@@ -1216,28 +1200,6 @@ class HostedRunService:
             contract_address=target.contract_address,
             entry_contract=request.source.entry_contract,
         )
-
-    def _compute_stats(self, findings: list[dict[str, Any]]) -> dict[str, Any]:
-        counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
-        for finding in findings:
-            severity = finding.get("severity")
-            if severity in counts:
-                counts[severity] += 1
-        max_severity: SeverityLevel | None = None
-        for severity in ("critical", "high", "medium", "low"):
-            if counts[severity] > 0:
-                max_severity = cast("SeverityLevel", severity)
-                break
-        return ReportStats(
-            finding_count=len(findings),
-            max_severity=max_severity,
-            severity_breakdown=SeverityBreakdown(
-                critical=counts["critical"],
-                high=counts["high"],
-                medium=counts["medium"],
-                low=counts["low"],
-            ),
-        ).model_dump()
 
 
 def _resolve_after_seq(after_seq: int | None, http_request: Request) -> int:
@@ -1352,8 +1314,8 @@ def create_app(  # noqa: C901
             )
             raise HTTPException(status_code=404, detail=error.model_dump()) from exc
 
-    @app.get("/v1/runs/{run_id}/report", response_model=ProofOfAuditReport)
-    async def get_report(run_id: str, http_request: Request) -> ProofOfAuditReport:
+    @app.get("/v1/runs/{run_id}/report", response_model=RunReport)
+    async def get_report(run_id: str, http_request: Request) -> RunReport:
         try:
             return service.get_report(
                 run_id,

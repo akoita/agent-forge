@@ -10,7 +10,6 @@ RunLifecycleStatus = Literal["accepted", "queued", "running", "completed", "fail
 SourceKind = Literal["archive_uri", "repository_uri", "git_repository", "local_path"]
 SubmissionKind = Literal["deployed_address", "source_bundle", "repository_url"]
 ConfidenceLevel = Literal["low", "medium", "high"]
-SeverityLevel = Literal["critical", "high", "medium", "low"]
 DeliveryMode = Literal["pull", "callback"]
 ArtifactKind = Literal["report", "logs", "run_metadata"]
 ErrorCode = Literal[
@@ -153,48 +152,6 @@ class ReportTarget(BaseModel):
     entry_contract: str | None = None
 
 
-class Finding(BaseModel):
-    """A single machine-readable audit finding."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    finding_id: str
-    title: str
-    severity: SeverityLevel
-    category: str
-    description: str
-    impact: str
-    recommendation: str
-    confidence: ConfidenceLevel
-    detector: str | None = None
-    affected_function: str | None = None
-    source_path: str | None = None
-    start_line: int | None = Field(default=None, ge=1)
-    end_line: int | None = Field(default=None, ge=1)
-    evidence_uri: str | None = None
-
-
-class SeverityBreakdown(BaseModel):
-    """Counts findings by severity."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    critical: int = Field(ge=0)
-    high: int = Field(ge=0)
-    medium: int = Field(ge=0)
-    low: int = Field(ge=0)
-
-
-class ReportStats(BaseModel):
-    """Aggregate summary for a report."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    finding_count: int = Field(ge=0)
-    max_severity: SeverityLevel | None = None
-    severity_breakdown: SeverityBreakdown
-
-
 class ReportProvenance(BaseModel):
     """Captures which profile and source digest produced the report."""
 
@@ -204,19 +161,17 @@ class ReportProvenance(BaseModel):
     source_digest: str | None = None
 
 
-class ProofOfAuditReport(BaseModel):
-    """Stable report schema for Proof-of-Audit-compatible runs."""
+class RunReport(BaseModel):
+    """Generic envelope for machine-readable reports produced by hosted runs."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow")
 
-    schema_version: Literal["proof-of-audit-report-v1"]
+    schema_version: str
     run_id: str
     summary: str
-    confidence: ConfidenceLevel
+    confidence: ConfidenceLevel | None = None
     benchmark_id: str | None = None
     target: ReportTarget | None = None
-    findings: list[Finding]
-    stats: ReportStats
     provenance: ReportProvenance | None = None
 
 
