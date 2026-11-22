@@ -1,46 +1,148 @@
-# Agent Forge
+<div align="center">
 
-> Domain-agnostic AI coding harness — isolated Docker/Bubblewrap sandboxes, multi-provider model qualification, and independently verified patches.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.svg" />
+  <img alt="Agent Forge — Harness-First Coding Agent Runtime" src="assets/banner-light.svg" width="100%" />
+</picture>
 
-[![CI](https://github.com/akoita/agent-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/akoita/agent-forge/actions/workflows/ci.yml)
-[![E2E Tests](https://github.com/akoita/agent-forge/actions/workflows/e2e-tests.yml/badge.svg)](https://github.com/akoita/agent-forge/actions/workflows/e2e-tests.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+<br /><br />
+
+**Domain-agnostic AI coding harness** — isolated Docker & Bubblewrap sandboxes, multi-provider qualification, and independently verified patches.
+
+<p>
+  <a href="https://github.com/akoita/agent-forge/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/akoita/agent-forge/ci.yml?branch=main&style=flat-square&label=CI" alt="CI" /></a>
+  <a href="https://github.com/akoita/agent-forge/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/akoita/agent-forge/e2e-tests.yml?branch=main&style=flat-square&label=E2E" alt="E2E Tests" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0284c7?style=flat-square" alt="License: MIT" /></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11%2B-4f46e5?style=flat-square" alt="Python 3.11+" /></a>
+  <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/badge/code%20style-ruff-10b981?style=flat-square" alt="Code style: ruff" /></a>
+</p>
+
+[Demo](#demo) &middot; [Why Agent Forge](#why-agent-forge) &middot; [Workflow](#how-a-verified-run-works) &middot; [Architecture](#architecture) &middot; [Baseline](#measured-model-baseline) &middot; [Quick Start](#quick-start) &middot; [Docs](#documentation)
+
+</div>
 
 ---
 
-## Overview
+Agent Forge runs a **ReAct** (Observe &rarr; Reason &rarr; Act) coding agent against a pinned Git revision inside an isolated sandbox, records resumable checkpoints and typed events, and validates every candidate diff on a separate clean checkout before reporting success.
 
-Agent Forge is a **small, measurable, high-correctness coding harness**. An agent executes the **ReAct** (Reasoning + Acting) loop against a pinned Git revision inside an isolated **Docker** or **Bubblewrap** sandbox, applies changes atomically, persists resumable checkpoints and typed lifecycle events, and verifies every candidate patch on a separate clean checkout.
+---
 
-```mermaid
-graph TD
-    CLI["CLI / Hosted API"] -->|"agent-forge run / resume"| Core
+## Demo
 
-    subgraph Core["Agent Core & Orchestration"]
-        Loop["ReAct Loop<br/>Observe -> Reason -> Act"]
-        Safety["Approvals & Budgets<br/>auto/prompt/deny, cost/time caps"]
-        Persist["Checkpoints & EventJournal<br/>stream.jsonl (run-event-v1)"]
-    end
+<div align="center">
+  <img src="assets/demo.svg" alt="Agent Forge demo — fixing a health endpoint bug" width="840" />
+</div>
 
-    Loop -->|"prompt + tools"| LLM["LLM Adapters<br/>Gemini, OpenAI, Anthropic, Custom"]
-    LLM -->|"tool calls"| Loop
-    Loop -->|"gated execution"| Sandbox["Isolated Sandbox<br/>Docker or Bubblewrap"]
-    Sandbox --- Tools["Tool Registry<br/>read/edit/apply_patch/shell/git/search"]
-    Loop -->|"candidate patch"| Verify["VerificationWorkspace<br/>fresh checkout + independent check"]
+<details>
+<summary>Run or re-record the demo locally</summary>
+
+```bash
+# Watch the scripted terminal demo
+bash scripts/demo.sh
+
+# Record a fresh cast and regenerate assets/demo.svg
+bash scripts/record-demo.sh
 ```
 
-### Key Features
+</details>
 
-- **Verified Local Patches** — Runs start from an isolated checkout of `HEAD`, export a clean `change.patch`, verify the patch on an independent checkout via `--verify-command`, and leave existing working-tree edits untouched.
-- **Isolated Sandboxes** — Run every tool inside ephemeral Docker containers (`--network none`, CPU/memory/PID limits) or daemonless Linux Bubblewrap (`--sandbox-backend bwrap` or `auto`).
-- **Atomic Patch & Git Tools** — Built-in file, shell, search, git workflow tools, and atomic multi-file `apply_patch` with pre-image checks and rollback.
-- **Human-in-the-Loop Approvals** — Classify destructive operations (`rm`, `git push --force`, `git reset --hard`, `apply_patch` deletions) and enforce `--approval-mode auto|prompt|deny`.
-- **Checkpointing, Budgets & Cancellation** — Save step-level checkpoints pinned to `base_revision`, enforce `--max-cost`, `--max-duration`, and `--max-tokens` (with `--budget-action timeout|pause`), and operate runs via `agent-forge resume` and `agent-forge cancel`.
-- **Durable Typed Event Streaming** — Append sequence-indexed `run-event-v1` events to `stream.jsonl` and tail/reconnect losslessly via `agent-forge events --follow`, `status --follow`, or `GET /v1/runs/{run_id}/events` (JSON pagination and SSE with `Last-Event-ID`).
-- **Model Qualification & Benchmarking** — Onboard models via `agent-forge.toml` profiles (`provider`, `model`, optional `base_url`, `api_key_env`, `temperature`), qualify tool calling and isolated fixes with `agent-forge models validate`, and measure verified fixes, latency, and cost (including failures) with `agent-forge models benchmark`.
-- **Extensions & Hosted Service** — Domain features live outside core via Python entry-point plugins (`agent-forge init-extension`, `--profiles-dir`) and an optional authenticated FastAPI runner (`agent-forge serve`).
+---
+
+## Why Agent Forge?
+
+<table width="100%">
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Sandboxed by Default</strong><br />
+      Every tool runs inside ephemeral Docker containers (<code>--network none</code>, CPU, memory, and PID limits) or daemonless Linux Bubblewrap (<code>--sandbox-backend bwrap</code>).
+    </td>
+    <td width="50%" valign="top">
+      <strong>Independently Verified Patches</strong><br />
+      Runs branch from a pinned <code>HEAD</code>, export <code>change.patch</code>, and run <code>--verify-command</code> on a fresh checkout while keeping your working tree untouched.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Multi-Provider &amp; Qualification</strong><br />
+      First-class adapters for Gemini, OpenAI, Anthropic, and custom OpenAI-compatible endpoints, tested with <code>models validate</code> and <code>models benchmark</code>.
+    </td>
+    <td width="50%" valign="top">
+      <strong>Resumable Runs &amp; Event Stream</strong><br />
+      Step checkpoints stay pinned to <code>base_revision</code>, while sequence-indexed <code>run-event-v1</code> events append to <code>stream.jsonl</code> for CLI <code>--follow</code> or SSE clients.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Budget &amp; Approval Gates</strong><br />
+      Cap cost, wall-clock duration, and tokens (<code>--budget-action timeout|pause</code>), and classify destructive operations under <code>--approval-mode auto|prompt|deny</code>.
+    </td>
+    <td width="50%" valign="top">
+      <strong>Domain-Agnostic Extension Layer</strong><br />
+      Core packages stay free of domain vocabulary (enforced in CI); vertical workflows load at runtime via Python entry-point plugins and <code>--profiles-dir</code>.
+    </td>
+  </tr>
+</table>
+
+---
+
+## How a Verified Run Works
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/workflow-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/workflow-light.svg" />
+  <img alt="Verified local patch workflow: Pin HEAD, Sandbox ReAct, Export Patch, Clean Verify, Verified Result" src="assets/workflow-light.svg" width="100%" />
+</picture>
+
+---
+
+## Architecture
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/architecture-light.svg" />
+  <img alt="Agent Forge architecture diagram" src="assets/architecture-light.svg" width="100%" />
+</picture>
+
+<br />
+
+| Layer | Package | Responsibility |
+| --- | --- | --- |
+| **CLI & Hosted API** | `agent_forge.cli`, `agent_forge.service` | Click commands, authenticated FastAPI endpoints, SQLite `runs.db` leases, SSE streaming |
+| **Shared Agent Runner** | `agent_forge.agent.runner` | Unified execution path shared by local CLI runs and hosted service workers |
+| **Agent Core** | `agent_forge.agent`, `agent_forge.orchestration` | ReAct state machine, approval & budget gates, checkpoints, `stream.jsonl` journal |
+| **LLM Adapters** | `agent_forge.llm`, `agent_forge.eval` | Gemini, OpenAI, Anthropic adapters, qualification probes, pinned benchmark corpus |
+| **Sandbox & Tools** | `agent_forge.sandbox`, `agent_forge.tools` | Docker / Bubblewrap isolation, file/shell/search/git tools, atomic `apply_patch` |
+| **Verification** | `agent_forge.agent.verification` | Independent checkout at `base_revision`, patch application, `--verify-command` runner |
+| **Extension Layer** | `agent_forge.extensions`, `plugins/` | External profiles (`--profiles-dir`) and `agent_forge.tools` entry-point plugins |
+
+---
+
+## Measured Model Baseline
+
+Measured across 4 pinned benchmark tasks (`fix-health-status`, `fix-pagination-offset`, `fix-multi-file-summary`, `fix-retry-backoff`) using `bwrap` sandboxes, `max_iterations=10`, `max_tokens_per_run=60000`, and `temperature=0.0` in [docs/eval/baseline-v0.4.0.md](docs/eval/baseline-v0.4.0.md).
+
+| Profile | Provider | Model | Verified | Median Latency | Total Cost (incl. failures) | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| `gemini-flash-lite` | gemini | `gemini-3.1-flash-lite-preview` | **1/4 (25%)** | 113.28s | `$0.027518` | Selected default (`0` rate limits) |
+| `gemini-25-flash` | gemini | `gemini-2.5-flash` | 0/4 (0%) | 73.72s | `$0.017782` | Hit iteration cap / rate limits |
+| `gemini-3-flash` | gemini | `gemini-3-flash-preview` | 0/4 (0%) | 70.92s | `$0.036208` | Hit iteration cap / rate limits |
+| `openai-gpt54`, `anthropic-sonnet`, `meta-llama` | — | Configured in `agent-forge.toml` | — | — | — | Skipped in baseline run (API keys unset) |
+
+<details>
+<summary>Reproduce the multi-profile benchmark</summary>
+
+```bash
+agent-forge models benchmark \
+  --sandbox-backend bwrap \
+  --attempts 1 \
+  --max-iterations 10 \
+  --max-tokens 60000 \
+  --output-json docs/eval/baseline-v0.4.0.json \
+  --output-md docs/eval/baseline-v0.4.0.md
+```
+
+</details>
 
 ---
 
@@ -48,36 +150,43 @@ graph TD
 
 ### Prerequisites
 
-- Python 3.11+
-- Docker or Linux Bubblewrap (`bwrap`)
+- **Python 3.11+**
+- **Docker** or daemonless Linux **Bubblewrap (`bwrap`)**
 - An API key for Gemini (default), OpenAI, Anthropic, or an OpenAI-compatible endpoint
 
-### Installation
+### Install
 
 ```bash
 git clone https://github.com/akoita/agent-forge.git
 cd agent-forge
 
-pip install -e ".[dev]"
+# Minimal CLI + sandbox runtime
+pip install -e .
 
-# Optional: build the default Docker sandbox image (or use --sandbox-backend bwrap on Linux)
+# Optional extras: hosted API ([service]), artifact store ([gcs]), Redis queue ([redis]), dev tools ([dev])
+pip install -e ".[dev,service,gcs,redis]"
+
+# Build the default Docker sandbox image (skip if using --sandbox-backend bwrap on Linux)
 make build-sandbox
 
 export GEMINI_API_KEY="your-key-here"
 ```
 
-### Usage
+### Run an Independently Verified Fix
 
 ```bash
-# Run an isolated coding task and independently verify the resulting patch
 agent-forge run \
   --task "Fix the failing /health check to return 200 OK" \
   --repo ./path/to/your/repo \
   --verify-command "python -m pytest -q" \
   --output-format json \
   --report-file ./artifacts/run-result.json
+```
 
-# Guard destructive actions and set spend/time budgets
+<details>
+<summary><strong>Budgets &amp; approval gates</strong> — cap cost/time and guard destructive commands</summary>
+
+```bash
 agent-forge run \
   --task "Refactor the pagination helper" \
   --repo ./my-app \
@@ -85,39 +194,43 @@ agent-forge run \
   --max-cost 0.50 \
   --max-duration 300 \
   --budget-action pause
+```
 
-# Inspect, follow live events, resume, or cancel a run
+</details>
+
+<details>
+<summary><strong>Inspect, follow, resume &amp; cancel runs</strong> — tail <code>stream.jsonl</code> or resume from checkpoint</summary>
+
+```bash
 agent-forge status <run-id> --output-format json
 agent-forge events <run-id> --follow
 agent-forge resume <run-id> --max-iterations 30
 agent-forge cancel <run-id> --reason "Stopped by operator"
 agent-forge list
 agent-forge config
-
-# Qualify and benchmark configured model profiles
-agent-forge models validate gemini-flash-lite --live
-agent-forge models benchmark --sandbox-backend bwrap --output-md docs/eval/report.md
-
-# Run via queue worker (memory or redis) or hosted FastAPI server
-agent-forge run --task "Fix login bug" --repo ./my-app --queue memory
-agent-forge serve --host 127.0.0.1 --port 8000
 ```
 
-### Demo
-
-<p align="center">
-  <img src="assets/demo.svg" alt="Agent Forge demo — fixing a health endpoint bug" width="800">
-</p>
+</details>
 
 <details>
-<summary>Run the demo locally</summary>
+<summary><strong>Qualify &amp; benchmark models</strong> — probe tool calling before switching default profiles</summary>
 
 ```bash
-# Watch the simulated demo
-bash scripts/demo.sh
+agent-forge models validate gemini-flash-lite --live
+agent-forge models benchmark --sandbox-backend bwrap --output-md docs/eval/report.md
+```
 
-# Record a new asciinema cast
-bash scripts/record-demo.sh
+</details>
+
+<details>
+<summary><strong>Queue worker &amp; hosted FastAPI service</strong> — asynchronous execution and SSE streaming</summary>
+
+```bash
+# Run via local in-memory or Redis task queue
+agent-forge run --task "Fix login bug" --repo ./my-app --queue memory
+
+# Start the hosted API server (/v1/runs, /v1/runs/{run_id}/events SSE)
+agent-forge serve --host 127.0.0.1 --port 8000
 ```
 
 </details>
@@ -126,9 +239,7 @@ bash scripts/record-demo.sh
 
 ## Configuration
 
-Agent Forge uses layered configuration (`CLI flags > env vars > ./agent-forge.toml > ~/.agent-forge/config.toml > defaults`).
-
-Create an `agent-forge.toml` in your project root:
+Agent Forge uses layered configuration with the precedence `CLI flags > env vars > ./agent-forge.toml > ~/.agent-forge/config.toml > defaults`.
 
 ```toml
 [agent]
@@ -151,48 +262,42 @@ base_url = "https://api.together.xyz/v1"
 api_key_env = "TOGETHER_API_KEY"
 ```
 
-See the [Configuration Guide](docs/configuration.md) for all sections, environment variables, and model profiles, and the [Hosted Service Guide](docs/hosted-service.md) for API authentication, policy enforcement, streaming events, and deployment.
+See the [Configuration Guide](docs/configuration.md) for all sections and environment variables, and the [Hosted Service Guide](docs/hosted-service.md) for API keys, workspace source limits, and streaming setup.
 
 ---
 
-## Development
+## Development &amp; Project Structure
 
 ```bash
-pip install -e ".[dev,redis]"
-
-# Deterministic coding-grader checks (no provider credentials required)
+# Deterministic coding-grader eval (no provider credentials required)
 make eval
 
-# Fast unit tests (no Docker)
+# Fast unit tests & full non-E2E suite with coverage
 make test-unit
-
-# Full test suite + coverage (excludes integration & e2e)
 make test
 
-# Docker integration tests & live E2E tests
+# Docker integration & live E2E suites
 make test-integration
 make test-e2e
 
-# Lint, type-check, boundary enforcement, and static quality checks
-make lint
+# Formatting, lint, type-check, static quality & core boundary check
 make format
+make lint
 make quality
 python scripts/check_boundaries.py
 python scripts/check_release.py
 ```
 
-### Project Structure
-
 ```text
 agent_forge/
-├── agent/          # ReAct loop, state machine, approvals, budgets, checkpoints, verification
+├── agent/          # ReAct loop, runner.py, state machine, approvals, budgets, checkpoints, verification
 ├── eval/           # Pinned coding benchmark corpus and runner
 ├── extensions/     # Extension SDK (entry-point discovery, scaffolding, prompt injection)
 ├── llm/            # Provider adapters (Gemini, OpenAI, Anthropic), factory, qualification
 ├── profiles/       # Generic agent profile loader
 ├── tools/          # Built-in tools (including apply_patch & git tools) + plugin loader
 ├── sandbox/        # Docker and Bubblewrap sandbox backends + factory
-├── service/        # Hosted FastAPI service (runs, logs, SSE/JSON event stream, auth/policy)
+├── service/        # Hosted FastAPI service (app.py, store.py, SSE/JSON event stream, auth/policy)
 ├── orchestration/  # Task queues, EventBus, JournalEventSink, RunEventStream, workers
 ├── observability/  # Structured logging, trace context, pricing & cost tracking
 ├── cli.py          # Click CLI entrypoint
@@ -205,30 +310,18 @@ plugins/
 
 ## Documentation
 
-- **[Vision](docs/vision.md)** & **[Strategy](docs/strategy.md)** — Product goals, measurement principles, and ADR/RFC workflow.
-- **[Roadmap](docs/roadmap.md)** & **[Delivery Plan](docs/delivery-plan.md)** — Milestone sequence and exit criteria.
-- **[Latest Model Baseline](docs/eval/baseline-v0.4.0.md)** — Measured benchmark comparison and default model selection.
-- **[Architecture](docs/architecture.md)** — Layer responsibilities and ReAct sequence.
-- **[Configuration](docs/configuration.md)** — Config precedence, env vars, CLI flags, and model profiles.
-- **[Hosted Service](docs/hosted-service.md)** — Hosted API, event streaming, trust boundaries, and operations.
-- **[Testing](docs/testing.md)** — Deterministic graders, unit/integration/e2e tests, and coverage.
-- **[Extending](docs/extending.md)** — Building domain extensions, custom tools, and provider adapters.
-- **[Technical Spec](docs/spec.md)** — Full interface contracts and persistence schemas.
+| Category | Document | Focus |
+| --- | --- | --- |
+| **Direction** | [Vision](docs/vision.md) &middot; [Strategy](docs/strategy.md) &middot; [Roadmap](docs/roadmap.md) &middot; [Delivery Plan](docs/delivery-plan.md) | Product direction, measurement principles, and milestone exit criteria |
+| **Design** | [Architecture](docs/architecture.md) &middot; [Technical Spec](docs/spec.md) &middot; [Documentation Format](docs/documentation-format.md) | Component layers, ReAct sequence, contracts, and doc conventions |
+| **Decisions** | [ADRs](docs/adr) &middot; [RFCs](docs/rfcs) | Architecture decision records (`001`–`004`) and technical proposals (`001`–`002`) |
+| **Evaluation** | [Model Baseline (v0.4.0)](docs/eval/baseline-v0.4.0.md) | Measured benchmark scores, latency, cost, and default selection rationale |
+| **Operations** | [Configuration](docs/configuration.md) &middot; [Hosted Service](docs/hosted-service.md) &middot; [Testing](docs/testing.md) &middot; [Extending](docs/extending.md) | Config precedence, hosted runner operations, test suites, and plugins |
 
 ---
 
-## Contributing
+## Contributing &amp; Community
 
-Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before submitting a pull request.
-
----
-
-## Security
-
-If you discover a security vulnerability, please follow our [Security Policy](SECURITY.md) for responsible disclosure.
-
----
-
-## License
-
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+- **Contributing:** Read the [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before opening a pull request.
+- **Security:** Report vulnerabilities responsibly by following the [Security Policy](SECURITY.md).
+- **License:** Released under the [MIT License](LICENSE).
