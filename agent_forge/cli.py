@@ -6,6 +6,8 @@ import asyncio
 import json
 import os
 import sys
+from contextlib import nullcontext
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +39,7 @@ def main() -> None:
 @main.command()
 @click.option("--task", required=True, help="Coding task description")
 @click.option("--repo", required=True, help="Path to target repository")
+@click.option("--verify-command", help="Verify a coding patch from a fresh Git checkout.")
 @click.option("--model", default=None, help="LLM model to use")
 @click.option("--provider", default=None, help="LLM provider (gemini, openai, anthropic)")
 @click.option("--max-iterations", default=None, type=int, help="Max ReAct loop iterations")
@@ -116,6 +119,7 @@ def run(
     report_file: Path | None,
     profile: str | None,
     profiles_dir: Path | None,
+    verify_command: str | None,
 ) -> None:
     """Run an agent task on a repository."""
     # --- Resolve profile early so it can override provider/model ---
@@ -170,6 +174,8 @@ def run(
         )
         sys.exit(1)
 
+    _validate_verification_mode(verify_command, queue_backend)
+
     if queue_backend is not None:
         if output_format == "json" or report_file is not None:
             err_console.print(
@@ -190,7 +196,15 @@ def run(
         )
     else:
         result = asyncio.run(
-            _run_agent(task, repo, cfg, provider_name, api_key, profile=resolved_profile),
+            _run_agent(
+                task,
+                repo,
+                cfg,
+                provider_name,
+                api_key,
+                profile=resolved_profile,
+                verify_command=verify_command,
+            ),
         )
         _emit_run_output(
             result,
@@ -198,6 +212,18 @@ def run(
             report_file=report_file,
             profile=resolved_profile,
         )
+        _exit_on_verification_failure(verify_command, result.state.value)
+
+
+def _validate_verification_mode(command: str | None, queue_backend: str | None) -> None:
+    if command is not None and (queue_backend is not None or not command.strip()):
+        msg = "--verify-command requires direct mode and a non-empty command."
+        raise click.UsageError(msg)
+
+
+def _exit_on_verification_failure(command: str | None, state: str) -> None:
+    if command is not None and state != "completed":
+        raise click.exceptions.Exit(1)
 
 
 async def _run_agent(
@@ -208,15 +234,19 @@ async def _run_agent(
     api_key: str,
     *,
     profile: Any | None = None,
+    verify_command: str | None = None,
 ) -> Any:
     """Execute the full agent pipeline (direct mode).
 
     Creates an ``EventBus`` so lifecycle events are emitted even in
     direct mode — this enables observability subscribers.
     """
+    from functools import partial
+
     from agent_forge.agent.core import react_loop
     from agent_forge.agent.models import AgentConfig, AgentRun
     from agent_forge.agent.prompts import build_system_prompt
+    from agent_forge.agent.verification import VerificationWorkspace
     from agent_forge.orchestration.events import EventBus
     from agent_forge.sandbox.factory import create_sandbox
     from agent_forge.tools import create_default_registry
@@ -252,26 +282,33 @@ async def _run_agent(
     )
     agent_run = AgentRun(task=task, repo_path=repo, config=agent_config)
     sandbox = create_sandbox(sandbox_config)
-    llm = create_provider(provider_name, api_key)
+    verification_workspace = (
+        VerificationWorkspace(repo, verify_command) if verify_command is not None else nullcontext()
+    )
 
     with console.status("[bold green]Agent running...", spinner="dots"):
         try:
-            await sandbox.start(repo_path=repo, config=sandbox_config)
-            result = await react_loop(
-                agent_run,
-                llm,
-                tools,
-                sandbox,
-                event_bus=event_bus,
-            )
+            with verification_workspace as workspace:
+                path = str(workspace.workspace) if workspace is not None else repo
+                verify = (
+                    partial(workspace.verify, sandbox_config, sandbox)
+                    if workspace is not None
+                    else None
+                )
+                llm = create_provider(provider_name, api_key)
+                try:
+                    await sandbox.start(repo_path=path, config=sandbox_config)
+                    return await react_loop(
+                        agent_run, llm, tools, sandbox, event_bus=event_bus, verify=verify
+                    )
+                finally:
+                    try:
+                        await sandbox.stop()
+                    finally:
+                        await llm.close()
         except Exception as exc:  # noqa: BLE001 — top-level catch-all for CLI
             err_console.print(f"[red]Agent failed:[/red] {exc}")
             sys.exit(1)
-        finally:
-            await sandbox.stop()
-            await llm.close()
-
-    return result
 
 
 async def _run_agent_queued(
@@ -472,6 +509,11 @@ def _display_run_summary(run: Any) -> None:
         table.add_row("Duration", f"{elapsed:.1f}s")
     if run.error:
         table.add_row("Error", f"[red]{run.error}[/red]")
+    if run.verification is not None:
+        table.add_row("Verification", run.verification.reason)
+        table.add_row("Base revision", run.verification.base_revision)
+        if run.verification.patch:
+            table.add_row("Patch", str(USER_CONFIG_DIR / "runs" / run.id / "change.patch"))
 
     console.print(Panel(table, title="[bold]Agent Run Complete", border_style=state_color))
 
@@ -507,6 +549,15 @@ def _run_output_payload(run: Any, *, profile: Any | None = None) -> dict[str, ob
             "summary_json": str(run_dir / "summary.json"),
         },
     }
+    from agent_forge.agent.verification import VerificationResult
+
+    verification = getattr(run, "verification", None)
+    if isinstance(verification, VerificationResult):
+        payload["verification"] = asdict(verification)
+        if verification.patch:
+            artifacts = payload["artifacts"]
+            if isinstance(artifacts, dict):
+                artifacts["patch"] = str(run_dir / "change.patch")
     if profile is not None:
         payload["profile"] = {
             "id": profile.id,
