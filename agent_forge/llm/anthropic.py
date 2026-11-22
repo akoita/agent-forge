@@ -259,6 +259,7 @@ class AnthropicProvider(LLMProvider):
             usage=usage,
             model=model,
             finish_reason=mapped_reason,
+            reported_model=data.get("model"),
         )
 
     def _parse_stream_event(self, event: dict[str, Any], model: str) -> LLMResponse | None:
@@ -332,7 +333,8 @@ class AnthropicProvider(LLMProvider):
         """POST with exponential backoff retry on retryable errors."""
         last_exc: Exception | None = None
 
-        for attempt in range(_MAX_RETRIES + 1):
+        max_retries = _MAX_RETRIES if config.max_retries is None else config.max_retries
+        for attempt in range(max_retries + 1):
             try:
                 resp = await self._client.post(
                     url,
@@ -340,23 +342,23 @@ class AnthropicProvider(LLMProvider):
                     timeout=httpx.Timeout(config.timeout_seconds),
                 )
                 if resp.status_code in _RETRYABLE_STATUS_CODES:
-                    if attempt < _MAX_RETRIES:
+                    if attempt < max_retries:
                         delay = self._compute_delay(attempt, resp)
                         logger.warning(
                             "anthropic_retryable_error",
                             status_code=resp.status_code,
                             delay=round(delay, 1),
                             attempt=attempt + 1,
-                            max_retries=_MAX_RETRIES,
+                            max_retries=max_retries,
                         )
                         await asyncio.sleep(delay)
                         continue
                     if resp.status_code == 429:
                         raise LLMRateLimitError(
-                            f"Anthropic rate limit exceeded after {_MAX_RETRIES} retries"
+                            f"Anthropic rate limit exceeded after {max_retries} retries"
                         )
                     raise LLMResponseError(
-                        f"Anthropic API returned {resp.status_code} after {_MAX_RETRIES} retries"
+                        f"Anthropic API returned {resp.status_code} after {max_retries} retries"
                     )
 
                 self._check_status(resp)
@@ -364,11 +366,11 @@ class AnthropicProvider(LLMProvider):
                 try:
                     return resp.json()  # type: ignore[no-any-return]
                 except (json.JSONDecodeError, ValueError) as exc:
-                    if attempt < _MAX_RETRIES:
+                    if attempt < max_retries:
                         logger.warning(
                             "anthropic_malformed_response",
                             attempt=attempt + 1,
-                            max_retries=_MAX_RETRIES,
+                            max_retries=max_retries,
                         )
                         await asyncio.sleep(_BACKOFF_BASE)
                         continue
@@ -376,18 +378,18 @@ class AnthropicProvider(LLMProvider):
 
             except httpx.TimeoutException as exc:
                 last_exc = exc
-                if attempt < _MAX_RETRIES:
+                if attempt < max_retries:
                     logger.warning(
                         "anthropic_timeout",
                         attempt=attempt + 1,
-                        max_retries=_MAX_RETRIES,
+                        max_retries=max_retries,
                     )
                     await asyncio.sleep(_BACKOFF_BASE)
                     continue
                 raise LLMTimeoutError(
                     f"Anthropic request timed out after "
                     f"{config.timeout_seconds}s "
-                    f"({_MAX_RETRIES} retries exhausted)"
+                    f"({max_retries} retries exhausted)"
                 ) from last_exc
 
         # Should not reach here, but satisfy type checker
