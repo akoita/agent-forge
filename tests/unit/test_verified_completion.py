@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import subprocess
 from pathlib import Path
@@ -99,14 +100,16 @@ def test_cli_reports_verified_outcome(
     monkeypatch.setattr(persistence, "_default_runs_dir", lambda: runs_dir)
     monkeypatch.setattr("agent_forge.cli.USER_CONFIG_DIR", tmp_path)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    runner_options = (
+        {"mix_stderr": False} if "mix_stderr" in inspect.signature(CliRunner).parameters else {}
+    )
     with (
         patch("agent_forge.sandbox.factory.create_sandbox", return_value=agent_sandbox),
         patch("agent_forge.agent.verification.create_sandbox", return_value=verifier_sandbox),
         patch("agent_forge.cli.create_provider", return_value=model),
-        patch("agent_forge.agent.core.print_run_summary"),
         patch("agent_forge.agent.core.save_summary"),
     ):
-        response = CliRunner().invoke(
+        response = CliRunner(**runner_options).invoke(
             main,
             [
                 "run",
@@ -124,7 +127,9 @@ def test_cli_reports_verified_outcome(
         )
 
     assert response.exit_code == (0 if expected == "verified" else 1), response.output
-    payload = json.loads(report_file.read_text())
+    payload = json.loads(response.stdout)
+    assert payload == json.loads(report_file.read_text())
+    assert "Run Summary" in response.stderr
     assert payload["verification"]["base_revision"] == revision
     assert payload["verification"]["reason"] == expected
     assert payload["state"] == ("completed" if expected == "verified" else "failed")

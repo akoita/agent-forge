@@ -158,6 +158,12 @@ export OPENAI_API_KEY="sk-..."
 agent-forge run --task "Add input validation" --repo ./my-app
 ```
 
+### JSON output
+
+Direct CLI runs with `--output-format json` write one result object to stdout.
+Runtime logs and the human summary go to stderr. Use `--report-file` to save the
+same result object to disk.
+
 ### Sandbox Tuning
 
 ```toml
