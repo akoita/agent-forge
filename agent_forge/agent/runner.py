@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from agent_forge.llm.base import LLMProvider
     from agent_forge.orchestration.events import EventBus
     from agent_forge.sandbox.base import Sandbox
-    from agent_forge.tools.registry import ToolRegistry
+    from agent_forge.tools.base import ToolRegistry
 
 PostRunHook = Callable[["AgentRun", "LLMProvider", "ToolRegistry", "Sandbox"], Awaitable[None]]
 
