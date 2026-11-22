@@ -158,6 +158,37 @@ export OPENAI_API_KEY="sk-..."
 agent-forge run --task "Add input validation" --repo ./my-app
 ```
 
+### Qualify a named model
+
+Give a candidate an alias in the project or user TOML file. Set the model
+identifier for an API the selected adapter supports.
+
+```toml
+[model_profiles.candidate]
+provider = "openai"
+model = "gpt-4o"
+```
+
+Run these commands from the project directory.
+
+```sh
+agent-forge models validate candidate
+agent-forge models validate candidate --live
+```
+
+The first command checks configuration without contacting a provider. The
+optional live command needs the provider's configured API key and can incur
+API charges. It sends at most two requests with retries disabled, a 45-second
+overall deadline, and a requested maximum of 256 output tokens per request.
+The JSON report records usage and any provider-reported model versions. A
+failed probe returns a nonzero exit code. The independent coding check is
+recorded as `not_run`. Use the [verified coding workflow](testing.md#verify-a-coding-run)
+to test whether the model can deliver a fix.
+
+Pass `--model-profile candidate` to `agent-forge run` to select the alias's provider
+and model together. The alias takes precedence over the other provider and model
+selections for that invocation. Other run settings still use normal precedence.
+
 ### JSON output
 
 Direct CLI runs with `--output-format json` write one result object to stdout.

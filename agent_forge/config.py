@@ -15,7 +15,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
 # Config Section Models
@@ -88,6 +88,15 @@ class ProviderSettings(BaseModel):
     default_model: str = ""
 
 
+class ModelProfileSettings(BaseModel):
+    """A named model selection for a supported provider."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    provider: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+
+
 class ForgeConfig(BaseModel):
     """Top-level configuration composing all sections."""
 
@@ -96,6 +105,7 @@ class ForgeConfig(BaseModel):
     queue: QueueSettings = Field(default_factory=QueueSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     service: ServiceSettings = Field(default_factory=ServiceSettings)
+    model_profiles: dict[str, ModelProfileSettings] = Field(default_factory=dict)
     providers: dict[str, ProviderSettings] = Field(
         default_factory=lambda: {
             "gemini": ProviderSettings(

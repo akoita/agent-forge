@@ -31,6 +31,28 @@ def main() -> None:
     """Agent Forge — Sandboxed AI coding agent runtime."""
 
 
+@main.group()
+def models() -> None:
+    """Inspect and qualify configured models."""
+
+
+@models.command("validate")
+@click.argument("profile")
+@click.option("--live", is_flag=True, help="Allow a limited, two-turn provider API probe.")
+def validate_model(profile: str, live: bool) -> None:
+    """Report qualification results for a configured model profile."""
+    from agent_forge.llm.qualification import qualification_report
+
+    try:
+        report = qualification_report(profile, live=live)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(report, indent=2))
+    live_report = report["live_tool_exchange"]
+    if isinstance(live_report, dict) and live_report["status"] == "failed":
+        raise click.exceptions.Exit(1)
+
+
 # ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
@@ -41,6 +63,7 @@ def main() -> None:
 @click.option("--repo", required=True, help="Path to target repository")
 @click.option("--verify-command", help="Verify a coding patch from a fresh Git checkout.")
 @click.option("--model", default=None, help="LLM model to use")
+@click.option("--model-profile", help="Use a named provider and model from configuration.")
 @click.option("--provider", default=None, help="LLM provider (gemini, openai, anthropic)")
 @click.option("--max-iterations", default=None, type=int, help="Max ReAct loop iterations")
 @click.option("--sandbox-image", default=None, help="Sandbox image to run")
@@ -120,6 +143,7 @@ def run(
     profile: str | None,
     profiles_dir: Path | None,
     verify_command: str | None,
+    model_profile: str | None,
 ) -> None:
     """Run an agent task on a repository."""
     # --- Resolve profile early so it can override provider/model ---
@@ -154,6 +178,8 @@ def run(
             command_timeout=command_timeout,
         )
     )
+
+    _apply_model_profile(cfg, model_profile)
 
     # Resolve API key
     provider_name = cfg.agent.default_provider
@@ -220,6 +246,18 @@ def run(
         _exit_on_verification_failure(verify_command, result.state.value)
 
 
+def _apply_model_profile(config: Any, name: str | None) -> None:
+    if name is not None:
+        from agent_forge.llm.qualification import resolve_model_profile
+
+        try:
+            selected = resolve_model_profile(config, name)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        config.agent.default_provider = selected.provider
+        config.agent.default_model = selected.model
+
+
 def _validate_verification_mode(command: str | None, queue_backend: str | None) -> None:
     if command is not None and (queue_backend is not None or not command.strip()):
         msg = "--verify-command requires direct mode and a non-empty command."
@@ -259,6 +297,7 @@ async def _run_agent(
     sandbox_config = _build_sandbox_config(cfg)
     agent_config = AgentConfig(
         model=cfg.agent.default_model,
+        provider=provider_name,
         max_iterations=cfg.agent.max_iterations,
         max_tokens_per_run=cfg.agent.max_tokens_per_run,
         temperature=cfg.agent.temperature,
@@ -339,6 +378,7 @@ async def _run_agent_queued(
 
     agent_config = AgentConfig(
         model=cfg.agent.default_model,
+        provider=provider_name,
         max_iterations=cfg.agent.max_iterations,
         max_tokens_per_run=cfg.agent.max_tokens_per_run,
         temperature=cfg.agent.temperature,

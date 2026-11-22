@@ -79,6 +79,7 @@ class LLMResponse:
     usage: TokenUsage = field(default_factory=lambda: TokenUsage(0, 0, 0))
     model: str = ""
     finish_reason: str = ""  # "stop", "tool_calls", "length", "error"
+    reported_model: str | None = None
 
 
 @dataclass
@@ -90,6 +91,7 @@ class LLMConfig:
     max_tokens: int = 4096
     top_p: float = 1.0
     timeout_seconds: int = 120
+    max_retries: int | None = None
 
 
 class LLMProvider(ABC):
