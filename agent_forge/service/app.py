@@ -17,13 +17,20 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 from urllib.parse import ParseResult, urlparse
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+try:
+    from fastapi import FastAPI, HTTPException, Request
+    from fastapi.responses import JSONResponse, StreamingResponse
+except ImportError as exc:
+    msg = (
+        "Hosted service requires optional dependencies. "
+        "Install with: pip install 'agent-forge[service]'"
+    )
+    raise ImportError(msg) from exc
 
 from agent_forge import __version__
 from agent_forge.agent.core import react_loop
 from agent_forge.agent.models import AgentConfig, AgentRun
-from agent_forge.agent.prompts import build_hosted_system_prompt
+from agent_forge.agent.runner import run_agent_task
 from agent_forge.config import USER_CONFIG_DIR, ForgeConfig, load_config
 from agent_forge.llm.factory import create_provider, provider_names
 from agent_forge.orchestration.event_stream import (
@@ -35,7 +42,6 @@ from agent_forge.orchestration.events import EventBus
 from agent_forge.orchestration.queue import InMemoryQueue, Task, TaskStatus
 from agent_forge.orchestration.worker import Worker
 from agent_forge.profiles import AgentProfile, load_profiles
-from agent_forge.sandbox.base import SandboxConfig
 from agent_forge.sandbox.factory import create_sandbox
 from agent_forge.service.models import (
     ErrorResponse,
@@ -828,7 +834,8 @@ class HostedRunService:
             storage = importlib.import_module("google.cloud.storage")
         except ImportError as exc:
             self._raise_source_fetch_failed(
-                "gs:// URIs require google-cloud-storage support in this service build"
+                "gs:// URIs require google-cloud-storage support. "
+                "Install with: pip install 'agent-forge[gcs]'"
             )
             raise AssertionError("unreachable") from exc
 
@@ -849,7 +856,8 @@ class HostedRunService:
             google_exceptions = importlib.import_module("google.api_core.exceptions")
         except ImportError as exc:
             self._raise_source_fetch_failed(
-                "gs:// URIs require google-cloud-storage support in this service build"
+                "gs:// URIs require google-cloud-storage support. "
+                "Install with: pip install 'agent-forge[gcs]'"
             )
             raise AssertionError("unreachable") from exc
 
@@ -984,20 +992,14 @@ class HostedRunService:
             record = self._records[task.id]
             record.started_at = datetime.now(UTC)
 
-            # Resolve agent profile for this request
-            request_profile_id = record.request.profile.id
-            resolved_profile = self._profile_registry.get(request_profile_id)
+            resolved_profile = self._profile_registry.get(record.request.profile.id)
             prompt_scope = resolved_profile.prompt_scope if resolved_profile else None
 
-            # Discover extension prompt fragments
-            from agent_forge.extensions.discovery import discover_extension_prompt_fragments
-
-            extension_prompts = discover_extension_prompt_fragments() or None
-
-            # Determine LLM provider — profile can override service default
-            provider_name = self._config.agent.default_provider
-            if resolved_profile and resolved_profile.llm_provider:
-                provider_name = resolved_profile.llm_provider
+            provider_name = (
+                resolved_profile.llm_provider
+                if resolved_profile and resolved_profile.llm_provider
+                else self._config.agent.default_provider
+            )
             provider_cfg = self._config.providers.get(provider_name)
             if provider_cfg is None or provider_name not in provider_names():
                 record.error = RunError(
@@ -1015,53 +1017,25 @@ class HostedRunService:
                 )
                 raise RuntimeError(record.error.message)
 
-            # Determine model — profile can override service default
-            model_name = task.config.model
-            if resolved_profile and resolved_profile.llm_model:
-                model_name = resolved_profile.llm_model
-
-            tools = create_default_registry()
-            sandbox_config = SandboxConfig(
-                backend=self._config.sandbox.backend,
-                image=self._config.sandbox.image,
-                cpu_limit=self._config.sandbox.cpu_limit,
-                memory_limit=self._config.sandbox.memory_limit,
-                timeout_seconds=self._config.sandbox.timeout_seconds,
-                network_enabled=self._config.sandbox.network_enabled,
-                writable_cache_mounts=self._config.sandbox.writable_cache_mounts,
-            )
-            sandbox = create_sandbox(sandbox_config)
-            tool_definitions = tools.list_definitions()
-            hosted_prompt = build_hosted_system_prompt(
-                task.task_description,
-                tool_definitions,
-                report_schema=record.request.profile.report_schema,
-                sandbox_backend=sandbox_config.backend,
-                sandbox_image=sandbox_config.image,
-                network_enabled=sandbox_config.network_enabled,
-                prompt_scope=prompt_scope,
-                extension_prompts=extension_prompts,
+            model_name = (
+                resolved_profile.llm_model
+                if resolved_profile and resolved_profile.llm_model
+                else task.config.model
             )
             agent_config = AgentConfig(
                 model=model_name,
                 max_iterations=task.config.max_iterations,
                 max_tokens_per_run=task.config.max_tokens_per_run,
                 temperature=task.config.temperature,
-                system_prompt=hosted_prompt,
                 profile_id=resolved_profile.id if resolved_profile else None,
             )
-            agent_run = AgentRun(
-                task=task.task_description,
-                repo_path=task.repo_path,
-                config=agent_config,
-                id=task.id,
-            )
-            llm = create_provider(provider_name, api_key)
-            try:
-                await sandbox.start(repo_path=task.repo_path, config=sandbox_config)
-                await react_loop(agent_run, llm, tools, sandbox, event_bus=self._event_bus)
 
-                # Report finalization: recovery pass if report is missing
+            async def _post_run_hook(
+                agent_run: AgentRun,
+                llm: Any,
+                tools: Any,
+                sandbox: Any,
+            ) -> None:
                 if not record.report_path.exists():
                     self._append_access_event(
                         event="run.report_recovery_started",
@@ -1097,9 +1071,27 @@ class HostedRunService:
                         event_bus=self._event_bus,
                     )
 
-                # Post-run validation: existence + JSON + schema
                 self._validate_report_artifact(record)
 
+            try:
+                await run_agent_task(
+                    task.task_description,
+                    task.repo_path,
+                    self._config,
+                    agent_config,
+                    provider_name,
+                    api_key,
+                    run_id=task.id,
+                    prompt_scope=prompt_scope,
+                    report_schema=record.request.profile.report_schema,
+                    discover_extensions=True,
+                    event_bus=self._event_bus,
+                    post_run_hook=_post_run_hook,
+                    tools_factory=create_default_registry,
+                    sandbox_factory=create_sandbox,
+                    provider_factory=create_provider,
+                    react_loop_fn=react_loop,
+                )
                 record.completed_at = datetime.now(UTC)
                 self._append_access_event(
                     event="run.completed",
@@ -1133,9 +1125,6 @@ class HostedRunService:
                     user_agent=record.user_agent,
                 )
                 raise
-            finally:
-                await sandbox.stop()
-                await llm.close()
 
         return _runner
 

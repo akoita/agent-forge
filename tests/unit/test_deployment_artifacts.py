@@ -15,7 +15,7 @@ def test_extension_dockerfile_supports_extension_build_arg() -> None:
 
     assert 'ARG EXTENSIONS=""' in dockerfile
     assert "COPY examples ./examples" in dockerfile
-    assert 'RUN pip install --no-cache-dir ".[redis]"' in dockerfile
+    assert 'RUN pip install --no-cache-dir ".[service,gcs,redis]"' in dockerfile
     assert "pip install --no-cache-dir ${EXTENSIONS}" in dockerfile
     assert "RUN agent-forge extensions list" in dockerfile
 

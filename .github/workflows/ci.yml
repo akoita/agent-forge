@@ -22,7 +22,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,service,gcs]"
 
       - name: Run linters
         run: make lint
@@ -45,7 +45,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,service,gcs]"
 
       - name: Run unit tests
         run: make test-unit
@@ -68,7 +68,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,service,gcs]"
 
       - name: Build sandbox Docker image
         run: make build-sandbox
@@ -89,7 +89,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,service,gcs]"
 
       - name: Run quality checks
         run: make quality

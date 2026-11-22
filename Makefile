@@ -4,7 +4,7 @@ update-prices:             ## Refresh vendored model pricing from LiteLLM
 	python scripts/update_prices.py
 
 setup:                     ## Install dependencies
-	pip install -e ".[dev,redis]"
+	pip install -e ".[dev,service,gcs,redis]"
 
 build-sandbox:             ## Build the sandbox Docker image
 	docker build -t agent-forge-sandbox:latest -f agent_forge/sandbox/Dockerfile .

@@ -29,7 +29,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,service,gcs]"
 
       - name: Run linters
         if: matrix.python-version == '3.13'
@@ -73,7 +73,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,service,gcs]"
 
       - name: Build sandbox Docker image
         run: make build-sandbox

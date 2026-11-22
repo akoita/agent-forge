@@ -25,7 +25,7 @@ COPY agent-forge.toml ./agent-forge.toml
 COPY agent_forge ./agent_forge
 COPY examples ./examples
 
-RUN pip install --no-cache-dir ".[redis]"
+RUN pip install --no-cache-dir ".[service,gcs,redis]"
 
 # Install extension distributions after the core runtime so their entry points
 # are available to the hosted service image. Values are passed directly to

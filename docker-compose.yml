@@ -18,6 +18,8 @@ services:
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
     volumes:
+      # Single-tenant / local-dev only: the Docker socket grants host-root
+      # equivalent access. See docs/hosted-service.md ("Trust Model & Single-Tenant Boundary").
       - /var/run/docker.sock:/var/run/docker.sock
       - agent_forge_data:/var/lib/agent-forge
     depends_on:
