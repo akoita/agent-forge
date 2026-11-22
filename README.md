@@ -1,6 +1,6 @@
 # Agent Forge
 
-> A sandboxed AI coding agent runtime that autonomously modifies codebases through LLM-driven reasoning and isolated tool execution.
+> Domain-agnostic AI coding harness — isolated Docker/Bubblewrap sandboxes, multi-provider model qualification, and independently verified patches.
 
 [![CI](https://github.com/akoita/agent-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/akoita/agent-forge/actions/workflows/ci.yml)
 [![E2E Tests](https://github.com/akoita/agent-forge/actions/workflows/e2e-tests.yml/badge.svg)](https://github.com/akoita/agent-forge/actions/workflows/e2e-tests.yml)
@@ -12,127 +12,94 @@
 
 ## Overview
 
-Agent Forge implements the **ReAct** (Reasoning + Acting) pattern: an agent receives a coding task, iteratively reasons about what to do via an LLM, invokes tools inside **ephemeral Docker containers**, and loops until the task is complete.
+Agent Forge is a **small, measurable, high-correctness coding harness**. An agent executes the **ReAct** (Reasoning + Acting) loop against a pinned Git revision inside an isolated **Docker** or **Bubblewrap** sandbox, applies changes atomically, persists resumable checkpoints and typed lifecycle events, and verifies every candidate patch on a separate clean checkout.
 
 ```mermaid
 graph TD
-    CLI["CLI<br/>(Click commands)"]
-    CLI -->|"agent-forge run"| Core
+    CLI["CLI / Hosted API"] -->|"agent-forge run / resume"| Core
 
-    subgraph Core["Agent Core"]
-        Loop["ReAct Loop<br/>Observe → Reason → Act"]
-        State["State Machine<br/>(PENDING → RUNNING → ...)"]
-        Persist["Persistence<br/>(save/load runs)"]
+    subgraph Core["Agent Core & Orchestration"]
+        Loop["ReAct Loop<br/>Observe -> Reason -> Act"]
+        Safety["Approvals & Budgets<br/>auto/prompt/deny, cost/time caps"]
+        Persist["Checkpoints & EventJournal<br/>stream.jsonl (run-event-v1)"]
     end
 
-    Loop -->|"prompt + tools"| LLM
-    LLM -->|"function calls"| Loop
-    Loop -->|"execute tool"| Sandbox
-    Sandbox -->|"result"| Loop
-
-    subgraph LLM["LLM Provider"]
-        Gemini["Gemini 3.1<br/>(primary)"]
-    end
-
-    subgraph Sandbox["Docker Sandbox"]
-        Docker["Ephemeral Container<br/>(per-run, isolated)"]
-    end
-
-    subgraph Tools["Tool Registry"]
-        read_file
-        write_file
-        edit_file
-        list_directory
-        run_shell
-        search_codebase
-    end
-
-    Sandbox ---|"workspace<br/>bind-mount"| Tools
+    Loop -->|"prompt + tools"| LLM["LLM Adapters<br/>Gemini, OpenAI, Anthropic, Custom"]
+    LLM -->|"tool calls"| Loop
+    Loop -->|"gated execution"| Sandbox["Isolated Sandbox<br/>Docker or Bubblewrap"]
+    Sandbox --- Tools["Tool Registry<br/>read/edit/apply_patch/shell/git/search"]
+    Loop -->|"candidate patch"| Verify["VerificationWorkspace<br/>fresh checkout + independent check"]
 ```
 
 ### Key Features
 
-- **🔒 Sandboxed Execution** — Every tool invocation runs in an ephemeral Docker container (or lightweight bubblewrap namespace) with resource limits — never on the host.
-- **🧠 Gemini 3.1 Ready** — Full support for thought signatures, exponential backoff with jitter, and `Retry-After` header.
-- **🔌 Multi-Provider LLM** — Gemini (primary), OpenAI, and Anthropic adapters, all wired through a pluggable factory.
-- **🎭 Agent Profiles** — YAML-based personas with configurable prompt scope, LLM overrides, and iteration limits.
-- **🌐 Hosted Service Mode** — Run Agent Forge as a versioned FastAPI service for external clients with API-key auth, policy controls, and Proof-of-Audit compatibility.
-- **🧩 Extension SDK** — Scaffold, build, and install domain-specific extensions as separate packages with `agent-forge init-extension`. Auto-discovers profiles, tools, and metadata via Python entry points.
-- **📊 Observability** — Structured JSON logs, trace IDs, token/cost tracking on every run.
-- **💾 Run Persistence** — Every agent run is saved to disk with full conversation history and tool invocations.
-- **🔧 Tool Plugins** — Add tools via the `Tool` ABC and ship them as entry-point packages that load automatically.
+- **Verified Local Patches** — Runs start from an isolated checkout of `HEAD`, export a clean `change.patch`, verify the patch on an independent checkout via `--verify-command`, and leave existing working-tree edits untouched.
+- **Isolated Sandboxes** — Run every tool inside ephemeral Docker containers (`--network none`, CPU/memory/PID limits) or daemonless Linux Bubblewrap (`--sandbox-backend bwrap` or `auto`).
+- **Atomic Patch & Git Tools** — Built-in file, shell, search, git workflow tools, and atomic multi-file `apply_patch` with pre-image checks and rollback.
+- **Human-in-the-Loop Approvals** — Classify destructive operations (`rm`, `git push --force`, `git reset --hard`, `apply_patch` deletions) and enforce `--approval-mode auto|prompt|deny`.
+- **Checkpointing, Budgets & Cancellation** — Save step-level checkpoints pinned to `base_revision`, enforce `--max-cost`, `--max-duration`, and `--max-tokens` (with `--budget-action timeout|pause`), and operate runs via `agent-forge resume` and `agent-forge cancel`.
+- **Durable Typed Event Streaming** — Append sequence-indexed `run-event-v1` events to `stream.jsonl` and tail/reconnect losslessly via `agent-forge events --follow`, `status --follow`, or `GET /v1/runs/{run_id}/events` (JSON pagination and SSE with `Last-Event-ID`).
+- **Model Qualification & Benchmarking** — Onboard models via `agent-forge.toml` profiles (`provider`, `model`, optional `base_url`, `api_key_env`, `temperature`), qualify tool calling and isolated fixes with `agent-forge models validate`, and measure verified fixes, latency, and cost (including failures) with `agent-forge models benchmark`.
+- **Extensions & Hosted Service** — Domain features live outside core via Python entry-point plugins (`agent-forge init-extension`, `--profiles-dir`) and an optional authenticated FastAPI runner (`agent-forge serve`).
 
 ---
 
 ## Quick Start
 
-> ✅ _Verified end-to-end with `gemini-3.1-flash-lite-preview` on 2026-03-07 — 17/17 E2E tests passing._
-
 ### Prerequisites
 
 - Python 3.11+
-- Docker
-- A Gemini API key (or OpenAI/Anthropic)
+- Docker or Linux Bubblewrap (`bwrap`)
+- An API key for Gemini (default), OpenAI, Anthropic, or an OpenAI-compatible endpoint
 
 ### Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/akoita/agent-forge.git
 cd agent-forge
 
-# Install in development mode
 pip install -e ".[dev]"
 
-# Build the sandbox Docker image
+# Optional: build the default Docker sandbox image (or use --sandbox-backend bwrap on Linux)
 make build-sandbox
 
-# Set your API key
 export GEMINI_API_KEY="your-key-here"
 ```
 
 ### Usage
 
 ```bash
-# Run an agent task (direct mode — default)
+# Run an isolated coding task and independently verify the resulting patch
 agent-forge run \
-  --task "Add input validation to the /api/users endpoint" \
-  --repo ./path/to/your/repo
-
-# Run via queue → worker pipeline (in-memory)
-agent-forge run \
-  --task "Fix login bug" \
-  --repo ./my-app \
-  --queue memory
-
-# Run via Redis queue (requires Redis)
-agent-forge run \
-  --task "Refactor auth module" \
-  --repo ./my-app \
-  --queue redis \
-  --redis-url redis://localhost:6379/0 \
-  --max-concurrent-runs 4
-
-# Check run status
-agent-forge status <run-id>
-
-# Emit a machine-readable run result and persist it to disk
-agent-forge run \
-  --task "Generate a structured audit report" \
-  --repo ./my-app \
+  --task "Fix the failing /health check to return 200 OK" \
+  --repo ./path/to/your/repo \
+  --verify-command "python -m pytest -q" \
   --output-format json \
   --report-file ./artifacts/run-result.json
 
-# Render an existing run as JSON
+# Guard destructive actions and set spend/time budgets
+agent-forge run \
+  --task "Refactor the pagination helper" \
+  --repo ./my-app \
+  --approval-mode prompt \
+  --max-cost 0.50 \
+  --max-duration 300 \
+  --budget-action pause
+
+# Inspect, follow live events, resume, or cancel a run
 agent-forge status <run-id> --output-format json
-
-# List recent runs
+agent-forge events <run-id> --follow
+agent-forge resume <run-id> --max-iterations 30
+agent-forge cancel <run-id> --reason "Stopped by operator"
 agent-forge list
-
-# View resolved configuration
 agent-forge config
 
-# Run the hosted service
+# Qualify and benchmark configured model profiles
+agent-forge models validate gemini-flash-lite --live
+agent-forge models benchmark --sandbox-backend bwrap --output-md docs/eval/report.md
+
+# Run via queue worker (memory or redis) or hosted FastAPI server
+agent-forge run --task "Fix login bug" --repo ./my-app --queue memory
 agent-forge serve --host 127.0.0.1 --port 8000
 ```
 
@@ -159,7 +126,7 @@ bash scripts/record-demo.sh
 
 ## Configuration
 
-Agent Forge uses a layered configuration system (CLI flags > env vars > project config > user config > defaults).
+Agent Forge uses layered configuration (`CLI flags > env vars > ./agent-forge.toml > ~/.agent-forge/config.toml > defaults`).
 
 Create an `agent-forge.toml` in your project root:
 
@@ -168,81 +135,85 @@ Create an `agent-forge.toml` in your project root:
 max_iterations = 25
 default_provider = "gemini"
 default_model = "gemini-3.1-flash-lite-preview"
+approval_mode = "auto"
+budget_action = "timeout"
 
 [sandbox]
+backend = "docker"
 memory_limit = "512m"
 timeout_seconds = 300
 network_enabled = false
+
+[model_profiles.custom]
+provider = "openai"
+model = "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
+base_url = "https://api.together.xyz/v1"
+api_key_env = "TOGETHER_API_KEY"
 ```
 
-See the [Configuration Guide](docs/configuration.md) for full reference.
-For hosted deployments, auth, and operations, see the
-[Hosted Service Guide](docs/hosted-service.md), including the extension-aware
-image build, multi-instance compose workflow, and GitHub Actions dev deploy
-pipeline.
+See the [Configuration Guide](docs/configuration.md) for all sections, environment variables, and model profiles, and the [Hosted Service Guide](docs/hosted-service.md) for API authentication, policy enforcement, streaming events, and deployment.
 
 ---
 
 ## Development
 
 ```bash
-# Install dev dependencies
 pip install -e ".[dev,redis]"
 
-# Run unit tests
+# Deterministic coding-grader checks (no provider credentials required)
+make eval
+
+# Fast unit tests (no Docker)
 make test-unit
 
-# Run all tests (requires Docker)
+# Full test suite + coverage (excludes integration & e2e)
 make test
 
-# Run e2e tests (requires GEMINI_API_KEY + Docker)
+# Docker integration tests & live E2E tests
+make test-integration
 make test-e2e
 
-# Lint & format
+# Lint, type-check, boundary enforcement, and static quality checks
 make lint
 make format
+make quality
+python scripts/check_boundaries.py
+python scripts/check_release.py
 ```
 
 ### Project Structure
 
-```
+```text
 agent_forge/
-├── agent/         # ReAct loop, state machine, prompts, persistence
-├── extensions/    # Extension SDK (discovery, scaffolding, templates)
-├── llm/           # LLM provider adapters (Gemini, OpenAI, Anthropic) + factory
-├── profiles/      # Agent profile system (YAML personas + loader)
-├── tools/         # Built-in tools + entry-point plugin loader
-├── sandbox/       # Sandbox backends (Docker, bubblewrap) + factory
-├── service/       # Hosted FastAPI service (API, auth, client harness)
-├── orchestration/ # Task queue, event bus, workers
-├── observability/ # Structured logging, tracing, cost tracking
-├── cli.py         # Click-based CLI entry point
-└── config.py      # Layered configuration system
+├── agent/          # ReAct loop, state machine, approvals, budgets, checkpoints, verification
+├── eval/           # Pinned coding benchmark corpus and runner
+├── extensions/     # Extension SDK (entry-point discovery, scaffolding, prompt injection)
+├── llm/            # Provider adapters (Gemini, OpenAI, Anthropic), factory, qualification
+├── profiles/       # Generic agent profile loader
+├── tools/          # Built-in tools (including apply_patch & git tools) + plugin loader
+├── sandbox/        # Docker and Bubblewrap sandbox backends + factory
+├── service/        # Hosted FastAPI service (runs, logs, SSE/JSON event stream, auth/policy)
+├── orchestration/  # Task queues, EventBus, JournalEventSink, RunEventStream, workers
+├── observability/  # Structured logging, trace context, pricing & cost tracking
+├── cli.py          # Click CLI entrypoint
+└── config.py       # Layered configuration models
 plugins/
-└── proof_of_audit/  # First-party domain extension (audit tools, profiles)
+└── proof_of_audit/ # First-party domain extension (profiles, audit tools)
 ```
 
 ---
 
 ## Documentation
 
-- **[Architecture](docs/architecture.md)** — System design, layer responsibilities, ReAct loop sequence.
-- **[Configuration](docs/configuration.md)** — Full config reference (TOML, env vars, CLI flags, precedence).
-- **[Hosted Service](docs/hosted-service.md)** — Hosted architecture, trust boundaries, local-dev, and operations.
-- **[Testing](docs/testing.md)** — Running tests, writing new ones, CI workflows, coverage.
-- **[Extending](docs/extending.md)** — Adding tools, LLM providers, Extension SDK, custom sandbox configs.
-- **[Technical Spec](docs/spec.md)** — Full specification with interface contracts and data models.
-
----
-
-## Direction
-
-Agent Forge starts with verified local coding changes and carries the same
-workflow into a hosted pilot. The [vision](docs/vision.md) describes the user
-experience and the [strategy](docs/strategy.md) sets the engineering priorities.
-
-See the [roadmap](docs/roadmap.md) for current milestones and the evidence
-required to close them.
+- **[Vision](docs/vision.md)** & **[Strategy](docs/strategy.md)** — Product goals, measurement principles, and ADR/RFC workflow.
+- **[Roadmap](docs/roadmap.md)** & **[Delivery Plan](docs/delivery-plan.md)** — Milestone sequence and exit criteria.
+- **[Latest Model Baseline](docs/eval/baseline-v0.4.0.md)** — Measured benchmark comparison and default model selection.
+- **[Architecture](docs/architecture.md)** — Layer responsibilities and ReAct sequence.
+- **[Configuration](docs/configuration.md)** — Config precedence, env vars, CLI flags, and model profiles.
+- **[Hosted Service](docs/hosted-service.md)** — Hosted API, event streaming, trust boundaries, and operations.
+- **[Testing](docs/testing.md)** — Deterministic graders, unit/integration/e2e tests, and coverage.
+- **[Extending](docs/extending.md)** — Building domain extensions, custom tools, and provider adapters.
+- **[Technical Spec](docs/spec.md)** — Full interface contracts and persistence schemas.
 
 ---
 
