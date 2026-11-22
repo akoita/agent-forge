@@ -25,6 +25,9 @@ default_model = "gemini-3.1-flash-lite-preview"
 temperature = 0.0
 system_prompt_path = ""
 approval_mode = "auto"          # "auto", "prompt", or "deny"
+budget_action = "timeout"       # "timeout" or "pause"
+# max_cost_usd = 1.00           # optional estimated USD limit per run
+# max_duration_seconds = 300.0  # optional wall-clock limit per run
 
 [sandbox]
 backend = "docker"
@@ -114,6 +117,9 @@ agent-forge run \
   --provider gemini \
   --model gemini-3.1-flash-lite-preview \
   --max-iterations 25 \
+  --max-cost 1.00 \                 # optional USD cap per run
+  --max-duration 300 \              # optional wall-clock seconds cap
+  --budget-action pause \           # "timeout" or "pause" on budget exceed
   --approval-mode prompt \          # "auto", "prompt", or "deny"
   --sandbox-backend auto \
   --sandbox-image agent-forge-sandbox:full \
@@ -126,6 +132,8 @@ agent-forge run \
   --max-concurrent-runs 4           # worker concurrency limit
 
 agent-forge status <run-id> --output-format json
+agent-forge resume <run-id> --max-tokens 400000 --max-cost 2.0
+agent-forge cancel <run-id> --reason "Stopped by operator"
 agent-forge list
 agent-forge config        # Show resolved configuration
 ```

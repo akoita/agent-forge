@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from agent_forge.agent.approvals import ApprovalGate
+from agent_forge.agent.budget import BudgetPolicy, CancellationToken
 from agent_forge.agent.models import AgentRun, RunState, ToolInvocation
 from agent_forge.agent.persistence import save_run
 from agent_forge.agent.prompts import build_system_prompt
@@ -49,18 +51,21 @@ async def react_loop(
     emit_lifecycle: bool = True,
     approval_gate: ApprovalGate | None = None,
     on_checkpoint: Callable[[AgentRun], Awaitable[None]] | None = None,
+    cancellation_token: CancellationToken | None = None,
 ) -> AgentRun:
     """Execute the ReAct loop: Observe → Reason (LLM) → Act (Tool) → Repeat.
 
     Terminates when:
     - LLM stops and any configured verification passes (→ COMPLETED)
     - Max iterations reached (→ TIMEOUT)
-    - Token budget exceeded (→ TIMEOUT)
+    - Token/cost/time budget exceeded (→ TIMEOUT or PAUSED)
+    - Cooperative or task cancellation requested (→ CANCELLED or PAUSED)
     - Unrecoverable error (→ FAILED)
     """
     completed_call_ids = _prepare_run_start(run, tools)
     set_trace_context(run.id)
     tracker = CostTracker(run_id=run.id)
+    loop_started = time.monotonic()
 
     llm_config = LLMConfig(
         model=run.config.model,
@@ -91,6 +96,10 @@ async def react_loop(
             on_checkpoint=on_checkpoint,
         )
         while run.iterations < run.config.max_iterations:
+            if await _check_cooperative_cancel(
+                run, cancellation_token, on_checkpoint, lifecycle_bus
+            ):
+                break
             run.iterations += 1
             update_iteration(run.iterations)
             logger.info(
@@ -129,14 +138,14 @@ async def react_loop(
             )
 
             # 2. CHECK BUDGET
-            if run.total_tokens.total_tokens > run.config.max_tokens_per_run:
-                logger.warning(
-                    "token_budget_exceeded",
-                    total_tokens=run.total_tokens.total_tokens,
-                    budget=run.config.max_tokens_per_run,
-                )
-                transition(run, RunState.TIMEOUT)
-                run.error = "Token budget exceeded"
+            if await _check_budget(
+                run,
+                tracker,
+                time.monotonic() - loop_started,
+                on_checkpoint,
+                event_bus,
+                lifecycle_bus,
+            ):
                 break
 
             # 3. CHECK COMPLETION
@@ -200,7 +209,8 @@ async def react_loop(
             },
         )
 
-    run.completed_at = datetime.now(UTC)
+    if run.state != RunState.PAUSED:
+        run.completed_at = datetime.now(UTC)
 
     if run.state == RunState.COMPLETED:
         await _emit(
@@ -337,6 +347,86 @@ async def _handle_cancellation(
         run.id,
         {"iteration": run.iterations},
     )
+
+
+async def _check_cooperative_cancel(
+    run: AgentRun,
+    cancellation_token: CancellationToken | None,
+    on_checkpoint: Callable[[AgentRun], Awaitable[None]] | None,
+    lifecycle_bus: EventBus | None,
+) -> bool:
+    if cancellation_token is None or not cancellation_token.is_cancelled:
+        return False
+    transition(run, RunState.CANCELLED)
+    run.error = cancellation_token.reason
+    if on_checkpoint is not None:
+        await on_checkpoint(run)
+    await _emit(
+        lifecycle_bus,
+        EventType.RUN_CANCELLED,
+        run.id,
+        {"reason": cancellation_token.reason, "iteration": run.iterations},
+    )
+    return True
+
+
+async def _check_budget(
+    run: AgentRun,
+    tracker: CostTracker,
+    elapsed_seconds: float,
+    on_checkpoint: Callable[[AgentRun], Awaitable[None]] | None,
+    event_bus: EventBus | None,
+    lifecycle_bus: EventBus | None,
+) -> bool:
+    policy = BudgetPolicy(
+        max_tokens=run.config.max_tokens_per_run,
+        max_cost_usd=run.config.max_cost_usd,
+        max_duration_seconds=run.config.max_duration_seconds,
+        on_exceed=run.config.budget_action,
+    )
+    decision = policy.evaluate(
+        total_tokens=run.total_tokens.total_tokens,
+        total_cost_usd=tracker.total_cost(),
+        elapsed_seconds=elapsed_seconds,
+    )
+    if not decision.exceeded:
+        return False
+
+    logger.warning(
+        "budget_exceeded",
+        dimension=decision.dimension,
+        current=decision.current,
+        limit=decision.limit,
+        action=decision.action,
+    )
+    await _emit(
+        event_bus,
+        EventType.BUDGET_EXCEEDED,
+        run.id,
+        {
+            "dimension": decision.dimension,
+            "current": decision.current,
+            "limit": decision.limit,
+            "action": decision.action,
+            "reason": decision.reason,
+            "iteration": run.iterations,
+        },
+    )
+    if decision.action == "pause":
+        transition(run, RunState.PAUSED)
+        run.error = decision.reason
+        await _emit_checkpoint(run, on_checkpoint, event_bus)
+        await _emit(
+            lifecycle_bus,
+            EventType.RUN_PAUSED,
+            run.id,
+            {"iteration": run.iterations, "reason": decision.reason},
+        )
+        return True
+
+    transition(run, RunState.TIMEOUT)
+    run.error = decision.reason
+    return True
 
 
 def _resolve_approval_gate(run: AgentRun, gate: ApprovalGate | None) -> ApprovalGate | None:
