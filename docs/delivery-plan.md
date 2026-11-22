@@ -1,6 +1,6 @@
 # Agent Forge delivery milestones
 
-The [vision](vision.md) sets the user outcomes and the [strategy](strategy.md) defines how to measure them. The delivery sequence was planned on 2026-11-21. Track assignments in [GitHub milestones](https://github.com/akoita/agent-forge/milestones). The roadmap adoption is tracked in [#147](https://github.com/akoita/agent-forge/issues/147). Capacity is unconfirmed, so use exit criteria and re-estimate after the first local fix.
+The [vision](vision.md) sets the user outcomes and the [strategy](strategy.md) defines how to measure them. The delivery sequence was planned on 2026-11-21. Track assignments in [GitHub milestones](https://github.com/akoita/agent-forge/milestones). The roadmap adoption is tracked in [#147](https://github.com/akoita/agent-forge/issues/147). Capacity is unconfirmed, so use exit criteria and re-estimate after the first local fix. Closing a milestone includes publishing a GitHub release via [the milestone release workflow](../.agents/workflows/release-milestone.md).
 
 ## Milestone sequence
 

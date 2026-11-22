@@ -20,6 +20,7 @@ from urllib.parse import ParseResult, urlparse
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from agent_forge import __version__
 from agent_forge.agent.core import react_loop
 from agent_forge.agent.models import AgentConfig, AgentRun
 from agent_forge.agent.prompts import build_hosted_poa_system_prompt
@@ -1177,7 +1178,7 @@ def create_app(  # noqa: C901
         finally:
             await service.stop()
 
-    app = FastAPI(title="agent-forge hosted service", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="agent-forge hosted service", version=__version__, lifespan=lifespan)
     app.state.service = service
 
     def _request_origin(http_request: Request) -> str | None:
