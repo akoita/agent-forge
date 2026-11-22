@@ -38,6 +38,9 @@ class AgentSettings(BaseModel):
     temperature: float = 0.0
     system_prompt_path: str = ""
     approval_mode: Literal["auto", "prompt", "deny"] = "auto"
+    max_cost_usd: float | None = None
+    max_duration_seconds: float | None = None
+    budget_action: Literal["timeout", "pause"] = "timeout"
 
 
 class SandboxSettings(BaseModel):

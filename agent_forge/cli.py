@@ -154,6 +154,19 @@ def _grade_model_fix(
 @click.option("--model-profile", help="Use a named provider and model from configuration.")
 @click.option("--provider", default=None, help="LLM provider (gemini, openai, anthropic)")
 @click.option("--max-iterations", default=None, type=int, help="Max ReAct loop iterations")
+@click.option("--max-cost", default=None, type=float, help="Max estimated LLM spend in USD")
+@click.option(
+    "--max-duration",
+    default=None,
+    type=float,
+    help="Max wall-clock run duration in seconds",
+)
+@click.option(
+    "--budget-action",
+    default=None,
+    type=click.Choice(["timeout", "pause"], case_sensitive=False),
+    help="Action when a run budget is exceeded (timeout or pause)",
+)
 @click.option(
     "--approval-mode",
     default=None,
@@ -225,6 +238,9 @@ def run(
     model: str | None,
     provider: str | None,
     max_iterations: int | None,
+    max_cost: float | None,
+    max_duration: float | None,
+    budget_action: str | None,
     approval_mode: str | None,
     sandbox_image: str | None,
     sandbox_backend: str | None,
@@ -267,6 +283,9 @@ def run(
             model=model,
             provider=provider,
             max_iterations=max_iterations,
+            max_cost=max_cost,
+            max_duration=max_duration,
+            budget_action=budget_action,
             approval_mode=approval_mode,
             sandbox_image=sandbox_image,
             sandbox_backend=sandbox_backend,
@@ -380,23 +399,13 @@ async def _run_agent(
     Creates an ``EventBus`` so lifecycle events are emitted even in
     direct mode — this enables observability subscribers.
     """
-    from agent_forge.agent.models import AgentConfig, AgentRun
+    from agent_forge.agent.models import AgentRun
     from agent_forge.agent.prompts import build_system_prompt
     from agent_forge.orchestration.events import EventBus
     from agent_forge.tools import create_default_registry
 
     sandbox_config = _build_sandbox_config(cfg)
-    agent_config = AgentConfig(
-        model=cfg.agent.default_model,
-        provider=provider_name,
-        max_iterations=cfg.agent.max_iterations,
-        max_tokens_per_run=cfg.agent.max_tokens_per_run,
-        temperature=cfg.agent.temperature,
-        profile_id=profile.id if profile else None,
-        approval_mode=cfg.agent.approval_mode
-        if isinstance(cfg.agent.approval_mode, str)
-        else "auto",
-    )
+    agent_config = _build_agent_config(cfg, provider_name, profile=profile)
 
     # Resolve prompt_scope from profile
     prompt_scope = profile.prompt_scope if profile else None
@@ -532,21 +541,11 @@ async def _run_agent_queued(
     Enqueues a :class:`Task`, starts a :class:`Worker`, and waits for
     the task to complete or fail.
     """
-    from agent_forge.agent.models import AgentConfig
     from agent_forge.orchestration.events import EventBus
     from agent_forge.orchestration.queue import InMemoryQueue, Task, TaskQueue, TaskStatus
     from agent_forge.orchestration.worker import Worker
 
-    agent_config = AgentConfig(
-        model=cfg.agent.default_model,
-        provider=provider_name,
-        max_iterations=cfg.agent.max_iterations,
-        max_tokens_per_run=cfg.agent.max_tokens_per_run,
-        temperature=cfg.agent.temperature,
-        approval_mode=cfg.agent.approval_mode
-        if isinstance(cfg.agent.approval_mode, str)
-        else "auto",
-    )
+    agent_config = _build_agent_config(cfg, provider_name)
 
     event_bus = EventBus()
 
@@ -684,11 +683,47 @@ def _build_approval_gate(mode: object) -> Any:
     return ApprovalGate(mode=normalized, callback=_confirm)
 
 
+def _build_agent_config(
+    cfg: Any,
+    provider_name: str,
+    *,
+    profile: Any | None = None,
+) -> Any:
+    """Build an ``AgentConfig`` from resolved settings, guarding mocked configs."""
+    from agent_forge.agent.models import AgentConfig
+
+    approval = cfg.agent.approval_mode if isinstance(cfg.agent.approval_mode, str) else "auto"
+    budget_action = (
+        cfg.agent.budget_action if isinstance(cfg.agent.budget_action, str) else "timeout"
+    )
+    max_cost = cfg.agent.max_cost_usd if isinstance(cfg.agent.max_cost_usd, (int, float)) else None
+    max_duration = (
+        cfg.agent.max_duration_seconds
+        if isinstance(cfg.agent.max_duration_seconds, (int, float))
+        else None
+    )
+    return AgentConfig(
+        model=cfg.agent.default_model,
+        provider=provider_name,
+        max_iterations=cfg.agent.max_iterations,
+        max_tokens_per_run=cfg.agent.max_tokens_per_run,
+        temperature=cfg.agent.temperature,
+        profile_id=profile.id if profile else None,
+        approval_mode=approval,
+        max_cost_usd=float(max_cost) if max_cost is not None else None,
+        max_duration_seconds=float(max_duration) if max_duration is not None else None,
+        budget_action=budget_action,
+    )
+
+
 def _build_cli_overrides(
     *,
     model: str | None,
     provider: str | None,
     max_iterations: int | None,
+    max_cost: float | None = None,
+    max_duration: float | None = None,
+    budget_action: str | None = None,
     approval_mode: str | None = None,
     sandbox_image: str | None = None,
     sandbox_backend: str | None = None,
@@ -700,6 +735,9 @@ def _build_cli_overrides(
         "agent.default_model": model,
         "agent.default_provider": provider,
         "agent.max_iterations": max_iterations,
+        "agent.max_cost_usd": max_cost,
+        "agent.max_duration_seconds": max_duration,
+        "agent.budget_action": budget_action.lower() if budget_action is not None else None,
         "agent.approval_mode": approval_mode.lower() if approval_mode is not None else None,
         "sandbox.image": sandbox_image,
         "sandbox.backend": sandbox_backend,
@@ -852,6 +890,24 @@ def status(run_id: str, output_format: str) -> None:
     help="Override max ReAct loop iterations when resuming.",
 )
 @click.option(
+    "--max-tokens",
+    default=None,
+    type=int,
+    help="Raise or override token budget when resuming.",
+)
+@click.option(
+    "--max-cost",
+    default=None,
+    type=float,
+    help="Raise or override estimated USD cost budget when resuming.",
+)
+@click.option(
+    "--max-duration",
+    default=None,
+    type=float,
+    help="Raise or override duration budget in seconds when resuming.",
+)
+@click.option(
     "--verify-command",
     default=None,
     help="Override verification command when resuming.",
@@ -871,6 +927,9 @@ def status(run_id: str, output_format: str) -> None:
 def resume(
     run_id: str,
     max_iterations: int | None,
+    max_tokens: int | None,
+    max_cost: float | None,
+    max_duration: float | None,
     verify_command: str | None,
     output_format: str,
     report_file: Path | None,
@@ -893,8 +952,13 @@ def resume(
         )
         sys.exit(1)
 
-    if max_iterations is not None:
-        agent_run.config.max_iterations = max_iterations
+    _apply_resume_budget_overrides(
+        agent_run.config,
+        max_iterations=max_iterations,
+        max_tokens=max_tokens,
+        max_cost=max_cost,
+        max_duration=max_duration,
+    )
 
     cfg = _config_for_resume(agent_run.config)
     api_key = _require_provider_key(cfg, agent_run.config.provider)
@@ -922,6 +986,24 @@ def resume(
     _exit_on_verification_failure(effective_verify, result.state.value)
 
 
+def _apply_resume_budget_overrides(
+    agent_cfg: Any,
+    *,
+    max_iterations: int | None,
+    max_tokens: int | None,
+    max_cost: float | None,
+    max_duration: float | None,
+) -> None:
+    if max_iterations is not None:
+        agent_cfg.max_iterations = max_iterations
+    if max_tokens is not None:
+        agent_cfg.max_tokens_per_run = max_tokens
+    if max_cost is not None:
+        agent_cfg.max_cost_usd = max_cost
+    if max_duration is not None:
+        agent_cfg.max_duration_seconds = max_duration
+
+
 def _config_for_resume(agent_cfg: Any) -> ForgeConfig:
     cfg = load_config()
     cfg.agent.default_provider = agent_cfg.provider
@@ -929,8 +1011,43 @@ def _config_for_resume(agent_cfg: Any) -> ForgeConfig:
     cfg.agent.max_iterations = agent_cfg.max_iterations
     cfg.agent.max_tokens_per_run = agent_cfg.max_tokens_per_run
     cfg.agent.temperature = agent_cfg.temperature
-    cfg.agent.approval_mode = agent_cfg.approval_mode
+    cfg.agent.max_cost_usd = agent_cfg.max_cost_usd
+    cfg.agent.max_duration_seconds = agent_cfg.max_duration_seconds
+    if agent_cfg.approval_mode in {"auto", "prompt", "deny"}:
+        cfg.agent.approval_mode = agent_cfg.approval_mode
+    if agent_cfg.budget_action in {"timeout", "pause"}:
+        cfg.agent.budget_action = agent_cfg.budget_action
     return cfg
+
+
+@main.command()
+@click.argument("run_id")
+@click.option("--reason", default="Cancelled by operator", help="Cancellation reason to record.")
+def cancel(run_id: str, reason: str) -> None:
+    """Cancel a paused or running run and record the cancellation reason."""
+    from datetime import UTC, datetime
+
+    from agent_forge.agent.models import RunState
+    from agent_forge.agent.persistence import load_run, save_run
+    from agent_forge.agent.state import transition
+
+    try:
+        agent_run = load_run(run_id)
+    except FileNotFoundError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+
+    if agent_run.state not in (RunState.PAUSED, RunState.RUNNING):
+        err_console.print(
+            f"[red]Run '{run_id}' is in state '{agent_run.state.value}' and cannot cancel.[/red]"
+        )
+        sys.exit(1)
+
+    transition(agent_run, RunState.CANCELLED)
+    agent_run.error = reason
+    agent_run.completed_at = datetime.now(UTC)
+    save_run(agent_run)
+    console.print(f"[dim]Cancelled run {run_id}: {reason}[/dim]")
 
 
 def _require_provider_key(cfg: ForgeConfig, provider_name: str) -> str:

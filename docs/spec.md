@@ -782,6 +782,7 @@ Invalid transitions (e.g., `COMPLETED → RUNNING`) must raise `InvalidStateTran
 class EventType(Enum):
     RUN_STARTED = "run.started"
     RUN_PAUSED = "run.paused"
+    RUN_CANCELLED = "run.cancelled"
     RUN_COMPLETED = "run.completed"
     RUN_FAILED = "run.failed"
     ITERATION_STARTED = "iteration.started"
@@ -792,6 +793,7 @@ class EventType(Enum):
     PATCH_APPLIED = "patch.applied"
     APPROVAL_REQUESTED = "approval.requested"
     APPROVAL_DECIDED = "approval.decided"
+    BUDGET_EXCEEDED = "budget.exceeded"
     TOKEN_USAGE = "token.usage"
 
 @dataclass
