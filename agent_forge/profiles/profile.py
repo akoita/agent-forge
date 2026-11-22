@@ -4,7 +4,7 @@ An agent profile configures the agent's behavior for a given task type:
 prompt scope, LLM provider/model overrides, and iteration limits.
 Profiles are defined as YAML files and loaded from one or more directories.
 
-Domain-specific profiles (e.g. smart-contract audit, security scanning)
+Domain-specific profiles (e.g. compliance checks, security scanning)
 live in the extension layer (plugins/, --profiles-dir), not in core.
 """
 
@@ -33,6 +33,7 @@ class AgentProfile(BaseModel):
     id: str
     name: str
     description: str = ""
+    aliases: list[str] = Field(default_factory=list)
     prompt_scope: str = ""
     llm_provider: str | None = None
     llm_model: str | None = None
@@ -107,6 +108,8 @@ def load_profiles(
                 continue
             profile = _load_yaml_file(path)
             registry[profile.id] = profile
+            for alias in profile.aliases:
+                registry[alias] = profile
 
     return registry
 

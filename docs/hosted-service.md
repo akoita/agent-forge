@@ -356,7 +356,9 @@ For extension-aware multi-instance deployments, prefer the override workflow in
 
 ### 5. Exercise The API
 
-You can use the compatibility helper in `agent_forge.service.client` or a raw
+You can use `HostedServiceClient` in `agent_forge.service.client`, the
+Proof-of-Audit compatibility helper (`ProofOfAuditHostedClient` and
+`build_proof_of_audit_request`) in `plugins.proof_of_audit.client`, or a raw
 HTTP request:
 
 ```bash

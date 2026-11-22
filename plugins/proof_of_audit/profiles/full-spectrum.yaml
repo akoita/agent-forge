@@ -1,5 +1,6 @@
 id: full-spectrum
 name: Full Spectrum Audit
+aliases: ["proof-of-audit-solidity-v1"]
 description: "Comprehensive smart contract audit covering all vulnerability classes."
 prompt_scope: |
   Perform a comprehensive smart contract security audit. Analyze for

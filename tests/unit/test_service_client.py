@@ -8,10 +8,21 @@ import pytest
 
 from agent_forge.config import ForgeConfig, ServiceSettings
 from agent_forge.service import (
+    HostedServiceClient,
     HostedServiceClientError,
-    ProofOfAuditHostedClient,
-    build_proof_of_audit_request,
     create_app,
+)
+from agent_forge.service.models import (
+    ClientRef,
+    ProfileRef,
+    RunReport,
+    RunRequest,
+    SourceRef,
+)
+from plugins.proof_of_audit import (
+    ProofOfAuditHostedClient,
+    ProofOfAuditReport,
+    build_proof_of_audit_request,
 )
 
 if TYPE_CHECKING:
@@ -253,3 +264,175 @@ async def test_proof_of_audit_client_maps_failed_runs(
             await client.wait_for_report(submitted.run_id, poll_interval_seconds=0.01)
 
     assert exc_info.value.code == "sandbox_execution_failed"
+
+
+@pytest.mark.asyncio
+async def test_hosted_service_client_completes_generic_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    clients_path = tmp_path / "clients.toml"
+    clients_path.write_text(
+        """
+[clients.generic-caller]
+api_key_env = "GENERIC_SERVICE_API_KEY"
+allowed_profiles = ["full-spectrum"]
+allowed_report_schemas = ["agent-forge-report-v1"]
+allowed_source_kinds = ["local_path"]
+max_active_runs = 1
+max_runs_per_day = 5
+allow_local_path = true
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GENERIC_SERVICE_API_KEY", "generic-key")
+
+    app = create_app(config=_service_config(tmp_path, clients_path=clients_path))
+    service = app.state.service
+
+    async def fake_runner(task: Task) -> None:
+        record = service._records[task.id]
+        record.started_at = record.created_at
+        record.completed_at = record.created_at
+        record.report_path.parent.mkdir(parents=True, exist_ok=True)
+        record.report_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "agent-forge-report-v1",
+                    "run_id": task.id,
+                    "summary": "Generic analysis completed",
+                    "custom_metrics": {"files_checked": 1},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    service._worker._task_runner = fake_runner
+
+    request = RunRequest(
+        schema_version="agent-forge-run-request-v1",
+        client=ClientRef(
+            name="generic-harness",
+            request_id="req-generic-1",
+            service_id="generic-caller",
+        ),
+        profile=ProfileRef(
+            id="full-spectrum",
+            report_schema="agent-forge-report-v1",
+        ),
+        source=SourceRef(kind="local_path", uri=str(repo)),
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as http_client,
+    ):
+        client = HostedServiceClient(
+            base_url="http://testserver",
+            api_key="generic-key",
+            http_client=http_client,
+        )
+        submitted = await client.submit_run(request)
+        report = await client.wait_for_report(submitted.run_id, poll_interval_seconds=0.01)
+
+    assert isinstance(report, RunReport)
+    assert report.schema_version == "agent-forge-report-v1"
+    assert report.summary == "Generic analysis completed"
+    assert report.model_dump()["custom_metrics"] == {"files_checked": 1}
+
+
+@pytest.mark.asyncio
+async def test_proof_of_audit_client_computes_missing_stats(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "Vault.sol").write_text("contract Vault {}\n", encoding="utf-8")
+    clients_path = tmp_path / "clients.toml"
+    _write_clients_file(clients_path)
+    monkeypatch.setenv("POA_SERVICE_API_KEY", "test-service-key")
+
+    app = create_app(config=_service_config(tmp_path, clients_path=clients_path))
+    service = app.state.service
+
+    async def fake_runner(task: Task) -> None:
+        record = service._records[task.id]
+        record.started_at = record.created_at
+        record.completed_at = record.created_at
+        record.report_path.parent.mkdir(parents=True, exist_ok=True)
+        record.report_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "proof-of-audit-report-v1",
+                    "run_id": task.id,
+                    "summary": "Two findings emitted without precomputed stats",
+                    "confidence": "medium",
+                    "findings": [
+                        {
+                            "finding_id": "POA-1",
+                            "title": "Critical bug",
+                            "severity": "critical",
+                            "category": "reentrancy",
+                            "description": "desc",
+                            "impact": "impact",
+                            "recommendation": "fix",
+                            "confidence": "high",
+                        },
+                        {
+                            "finding_id": "POA-2",
+                            "title": "Low issue",
+                            "severity": "low",
+                            "category": "style",
+                            "description": "desc",
+                            "impact": "impact",
+                            "recommendation": "fix",
+                            "confidence": "low",
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    service._worker._task_runner = fake_runner
+
+    request = build_proof_of_audit_request(
+        request_id="audit-stats-1",
+        service_id="proof-of-audit-auditor",
+        source_uri=str(repo),
+        source_kind="local_path",
+        entry_contract="Vault",
+        contract_address="0xabc",
+        network="base-sepolia",
+        chain_id=84532,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as http_client,
+    ):
+        client = ProofOfAuditHostedClient(
+            base_url="http://testserver",
+            api_key="test-service-key",
+            http_client=http_client,
+        )
+        submitted = await client.submit_run(request)
+        report = await client.wait_for_report(submitted.run_id, poll_interval_seconds=0.01)
+
+    assert isinstance(report, ProofOfAuditReport)
+    assert report.stats.finding_count == 2
+    assert report.stats.max_severity == "critical"
+    assert report.stats.severity_breakdown.critical == 1
+    assert report.stats.severity_breakdown.low == 1

@@ -94,6 +94,9 @@ select = [
 [tool.ruff.lint.mccabe]
 max-complexity = 10
 
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = ["pydantic.BaseModel"]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S108", "ARG001", "ARG002", "PT018", "RUF015"]
 "tests/fixtures/**" = ["S201"]  # sample Flask app uses debug=True by design

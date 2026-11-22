@@ -3,24 +3,20 @@
 from __future__ import annotations
 
 import asyncio
-from typing import NoReturn, TypeVar
+from typing import Any, Generic, NoReturn, TypeVar
 
 import httpx
+from pydantic import BaseModel
 
 from agent_forge.service.models import (
-    ArtifactPolicy,
-    ClientRef,
     ErrorResponse,
-    ProfileRef,
-    ProofOfAuditReport,
+    RunReport,
     RunRequest,
     RunStatus,
-    SourceKind,
-    SourceRef,
-    TargetRef,
 )
 
-ModelT = TypeVar("ModelT", RunStatus, ProofOfAuditReport)
+ModelT = TypeVar("ModelT", bound=BaseModel)
+ReportT = TypeVar("ReportT", bound=BaseModel)
 
 
 class HostedServiceClientError(RuntimeError):
@@ -38,48 +34,8 @@ class HostedServiceClientError(RuntimeError):
         self.code = code
 
 
-def build_proof_of_audit_request(
-    *,
-    request_id: str,
-    service_id: str,
-    source_uri: str,
-    source_kind: SourceKind,
-    entry_contract: str,
-    contract_address: str,
-    network: str,
-    chain_id: int,
-    source_digest: str | None = None,
-) -> RunRequest:
-    """Build the hosted run payload expected by Proof-of-Audit-style clients."""
-    return RunRequest(
-        schema_version="agent-forge-run-request-v1",
-        client=ClientRef(
-            name="proof-of-audit",
-            request_id=request_id,
-            service_id=service_id,
-        ),
-        profile=ProfileRef(
-            id="proof-of-audit-solidity-v1",
-            report_schema="proof-of-audit-report-v1",
-        ),
-        source=SourceRef(
-            kind=source_kind,
-            uri=source_uri,
-            entry_contract=entry_contract,
-            source_digest=source_digest,
-        ),
-        target=TargetRef(
-            submission_kind="deployed_address",
-            network=network,
-            chain_id=chain_id,
-            contract_address=contract_address,
-        ),
-        artifacts=ArtifactPolicy(result_delivery="pull", include_logs=True),
-    )
-
-
-class ProofOfAuditHostedClient:
-    """Async compatibility client for Proof-of-Audit-style hosted runs."""
+class BaseHostedServiceClient(Generic[ReportT]):
+    """Shared async client logic for consuming the hosted agent-forge service."""
 
     def __init__(
         self,
@@ -98,7 +54,7 @@ class ProofOfAuditHostedClient:
             await self._client.aclose()
 
     async def submit_run(self, request: RunRequest) -> RunStatus:
-        """Submit a hosted Proof-of-Audit run request."""
+        """Submit a hosted run request."""
         response = await self._client.post(
             "/v1/runs",
             json=request.model_dump(mode="json"),
@@ -114,13 +70,16 @@ class ProofOfAuditHostedClient:
         )
         return self._parse_response(response, RunStatus)
 
-    async def get_report(self, run_id: str) -> ProofOfAuditReport:
+    async def get_report(self, run_id: str) -> ReportT:
         """Fetch the machine-readable report for a completed run."""
         response = await self._client.get(
             f"/v1/runs/{run_id}/report",
             headers=self._headers(),
         )
-        return self._parse_response(response, ProofOfAuditReport)
+        if response.is_success:
+            return self._validate_report(response.json())
+        self._raise_service_error(response)
+        raise AssertionError("unreachable")
 
     async def wait_for_report(
         self,
@@ -128,7 +87,7 @@ class ProofOfAuditHostedClient:
         *,
         poll_interval_seconds: float = 0.05,
         max_polls: int = 100,
-    ) -> ProofOfAuditReport:
+    ) -> ReportT:
         """Poll run status until a final report is available or the run fails."""
         for _ in range(max_polls):
             status = await self.get_status(run_id)
@@ -149,6 +108,9 @@ class ProofOfAuditHostedClient:
 
         msg = f"timed out waiting for hosted run: {run_id}"
         raise TimeoutError(msg)
+
+    def _validate_report(self, payload: dict[str, Any]) -> ReportT:
+        raise NotImplementedError
 
     def _headers(self) -> dict[str, str]:
         return {"X-Agent-Forge-API-Key": self._api_key}
@@ -179,3 +141,10 @@ class ProofOfAuditHostedClient:
             code=None,
             message=str(detail),
         )
+
+
+class HostedServiceClient(BaseHostedServiceClient[RunReport]):
+    """Async client for generic hosted agent-forge runs."""
+
+    def _validate_report(self, payload: dict[str, Any]) -> RunReport:
+        return RunReport.model_validate(payload)

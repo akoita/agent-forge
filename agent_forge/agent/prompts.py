@@ -59,7 +59,8 @@ def _format_network_rule(network_enabled: bool) -> tuple[str, str]:
     )
 
 
-def build_system_prompt(
+def render_system_prompt(
+    template: str,
     task: str,
     tool_definitions: list[ToolDefinition],
     *,
@@ -69,11 +70,12 @@ def build_system_prompt(
     command_timeout_seconds: int = 300,
     prompt_scope: str | None = None,
     extension_prompts: list[str] | None = None,
+    **template_vars: object,
 ) -> str:
-    """Render the system prompt with tool descriptions and task."""
+    """Render a system prompt template with runtime context and extensions."""
     network_rule, network_status = _format_network_rule(network_enabled)
 
-    prompt = _SYSTEM_PROMPT_TEMPLATE.format(
+    prompt = template.format(
         tool_descriptions=_format_tool_descriptions(tool_definitions),
         sandbox_backend=sandbox_backend,
         sandbox_image=sandbox_image,
@@ -81,6 +83,7 @@ def build_system_prompt(
         network_status=network_status,
         command_timeout_seconds=command_timeout_seconds,
         task_description=task,
+        **template_vars,
     )
 
     if prompt_scope:
@@ -94,34 +97,49 @@ def build_system_prompt(
     return prompt
 
 
-_HOSTED_POA_SYSTEM_PROMPT_TEMPLATE = """\
-You are Agent Forge running a hosted Proof-of-Audit smart contract audit.
+def build_system_prompt(
+    task: str,
+    tool_definitions: list[ToolDefinition],
+    *,
+    sandbox_backend: str = "docker",
+    sandbox_image: str = "agent-forge-sandbox:latest",
+    network_enabled: bool = False,
+    command_timeout_seconds: int = 300,
+    prompt_scope: str | None = None,
+    extension_prompts: list[str] | None = None,
+) -> str:
+    """Render the system prompt with tool descriptions and task."""
+    return render_system_prompt(
+        _SYSTEM_PROMPT_TEMPLATE,
+        task,
+        tool_definitions,
+        sandbox_backend=sandbox_backend,
+        sandbox_image=sandbox_image,
+        network_enabled=network_enabled,
+        command_timeout_seconds=command_timeout_seconds,
+        prompt_scope=prompt_scope,
+        extension_prompts=extension_prompts,
+    )
+
+
+_HOSTED_SYSTEM_PROMPT_TEMPLATE = """\
+You are Agent Forge running a hosted coding agent task.
 
 ## CRITICAL OUTPUT REQUIREMENT
 Before you stop, you MUST write a valid JSON report to .agent-forge/report.json \
 using the write_file tool. The hosted run will FAIL if this file is not written. \
-This is not optional — if you skip this step the entire audit is wasted.
+This is not optional — if you skip this step the run output cannot be finalized.
 
-## Report Schema (proof-of-audit-report-v1)
+## Report Schema ({report_schema})
 The JSON report MUST contain these top-level fields:
-- "schema_version": must be exactly "proof-of-audit-report-v1"
+- "schema_version": must be exactly "{report_schema}"
 - "run_id": the run identifier (use the task description for reference)
 - "summary": a brief natural-language overall assessment
-- "confidence": one of "low", "medium", "high"
-- "findings": array of finding objects (may be empty if no issues found)
-- "stats": object with finding_count (int), max_severity (string or null), \
-and severity_breakdown (object with critical, high, medium, low counts)
 
-Each finding in "findings" MUST have:
-- finding_id, title, severity, category, description, impact, recommendation, confidence
+Optional report fields: confidence, benchmark_id, target, provenance
 
-Optional finding fields: detector, affected_function, source_path, start_line, \
-end_line, evidence_uri
-
-Optional report fields: benchmark_id, target, provenance
-
-If no findings are confirmed, write an empty findings array and stats with \
-finding_count=0.
+Additional schema-specific fields may also be required by the active profile or \
+extension instructions below.
 
 ## Your Capabilities
 {tool_descriptions}
@@ -129,7 +147,7 @@ finding_count=0.
 ## Rules
 1. Always read relevant files before making changes.
 2. Make small, focused changes. Do not rewrite entire files unnecessarily.
-3. Do not modify the source code under audit.
+3. Follow all scope and modification constraints specified in the task or profile.
 4. {network_rule}
 5. Stay within the /workspace directory.
 6. Your FINAL action before stopping MUST be writing .agent-forge/report.json.
@@ -144,10 +162,11 @@ finding_count=0.
 {task_description}"""
 
 
-def build_hosted_poa_system_prompt(
+def build_hosted_system_prompt(
     task: str,
     tool_definitions: list[ToolDefinition],
     *,
+    report_schema: str = "agent-forge-report-v1",
     sandbox_backend: str = "docker",
     sandbox_image: str = "agent-forge-sandbox:latest",
     network_enabled: bool = False,
@@ -155,25 +174,16 @@ def build_hosted_poa_system_prompt(
     prompt_scope: str | None = None,
     extension_prompts: list[str] | None = None,
 ) -> str:
-    """Render the hosted Proof-of-Audit system prompt with strict report emission."""
-    network_rule, network_status = _format_network_rule(network_enabled)
-
-    prompt = _HOSTED_POA_SYSTEM_PROMPT_TEMPLATE.format(
-        tool_descriptions=_format_tool_descriptions(tool_definitions),
+    """Render the hosted system prompt with structured report emission."""
+    return render_system_prompt(
+        _HOSTED_SYSTEM_PROMPT_TEMPLATE,
+        task,
+        tool_definitions,
         sandbox_backend=sandbox_backend,
         sandbox_image=sandbox_image,
-        network_rule=network_rule,
-        network_status=network_status,
+        network_enabled=network_enabled,
         command_timeout_seconds=command_timeout_seconds,
-        task_description=task,
+        prompt_scope=prompt_scope,
+        extension_prompts=extension_prompts,
+        report_schema=report_schema,
     )
-
-    if prompt_scope:
-        prompt += f"\n\n## Profile Scope\n{prompt_scope}"
-
-    if extension_prompts:
-        prompt += "\n\n## Extension Prompts"
-        for fragment in extension_prompts:
-            prompt += f"\n{fragment}"
-
-    return prompt

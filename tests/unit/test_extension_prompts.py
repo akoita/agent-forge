@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from agent_forge.agent.prompts import (
-    build_hosted_poa_system_prompt,
+    build_hosted_system_prompt,
     build_system_prompt,
 )
+from plugins.proof_of_audit.prompts import build_hosted_poa_system_prompt
 
 # ---------------------------------------------------------------------------
 # build_system_prompt with extension_prompts
@@ -92,3 +93,33 @@ class TestBuildHostedPoaPromptExtensions:
         assert "## Extension Prompts" in prompt
         assert "Audit Solidity contracts." in prompt
         assert "Verify CEI pattern." in prompt
+
+
+# ---------------------------------------------------------------------------
+# build_hosted_system_prompt with extension_prompts
+# ---------------------------------------------------------------------------
+
+
+class TestBuildHostedSystemPromptExtensions:
+    """Test extension prompt injection in generic build_hosted_system_prompt."""
+
+    def test_no_extension_prompts(self) -> None:
+        """Without extension_prompts, no Extension Prompts section appears."""
+        prompt = build_hosted_system_prompt("analyze repository", [])
+        assert "## Extension Prompts" not in prompt
+        assert "agent-forge-report-v1" in prompt
+
+    def test_with_scope_and_extensions(self) -> None:
+        """Custom report_schema, prompt_scope, and extension_prompts appear."""
+        prompt = build_hosted_system_prompt(
+            "analyze repository",
+            [],
+            report_schema="custom-report-v1",
+            prompt_scope="Focus on core runtime modules.",
+            extension_prompts=["Report timing regressions."],
+        )
+        assert "custom-report-v1" in prompt
+        assert "## Profile Scope" in prompt
+        assert "## Extension Prompts" in prompt
+        assert "Focus on core runtime modules." in prompt
+        assert "Report timing regressions." in prompt
