@@ -16,8 +16,9 @@ if TYPE_CHECKING:
 
 
 def _run_unittest(repo: Path) -> subprocess.CompletedProcess[str]:
+    cmd = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"]
     return subprocess.run(  # noqa: S603
-        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
+        cmd,
         cwd=repo,
         env={
             "PATH": os.environ.get("PATH", os.defpath),
