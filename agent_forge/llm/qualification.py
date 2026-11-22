@@ -36,6 +36,17 @@ class ProbeResult:
     reported_models: list[str]
 
 
+def resolve_profile_api_key_env(config: ForgeConfig, profile: ModelProfileSettings) -> str:
+    """Return the credential environment variable name for *profile*."""
+    return profile.api_key_env or config.providers[profile.provider].api_key_env
+
+
+def resolve_profile_base_url(config: ForgeConfig, profile: ModelProfileSettings) -> str | None:
+    """Return an explicit API base URL for *profile* when configured."""
+    base_url = profile.base_url or config.providers[profile.provider].base_url
+    return base_url or None
+
+
 def resolve_model_profile(config: ForgeConfig, name: str) -> ModelProfileSettings:
     """Resolve an alias and check that its adapter and credentials setting exist."""
     profile = config.model_profiles.get(name)
@@ -43,23 +54,29 @@ def resolve_model_profile(config: ForgeConfig, name: str) -> ModelProfileSetting
         raise ValueError(f"Unknown model profile '{name}'.")
     if profile.provider not in provider_names() or profile.provider not in config.providers:
         raise ValueError(f"Unavailable provider '{profile.provider}' for profile '{name}'.")
-    if not config.providers[profile.provider].api_key_env:
+    if not resolve_profile_api_key_env(config, profile):
         raise ValueError(f"Missing credential variable setting for profile '{name}'.")
     return profile
 
 
 async def probe_model(config: ForgeConfig, profile: ModelProfileSettings) -> ProbeResult:
     """Ask for one tool call and check whether the next turn consumes its result."""
-    key_env = config.providers[profile.provider].api_key_env
+    key_env = resolve_profile_api_key_env(config, profile)
     api_key = os.environ.get(key_env)
     result = ProbeResult("failed", "", 0, TokenUsage(0, 0, 0), [])
     if not api_key:
         result.reason = f"Missing credential variable {key_env}."
         return result
 
-    provider = create_provider(profile.provider, api_key)
+    base_url = resolve_profile_base_url(config, profile)
+    provider = (
+        create_provider(profile.provider, api_key, base_url=base_url)
+        if base_url
+        else create_provider(profile.provider, api_key)
+    )
     options = LLMConfig(
         model=profile.model,
+        temperature=profile.temperature if profile.temperature is not None else 0.0,
         max_tokens=_MAX_OUTPUT_TOKENS,
         timeout_seconds=_TIMEOUT_SECONDS,
         max_retries=0,

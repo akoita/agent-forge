@@ -90,6 +90,7 @@ class ProviderSettings(BaseModel):
 
     api_key_env: str = ""
     default_model: str = ""
+    base_url: str = ""
 
 
 class ModelProfileSettings(BaseModel):
@@ -99,6 +100,9 @@ class ModelProfileSettings(BaseModel):
 
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
+    base_url: str = ""
+    api_key_env: str = ""
+    temperature: float | None = None
 
 
 class ForgeConfig(BaseModel):

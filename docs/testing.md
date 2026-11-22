@@ -25,8 +25,13 @@ make eval
 The grader applies each curated patch to a fresh copy of the sample app and
 runs the original tests from a separate directory. The base, empty patch, and
 incorrect patch must fail the health check. The known-good patch must pass the
-health check and the two existing regression tests. CI runs this evaluation
-on Python 3.13 without a provider key. This suite measures the grader itself.
+health check and the two existing regression tests. `tests/eval/test_benchmark_corpus.py`
+likewise verifies that every task in `agent_forge.eval.BUILTIN_TASKS` fails on
+the buggy base and empty diff, and passes on its known-good fix. CI runs both
+deterministically on Python 3.13 without a provider key.
+
+To measure live models against those pinned tasks, run `agent-forge models benchmark`
+and compare against the checked-in [v0.4.0 baseline report](eval/baseline-v0.4.0.md).
 
 ## Verify a coding run
 
