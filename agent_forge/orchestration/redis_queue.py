@@ -24,6 +24,15 @@ _QUEUE_KEY = "agent_forge:queue"  # Sorted set: score = -priority
 _TASK_PREFIX = "agent_forge:task:"  # Hash per task
 _CONCURRENT_KEY = "agent_forge:active"  # Counter of active runs
 
+_FINISH_TASK = """
+if redis.call('HGET', KEYS[1], 'status') ~= ARGV[1] then
+    return 0
+end
+redis.call('DECR', KEYS[2])
+redis.call('HSET', KEYS[1], 'status', ARGV[2])
+return 1
+"""
+
 
 class RedisQueue(TaskQueue):
     """Redis-backed priority task queue.
@@ -154,19 +163,30 @@ class RedisQueue(TaskQueue):
     # Extended API
     # ------------------------------------------------------------------
 
+    async def finish(self, task: Task, status: TaskStatus) -> None:
+        """Persist a terminal status and release the worker's active slot."""
+        await self._finish_task(task.id, status)
+        task.status = status
+
     async def complete(self, task_id: str) -> None:
-        """Mark a task as completed and decrement the active counter."""
-        task_key = self._task_key(task_id)
-        await self._redis.hset(task_key, "status", TaskStatus.COMPLETED.value)
-        await self._redis.decr(self._concurrent_key)
-        logger.info("task_completed", task_id=task_id)
+        """Mark a task completed and release its active slot."""
+        await self._finish_task(task_id, TaskStatus.COMPLETED)
 
     async def fail(self, task_id: str) -> None:
-        """Mark a task as failed and decrement the active counter."""
+        """Mark a task failed and release its active slot."""
+        await self._finish_task(task_id, TaskStatus.FAILED)
+
+    async def _finish_task(self, task_id: str, status: TaskStatus) -> None:
         task_key = self._task_key(task_id)
-        await self._redis.hset(task_key, "status", TaskStatus.FAILED.value)
-        await self._redis.decr(self._concurrent_key)
-        logger.info("task_failed", task_id=task_id)
+        await self._redis.eval(
+            _FINISH_TASK,
+            2,
+            task_key,
+            self._concurrent_key,
+            TaskStatus.PROCESSING.value,
+            status.value,
+        )
+        logger.info("task_finished", task_id=task_id, status=status.value)
 
     async def size(self) -> int:
         """Number of tasks currently in the queue."""

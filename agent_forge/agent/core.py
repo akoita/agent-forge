@@ -45,6 +45,7 @@ async def react_loop(
     *,
     event_bus: EventBus | None = None,
     verify: Callable[[], Awaitable[VerificationResult]] | None = None,
+    emit_lifecycle: bool = True,
 ) -> AgentRun:
     """Execute the ReAct loop: Observe → Reason (LLM) → Act (Tool) → Repeat.
 
@@ -70,9 +71,10 @@ async def react_loop(
         temperature=run.config.temperature,
     )
     tool_definitions = tools.list_definitions()
+    lifecycle_bus = event_bus if emit_lifecycle else None
 
     await _emit(
-        event_bus,
+        lifecycle_bus,
         EventType.RUN_STARTED,
         run.id,
         {
@@ -134,7 +136,7 @@ async def react_loop(
             # 3. CHECK COMPLETION
             if response.finish_reason == "stop" and not response.tool_calls:
                 run.messages.append(Message(role=Role.ASSISTANT, content=response.content or ""))
-                await _finish_run(run, verify, event_bus)
+                await _finish_run(run, verify, lifecycle_bus)
                 break
 
             # 4. ACT — execute each tool call
@@ -178,7 +180,7 @@ async def react_loop(
         transition(run, RunState.FAILED)
         run.error = str(exc)
         await _emit(
-            event_bus,
+            lifecycle_bus,
             EventType.RUN_FAILED,
             run.id,
             {
@@ -190,7 +192,7 @@ async def react_loop(
 
     if run.state == RunState.COMPLETED:
         await _emit(
-            event_bus,
+            lifecycle_bus,
             EventType.RUN_COMPLETED,
             run.id,
             {

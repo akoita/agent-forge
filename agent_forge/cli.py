@@ -375,12 +375,12 @@ async def _run_agent_queued(
             # Poll until the task completes or fails
             while True:
                 status = await queue.get_status(task_id)
-                if status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+                if status not in (TaskStatus.QUEUED, TaskStatus.PROCESSING):
                     break
                 await asyncio.sleep(0.5)
 
-            if status == TaskStatus.FAILED:
-                err_console.print("[red]Task failed.[/red]")
+            if status != TaskStatus.COMPLETED:
+                err_console.print(f"[red]Task {status.value}.[/red]")
                 sys.exit(1)
             console.print("[green]Task completed.[/green]")
         except Exception as exc:  # noqa: BLE001 — top-level catch-all
@@ -411,7 +411,7 @@ def _make_task_runner(
 
     sandbox_config = _build_sandbox_config(_cfg)
 
-    async def _runner(task: Any) -> None:
+    async def _runner(task: Any) -> AgentRun:
         tools = create_default_registry()
         task.config.system_prompt = build_system_prompt(
             task.task_description,
@@ -425,18 +425,20 @@ def _make_task_runner(
             task=task.task_description,
             repo_path=task.repo_path,
             config=task.config,
+            id=task.id,
         )
         sandbox = create_sandbox(sandbox_config)
         llm = create_provider(provider_name, api_key)
 
         try:
             await sandbox.start(repo_path=task.repo_path, config=sandbox_config)
-            await react_loop(
+            return await react_loop(
                 agent_run,
                 llm,
                 tools,
                 sandbox,
                 event_bus=event_bus,
+                emit_lifecycle=False,
             )
         finally:
             await sandbox.stop()

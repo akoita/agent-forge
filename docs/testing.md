@@ -52,6 +52,12 @@ run directory. To review and apply the patch, use a clean checkout of the
 reported base revision and run `git apply --check` before `git apply`.
 For an investigation, omit `--verify-command`.
 
+## Check queued run outcomes
+
+The queued CLI uses the queued task ID as the persisted run ID. A model run
+that fails or times out produces the matching queue status and a failing CLI
+exit code. Use `agent-forge status <run-id>` to inspect the saved result.
+
 ## Running Tests
 
 ```bash
