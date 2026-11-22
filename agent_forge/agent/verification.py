@@ -100,9 +100,9 @@ class VerificationWorkspace:
 
     def __exit__(
         self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
+        _exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _traceback: TracebackType | None,
     ) -> None:
         """Remove the temporary checkouts."""
         if self._temporary is not None:
