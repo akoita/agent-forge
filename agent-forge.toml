@@ -5,6 +5,7 @@ default_provider = "gemini"
 default_model = "gemini-3.1-flash-lite-preview"
 temperature = 0.0
 system_prompt_path = ""          # Optional custom system prompt file
+approval_mode = "auto"           # "auto", "prompt", or "deny"
 
 [sandbox]
 backend = "docker"

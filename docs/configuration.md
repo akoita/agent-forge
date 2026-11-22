@@ -24,6 +24,7 @@ default_provider = "gemini"
 default_model = "gemini-3.1-flash-lite-preview"
 temperature = 0.0
 system_prompt_path = ""
+approval_mode = "auto"          # "auto", "prompt", or "deny"
 
 [sandbox]
 backend = "docker"
@@ -90,6 +91,7 @@ Examples:
 
 ```bash
 export AGENT_FORGE_AGENT_MAX_ITERATIONS=10
+export AGENT_FORGE_AGENT_APPROVAL_MODE=prompt
 export AGENT_FORGE_SANDBOX_MEMORY_LIMIT=1g
 export AGENT_FORGE_SANDBOX_BACKEND=auto
 export AGENT_FORGE_SANDBOX_IMAGE=agent-forge-sandbox:full
@@ -112,6 +114,7 @@ agent-forge run \
   --provider gemini \
   --model gemini-3.1-flash-lite-preview \
   --max-iterations 25 \
+  --approval-mode prompt \          # "auto", "prompt", or "deny"
   --sandbox-backend auto \
   --sandbox-image agent-forge-sandbox:full \
   --network \
