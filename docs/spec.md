@@ -765,7 +765,10 @@ class TaskQueue(ABC):
 Valid state transitions for an `AgentRun`:
 
 ```
-PENDING ──▶ RUNNING ──▶ COMPLETED
+PENDING ──▶ RUNNING ──▶ PAUSED ──▶ RUNNING
+                    │          ──▶ CANCELLED
+                    │          ──▶ FAILED
+                    ──▶ COMPLETED
                     ──▶ FAILED
                     ──▶ TIMEOUT
                     ──▶ CANCELLED
@@ -778,10 +781,12 @@ Invalid transitions (e.g., `COMPLETED → RUNNING`) must raise `InvalidStateTran
 ```python
 class EventType(Enum):
     RUN_STARTED = "run.started"
+    RUN_PAUSED = "run.paused"
     RUN_COMPLETED = "run.completed"
     RUN_FAILED = "run.failed"
     ITERATION_STARTED = "iteration.started"
     ITERATION_COMPLETED = "iteration.completed"
+    CHECKPOINT_SAVED = "checkpoint.saved"
     TOOL_CALLED = "tool.called"
     TOOL_COMPLETED = "tool.completed"
     PATCH_APPLIED = "patch.applied"

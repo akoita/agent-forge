@@ -52,6 +52,16 @@ run directory. To review and apply the patch, use a clean checkout of the
 reported base revision and run `git apply --check` before `git apply`.
 For an investigation, omit `--verify-command`.
 
+## Resume an interrupted run
+
+Verified local runs persist step-level checkpoints (`checkpoint.json` and `checkpoint.patch`) pinned to the base revision. To continue a paused or interrupted run without repeating completed edits:
+
+```sh
+agent-forge resume <run-id> --output-format json
+```
+
+The resumed run checks out the saved base revision, reapplies the saved partial patch inside a fresh isolated workspace, skips already-completed tool calls, and runs independent verification when the model finishes.
+
 ## Check queued run outcomes
 
 The queued CLI uses the queued task ID as the persisted run ID. A model run

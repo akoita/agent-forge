@@ -25,10 +25,12 @@ class EventType(Enum):
     """Run lifecycle event types per spec § 4.5."""
 
     RUN_STARTED = "run.started"
+    RUN_PAUSED = "run.paused"
     RUN_COMPLETED = "run.completed"
     RUN_FAILED = "run.failed"
     ITERATION_STARTED = "iteration.started"
     ITERATION_COMPLETED = "iteration.completed"
+    CHECKPOINT_SAVED = "checkpoint.saved"
     TOOL_CALLED = "tool.called"
     TOOL_COMPLETED = "tool.completed"
     PATCH_APPLIED = "patch.applied"

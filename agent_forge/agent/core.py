@@ -48,6 +48,7 @@ async def react_loop(
     verify: Callable[[], Awaitable[VerificationResult]] | None = None,
     emit_lifecycle: bool = True,
     approval_gate: ApprovalGate | None = None,
+    on_checkpoint: Callable[[AgentRun], Awaitable[None]] | None = None,
 ) -> AgentRun:
     """Execute the ReAct loop: Observe → Reason (LLM) → Act (Tool) → Repeat.
 
@@ -57,16 +58,9 @@ async def react_loop(
     - Token budget exceeded (→ TIMEOUT)
     - Unrecoverable error (→ FAILED)
     """
-    transition(run, RunState.RUNNING)
+    completed_call_ids = _prepare_run_start(run, tools)
     set_trace_context(run.id)
     tracker = CostTracker(run_id=run.id)
-
-    # Build system prompt from task + tool definitions
-    system_content = run.config.system_prompt or build_system_prompt(
-        run.task, tools.list_definitions()
-    )
-    run.messages.append(Message(role=Role.SYSTEM, content=system_content))
-    run.messages.append(Message(role=Role.USER, content=run.task))
 
     llm_config = LLMConfig(
         model=run.config.model,
@@ -87,6 +81,15 @@ async def react_loop(
     )
 
     try:
+        await _resume_pending_tool_calls(
+            run,
+            tools,
+            sandbox,
+            completed_call_ids,
+            event_bus=event_bus,
+            approval_gate=active_gate,
+            on_checkpoint=on_checkpoint,
+        )
         while run.iterations < run.config.max_iterations:
             run.iterations += 1
             update_iteration(run.iterations)
@@ -151,15 +154,15 @@ async def react_loop(
                 )
             )
 
-            for tool_call in response.tool_calls:
-                await _execute_tool_call(
-                    run,
-                    tools,
-                    sandbox,
-                    tool_call,
-                    event_bus=event_bus,
-                    approval_gate=active_gate,
-                )
+            await _execute_tool_batch(
+                run,
+                tools,
+                sandbox,
+                response.tool_calls,
+                completed_call_ids,
+                event_bus=event_bus,
+                approval_gate=active_gate,
+            )
 
             await _emit(
                 event_bus,
@@ -169,6 +172,7 @@ async def react_loop(
                     "iteration": run.iterations,
                 },
             )
+            await _emit_checkpoint(run, on_checkpoint, event_bus)
 
         else:
             # Loop exhausted without breaking → max iterations
@@ -178,6 +182,10 @@ async def react_loop(
             )
             transition(run, RunState.TIMEOUT)
             run.error = "Max iterations reached"
+
+    except asyncio.CancelledError:
+        await _handle_cancellation(run, on_checkpoint, lifecycle_bus)
+        raise
 
     except Exception as exc:
         logger.exception("unrecoverable_error", exc_info=exc)
@@ -224,6 +232,111 @@ async def _finish_run(
             await _emit(event_bus, EventType.RUN_FAILED, run.id, {"error": run.error})
             return
     transition(run, RunState.COMPLETED)
+
+
+def _prepare_run_start(run: AgentRun, tools: ToolRegistry) -> set[str]:
+    if run.state != RunState.RUNNING:
+        transition(run, RunState.RUNNING)
+    run.error = None
+    if not run.messages:
+        system_content = run.config.system_prompt or build_system_prompt(
+            run.task, tools.list_definitions()
+        )
+        run.messages.append(Message(role=Role.SYSTEM, content=system_content))
+        run.messages.append(Message(role=Role.USER, content=run.task))
+    return {msg.tool_call_id for msg in run.messages if msg.role == Role.TOOL and msg.tool_call_id}
+
+
+async def _execute_tool_batch(
+    run: AgentRun,
+    tools: ToolRegistry,
+    sandbox: Sandbox,
+    tool_calls: list[ToolCall],
+    completed_call_ids: set[str],
+    *,
+    event_bus: EventBus | None,
+    approval_gate: ApprovalGate | None,
+) -> None:
+    for tool_call in tool_calls:
+        if tool_call.id and tool_call.id in completed_call_ids:
+            continue
+        await _execute_tool_call(
+            run,
+            tools,
+            sandbox,
+            tool_call,
+            event_bus=event_bus,
+            approval_gate=approval_gate,
+        )
+        if tool_call.id:
+            completed_call_ids.add(tool_call.id)
+
+
+async def _resume_pending_tool_calls(
+    run: AgentRun,
+    tools: ToolRegistry,
+    sandbox: Sandbox,
+    completed_call_ids: set[str],
+    *,
+    event_bus: EventBus | None,
+    approval_gate: ApprovalGate | None,
+    on_checkpoint: Callable[[AgentRun], Awaitable[None]] | None,
+) -> None:
+    last_assistant = next(
+        (m for m in reversed(run.messages) if m.role == Role.ASSISTANT),
+        None,
+    )
+    if last_assistant is None or not last_assistant.tool_calls:
+        return
+    pending = [tc for tc in last_assistant.tool_calls if tc.id not in completed_call_ids]
+    if not pending:
+        return
+    await _execute_tool_batch(
+        run,
+        tools,
+        sandbox,
+        pending,
+        completed_call_ids,
+        event_bus=event_bus,
+        approval_gate=approval_gate,
+    )
+    await _emit_checkpoint(run, on_checkpoint, event_bus)
+
+
+async def _emit_checkpoint(
+    run: AgentRun,
+    on_checkpoint: Callable[[AgentRun], Awaitable[None]] | None,
+    event_bus: EventBus | None,
+) -> None:
+    if on_checkpoint is None:
+        return
+    await on_checkpoint(run)
+    await _emit(
+        event_bus,
+        EventType.CHECKPOINT_SAVED,
+        run.id,
+        {"iteration": run.iterations},
+    )
+
+
+async def _handle_cancellation(
+    run: AgentRun,
+    on_checkpoint: Callable[[AgentRun], Awaitable[None]] | None,
+    lifecycle_bus: EventBus | None,
+) -> None:
+    if run.state == RunState.RUNNING:
+        transition(run, RunState.PAUSED)
+    run.error = "Run paused due to cancellation"
+    if on_checkpoint is not None:
+        await on_checkpoint(run)
+    else:
+        save_run(run)
+    await _emit(
+        lifecycle_bus,
+        EventType.RUN_PAUSED,
+        run.id,
+        {"iteration": run.iterations},
+    )
 
 
 def _resolve_approval_gate(run: AgentRun, gate: ApprovalGate | None) -> ApprovalGate | None:
