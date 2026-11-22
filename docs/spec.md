@@ -809,6 +809,16 @@ class EventBus:
     async def unsubscribe(self, subscription_id: str) -> None: ...
 ```
 
+##### Durable Typed Event Stream
+
+`JournalEventSink` subscribes to `EventBus` and appends each lifecycle event to `~/.agent-forge/runs/<run_id>/stream.jsonl` as a versioned `StreamEvent` (`schema_version="run-event-v1"`, monotonic 0-based `seq`, ISO-8601 `timestamp`, bounded JSON-safe `data`, and `truncated` flag when large tool payloads are trimmed).
+
+`RunEventStream` provides a shared, resumable reader over `stream.jsonl`:
+
+- `read_page(after_seq=-1, limit=100)` returns a `StreamEventPage` with `next_after_seq`, `has_more`, and `terminal`.
+- `follow(after_seq=-1, ...)` replays missed events and tails new lines until a terminal lifecycle event (`run.completed`, `run.failed`, `run.cancelled`, or `run.paused`), losing zero events across disconnects.
+- CLI access: `agent-forge events <run_id> [--after-seq N] [--limit N] [--follow] [--output-format text|json]` and `agent-forge status <run_id> --follow`.
+
 ##### Destructive-Operation Approval Gates
 
 Before executing a tool call, `ApprovalGate` classifies destructive actions (`apply_patch` deletes, `rm`, `git push --force`/`-f`/`--force-with-lease`, `git reset --hard`, `git clean -f`, `git branch -D`, `git checkout --`, `git restore`) and evaluates `[agent].approval_mode`:
@@ -938,6 +948,9 @@ resource:
   `source`, optional `target`, and optional artifact delivery preferences.
 - `GET /v1/runs/{run_id}` returns a `RunStatus` document that includes the run
   lifecycle state, client/profile echo fields, and stable artifact references.
+- `GET /v1/runs/{run_id}/events` returns a paginated `StreamEventPage` (`after_seq`,
+  `limit`), or streams Server-Sent Events (`text/event-stream`) when `?follow=true`
+  or `Accept: text/event-stream` is set, resuming from `after_seq` or `Last-Event-ID`.
 - All request and response models are versioned with explicit
   `schema_version` fields so hosted clients do not have to infer compatibility
   from CLI behavior.
@@ -1072,7 +1085,8 @@ Agent runs are persisted as JSON files under `~/.agent-forge/runs/<run_id>/`:
 ~/.agent-forge/runs/<run_id>/
 ├── run.json           # AgentRun metadata (state, config, timestamps)
 ├── messages.jsonl     # Full conversation history (line-delimited JSON)
-├── events.jsonl       # All events emitted during the run
+├── events.jsonl       # Tool invocations persisted with the run snapshot
+├── stream.jsonl       # Append-only typed run-event journal (run-event-v1)
 └── summary.json       # Final cost/token summary
 ```
 
@@ -1299,6 +1313,7 @@ agent-forge/
 │   │
 │   ├── orchestration/
 │   │   ├── __init__.py
+│   │   ├── event_stream.py          # Durable typed event journal & reader
 │   │   ├── queue.py                 # TaskQueue ABC + implementations
 │   │   ├── events.py                # EventBus
 │   │   └── worker.py                # Queue worker process

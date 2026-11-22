@@ -1,5 +1,13 @@
 """Orchestration layer — task queue, event bus, and workers."""
 
+from agent_forge.orchestration.event_stream import (
+    TERMINAL_STREAM_EVENTS,
+    EventJournal,
+    JournalEventSink,
+    RunEventStream,
+    StreamEvent,
+    StreamEventPage,
+)
 from agent_forge.orchestration.events import Event, EventBus, EventType
 from agent_forge.orchestration.queue import (
     InMemoryQueue,
@@ -10,11 +18,17 @@ from agent_forge.orchestration.queue import (
 from agent_forge.orchestration.worker import Worker
 
 __all__ = [
+    "TERMINAL_STREAM_EVENTS",
     "Event",
     "EventBus",
+    "EventJournal",
     "EventType",
     "InMemoryQueue",
+    "JournalEventSink",
     "RedisQueue",
+    "RunEventStream",
+    "StreamEvent",
+    "StreamEventPage",
     "Task",
     "TaskQueue",
     "TaskStatus",

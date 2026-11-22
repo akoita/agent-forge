@@ -9,7 +9,7 @@ import sys
 from contextlib import nullcontext, redirect_stdout
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 from rich.console import Console
@@ -20,6 +20,9 @@ from rich.table import Table
 from agent_forge.config import USER_CONFIG_DIR, ForgeConfig, load_config
 from agent_forge.llm.factory import create_provider, provider_names
 from agent_forge.sandbox.base import SandboxConfig
+
+if TYPE_CHECKING:
+    from agent_forge.orchestration.event_stream import RunEventStream, StreamEvent
 
 console = Console()
 err_console = Console(stderr=True)
@@ -475,10 +478,12 @@ async def _execute_with_workspace(
     from agent_forge.agent.checkpoint import save_checkpoint
     from agent_forge.agent.core import react_loop
     from agent_forge.agent.verification import VerificationWorkspace
+    from agent_forge.orchestration.event_stream import JournalEventSink
     from agent_forge.sandbox.factory import create_sandbox
 
     sandbox_config = _build_sandbox_config(cfg)
     sandbox = create_sandbox(sandbox_config)
+    sink = JournalEventSink(run_id=agent_run.id)
     verification_workspace = (
         VerificationWorkspace(
             agent_run.repo_path,
@@ -503,6 +508,7 @@ async def _execute_with_workspace(
                     workspace, verify_command, save_checkpoint
                 )
                 llm = create_provider(provider_name, api_key)
+                await sink.attach(event_bus)
                 try:
                     await sandbox.start(repo_path=path, config=sandbox_config)
                     return await react_loop(
@@ -516,6 +522,7 @@ async def _execute_with_workspace(
                         on_checkpoint=on_checkpoint,
                     )
                 finally:
+                    await sink.detach(event_bus)
                     try:
                         await sandbox.stop()
                     finally:
@@ -541,6 +548,7 @@ async def _run_agent_queued(
     Enqueues a :class:`Task`, starts a :class:`Worker`, and waits for
     the task to complete or fail.
     """
+    from agent_forge.orchestration.event_stream import JournalEventSink
     from agent_forge.orchestration.events import EventBus
     from agent_forge.orchestration.queue import InMemoryQueue, Task, TaskQueue, TaskStatus
     from agent_forge.orchestration.worker import Worker
@@ -548,6 +556,7 @@ async def _run_agent_queued(
     agent_config = _build_agent_config(cfg, provider_name)
 
     event_bus = EventBus()
+    sink = JournalEventSink()
 
     # Select queue backend
     queue: TaskQueue
@@ -576,6 +585,7 @@ async def _run_agent_queued(
 
     with console.status("[bold green]Agent running (queue mode)...", spinner="dots"):
         try:
+            await sink.attach(event_bus)
             task_id = await queue.enqueue(queue_task)
             console.print(f"[dim]Enqueued task {task_id}[/dim]")
             await worker.start()
@@ -595,6 +605,7 @@ async def _run_agent_queued(
             err_console.print(f"[red]Agent failed:[/red] {exc}")
             sys.exit(1)
         finally:
+            await sink.detach(event_bus)
             await worker.stop()
             if hasattr(queue, "close"):
                 await queue.close()
@@ -808,6 +819,7 @@ def _run_output_payload(run: Any, *, profile: Any | None = None) -> dict[str, ob
             "run_json": str(run_dir / "run.json"),
             "messages_jsonl": str(run_dir / "messages.jsonl"),
             "events_jsonl": str(run_dir / "events.jsonl"),
+            "stream_jsonl": str(run_dir / "stream.jsonl"),
             "summary_json": str(run_dir / "summary.json"),
         },
     }
@@ -851,8 +863,60 @@ def _emit_run_output(
 
 
 # ---------------------------------------------------------------------------
-# status
+# events / status
 # ---------------------------------------------------------------------------
+
+
+def _format_stream_event_text(event: StreamEvent) -> str:
+    """Format a typed :class:`StreamEvent` for human-readable CLI output."""
+    if not event.data:
+        return f"[{event.seq}] {event.timestamp} {event.type}"
+    details = ", ".join(f"{key}={json.dumps(val)}" for key, val in event.data.items())
+    return f"[{event.seq}] {event.timestamp} {event.type} ({details})"
+
+
+def _ensure_run_or_stream_exists(run_id: str, stream: RunEventStream) -> None:
+    """Exit with status 1 when neither run metadata nor an event journal exists."""
+    from agent_forge.agent.persistence import load_run
+
+    if stream.exists():
+        return
+    try:
+        load_run(run_id)
+    except FileNotFoundError:
+        err_console.print(f"[red]Run not found:[/red] {run_id}")
+        sys.exit(1)
+
+
+async def _consume_event_stream(
+    stream: RunEventStream,
+    *,
+    after_seq: int,
+    limit: int,
+    output_format: str,
+) -> None:
+    async for event in stream.follow(after_seq=after_seq, page_size=limit):
+        if output_format == "json":
+            click.echo(event.model_dump_json())
+        else:
+            click.echo(_format_stream_event_text(event))
+
+
+def _follow_event_stream(
+    stream: RunEventStream,
+    *,
+    after_seq: int,
+    limit: int,
+    output_format: str,
+) -> None:
+    asyncio.run(
+        _consume_event_stream(
+            stream,
+            after_seq=after_seq,
+            limit=limit,
+            output_format=output_format,
+        )
+    )
 
 
 @main.command()
@@ -863,9 +927,21 @@ def _emit_run_output(
     type=click.Choice(["text", "json"], case_sensitive=False),
     help="Render a human summary or a machine-readable JSON result.",
 )
-def status(run_id: str, output_format: str) -> None:
+@click.option(
+    "--follow/--no-follow",
+    default=False,
+    help="Stream live typed run events from the durable event journal.",
+)
+def status(run_id: str, output_format: str, follow: bool) -> None:
     """Show the status and summary of a specific run."""
     from agent_forge.agent.persistence import load_run
+    from agent_forge.orchestration.event_stream import RunEventStream
+
+    if follow:
+        stream = RunEventStream(run_id)
+        _ensure_run_or_stream_exists(run_id, stream)
+        _follow_event_stream(stream, after_seq=-1, limit=100, output_format=output_format)
+        return
 
     try:
         agent_run = load_run(run_id)
@@ -874,6 +950,64 @@ def status(run_id: str, output_format: str) -> None:
         sys.exit(1)
 
     _emit_run_output(agent_run, output_format=output_format, report_file=None)
+
+
+@main.command()
+@click.argument("run_id")
+@click.option(
+    "--after-seq",
+    default=-1,
+    type=int,
+    help="Resume reading strictly after this sequence offset.",
+)
+@click.option(
+    "--limit",
+    default=100,
+    type=int,
+    help="Maximum events per page.",
+)
+@click.option(
+    "--follow/--no-follow",
+    default=False,
+    help="Continue tailing new events until the run reaches a terminal event.",
+)
+@click.option(
+    "--output-format",
+    default="text",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    help="Render formatted text lines, JSON page (--no-follow), or NDJSON (--follow).",
+)
+def events(
+    run_id: str,
+    after_seq: int,
+    limit: int,
+    follow: bool,
+    output_format: str,
+) -> None:
+    """Inspect or stream typed lifecycle events for a run."""
+    from agent_forge.orchestration.event_stream import RunEventStream
+
+    stream = RunEventStream(run_id)
+    _ensure_run_or_stream_exists(run_id, stream)
+
+    if follow:
+        _follow_event_stream(
+            stream,
+            after_seq=after_seq,
+            limit=limit,
+            output_format=output_format,
+        )
+        return
+
+    page = stream.read_page(after_seq=after_seq, limit=limit)
+    if output_format == "json":
+        click.echo(page.model_dump_json(indent=2))
+        return
+    if not page.events:
+        click.echo(f"No events found for run {run_id}.")
+        return
+    for event in page.events:
+        click.echo(_format_stream_event_text(event))
 
 
 # ---------------------------------------------------------------------------

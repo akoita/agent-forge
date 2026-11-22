@@ -14,11 +14,11 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 from urllib.parse import ParseResult, urlparse
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from agent_forge import __version__
 from agent_forge.agent.core import react_loop
@@ -26,6 +26,11 @@ from agent_forge.agent.models import AgentConfig, AgentRun
 from agent_forge.agent.prompts import build_hosted_poa_system_prompt
 from agent_forge.config import USER_CONFIG_DIR, ForgeConfig, load_config
 from agent_forge.llm.factory import create_provider, provider_names
+from agent_forge.orchestration.event_stream import (
+    JournalEventSink,
+    RunEventStream,
+    StreamEventPage,
+)
 from agent_forge.orchestration.events import EventBus
 from agent_forge.orchestration.queue import InMemoryQueue, Task, TaskStatus
 from agent_forge.orchestration.worker import Worker
@@ -50,6 +55,11 @@ from agent_forge.service.models import (
 )
 from agent_forge.service.security import ServiceClientPolicy, load_client_registry
 from agent_forge.tools import create_default_registry
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from agent_forge.orchestration.event_stream import StreamEvent
 
 _REPORT_RELATIVE_PATH = Path(".agent-forge/report.json")
 
@@ -104,6 +114,7 @@ class HostedRunService:
         self,
         *,
         service_root: Path | None = None,
+        runs_dir: Path | None = None,
         config: ForgeConfig | None = None,
         instance_id: str | None = None,
         persona: str | None = None,
@@ -114,8 +125,10 @@ class HostedRunService:
         self._persona_id = persona
         # Isolate workspace per instance when instance_id is set
         self._service_root = base_root / instance_id if instance_id else base_root
+        self._runs_dir = Path(runs_dir) if runs_dir is not None else (USER_CONFIG_DIR / "runs")
         self._queue = InMemoryQueue()
         self._event_bus = EventBus()
+        self._event_sink = JournalEventSink(base_dir=self._runs_dir)
         self._records: dict[str, HostedRunRecord] = {}
         self._client_policies: dict[str, ServiceClientPolicy] = {}
         self._profile_registry: dict[str, AgentProfile] = {}
@@ -148,11 +161,15 @@ class HostedRunService:
                 )
                 raise ValueError(msg)
             self._resolved_persona = self._profile_registry[self._persona_id]
+        await self._event_sink.attach(self._event_bus)
         await self._worker.start()
 
     async def stop(self) -> None:
         """Stop the background worker for hosted runs."""
-        await self._worker.stop()
+        try:
+            await self._worker.stop()
+        finally:
+            await self._event_sink.detach(self._event_bus)
 
     async def create_run(
         self,
@@ -314,10 +331,79 @@ class HostedRunService:
             "run_json": str(record.run_dir / "run.json"),
             "messages_jsonl": str(record.run_dir / "messages.jsonl"),
             "events_jsonl": str(record.run_dir / "events.jsonl"),
+            "stream_jsonl": str(self._runs_dir / run_id / "stream.jsonl"),
             "summary_json": str(record.run_dir / "summary.json"),
             "report_json": str(record.report_path),
         }
         return LogsResponse(run_id=run_id, logs_url=None, inline=None, artifacts=artifacts)
+
+    def _authorize_stream_access(
+        self,
+        run_id: str,
+        *,
+        headers: dict[str, str] | None = None,
+        request_origin: str | None = None,
+        user_agent: str | None = None,
+    ) -> HostedRunRecord:
+        client_service_id, _ = self._authenticate_headers(
+            headers,
+            request_origin=request_origin,
+            user_agent=user_agent,
+        )
+        record = self._require_record(run_id)
+        self._authorize_run_access(
+            record,
+            client_service_id=client_service_id,
+            request_origin=request_origin,
+            user_agent=user_agent,
+        )
+        return record
+
+    def get_events(
+        self,
+        run_id: str,
+        *,
+        after_seq: int = -1,
+        limit: int = 100,
+        headers: dict[str, str] | None = None,
+        request_origin: str | None = None,
+        user_agent: str | None = None,
+    ) -> StreamEventPage:
+        """Return a paginated slice of typed lifecycle events for a run."""
+        self._authorize_stream_access(
+            run_id,
+            headers=headers,
+            request_origin=request_origin,
+            user_agent=user_agent,
+        )
+        return RunEventStream(run_id, base_dir=self._runs_dir).read_page(
+            after_seq=after_seq,
+            limit=limit,
+        )
+
+    def stream_events(
+        self,
+        run_id: str,
+        *,
+        after_seq: int = -1,
+        page_size: int = 100,
+        poll_interval: float = 0.05,
+        headers: dict[str, str] | None = None,
+        request_origin: str | None = None,
+        user_agent: str | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        """Authorize access synchronously and return a live event iterator."""
+        self._authorize_stream_access(
+            run_id,
+            headers=headers,
+            request_origin=request_origin,
+            user_agent=user_agent,
+        )
+        return RunEventStream(run_id, base_dir=self._runs_dir).follow(
+            after_seq=after_seq,
+            page_size=page_size,
+            poll_interval=poll_interval,
+        )
 
     def _authenticate_headers(
         self,
@@ -1154,9 +1240,25 @@ class HostedRunService:
         ).model_dump()
 
 
+def _resolve_after_seq(after_seq: int | None, http_request: Request) -> int:
+    if after_seq is not None:
+        return after_seq
+    last_event_id = http_request.headers.get("last-event-id")
+    if last_event_id is None:
+        return -1
+    try:
+        return int(last_event_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid Last-Event-ID header: {last_event_id}",
+        ) from exc
+
+
 def create_app(  # noqa: C901
     *,
     service_root: Path | None = None,
+    runs_dir: Path | None = None,
     config: ForgeConfig | None = None,
     instance_id: str | None = None,
     persona: str | None = None,
@@ -1165,6 +1267,7 @@ def create_app(  # noqa: C901
     resolved_config = config or load_config()
     service = HostedRunService(
         service_root=service_root,
+        runs_dir=runs_dir,
         config=resolved_config,
         instance_id=instance_id,
         persona=persona,
@@ -1276,5 +1379,49 @@ def create_app(  # noqa: C901
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"unknown run id: {run_id}") from exc
+
+    @app.get("/v1/runs/{run_id}/events", response_model=None)
+    async def get_events(
+        run_id: str,
+        http_request: Request,
+        after_seq: int | None = None,
+        limit: int = 100,
+        follow: bool = False,
+    ) -> StreamEventPage | StreamingResponse:
+        effective_after_seq = _resolve_after_seq(after_seq, http_request)
+        wants_sse = follow or "text/event-stream" in http_request.headers.get("accept", "").lower()
+        headers = dict(http_request.headers)
+        origin = _request_origin(http_request)
+        user_agent = http_request.headers.get("user-agent")
+        try:
+            if not wants_sse:
+                return service.get_events(
+                    run_id,
+                    after_seq=effective_after_seq,
+                    limit=limit,
+                    headers=headers,
+                    request_origin=origin,
+                    user_agent=user_agent,
+                )
+            event_iter = service.stream_events(
+                run_id,
+                after_seq=effective_after_seq,
+                page_size=limit,
+                headers=headers,
+                request_origin=origin,
+                user_agent=user_agent,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"unknown run id: {run_id}") from exc
+
+        async def _sse_chunks() -> AsyncIterator[str]:
+            async for event in event_iter:
+                yield event.to_sse()
+
+        return StreamingResponse(
+            _sse_chunks(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     return app

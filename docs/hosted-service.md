@@ -366,6 +366,28 @@ curl -X POST http://127.0.0.1:8000/v1/runs \
   -d @request.json
 ```
 
+### 6. Stream Run Events (JSON Pagination Or SSE)
+
+`GET /v1/runs/{run_id}/events` reads from the same `RunEventStream` journal used by
+the CLI (`agent-forge events <run_id>`). Clients can poll pages with monotonic
+sequence offsets or subscribe to live SSE frames:
+
+```bash
+# Paginated JSON page starting from the beginning
+curl "http://127.0.0.1:8000/v1/runs/$RUN_ID/events?after_seq=-1&limit=100" \
+  -H "X-Agent-Forge-API-Key: $POA_SERVICE_API_KEY"
+
+# Resumable SSE stream after event id 12
+curl -N "http://127.0.0.1:8000/v1/runs/$RUN_ID/events?follow=true" \
+  -H "Accept: text/event-stream" \
+  -H "Last-Event-ID: 12" \
+  -H "X-Agent-Forge-API-Key: $POA_SERVICE_API_KEY"
+```
+
+SSE frames carry `id: <seq>`, `event: <type>`, and `data: <StreamEvent JSON>`
+(`schema_version: "run-event-v1"`). Passing `Last-Event-ID` or `?after_seq=N`
+replays missed events without duplicates or gaps.
+
 ## Operations And Debugging
 
 ### Health Checks
@@ -396,7 +418,7 @@ Hosted mode writes useful state to disk:
 
 - `<service.root_dir>/sources/<run_id>/` for extracted source material
 - `<service.root_dir>/audit/events.jsonl` for client accept/deny/run lifecycle events
-- `~/.agent-forge/runs/<run_id>/` for persisted run metadata, events, and summaries
+- `~/.agent-forge/runs/<run_id>/` for persisted run metadata, tool events, `stream.jsonl`, and summaries
 - `.agent-forge/report.json` inside each workspace for machine-readable downstream output
 
 ### Common Failure Modes
