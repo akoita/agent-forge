@@ -61,10 +61,19 @@ def _git(directory: Path, *args: str, patch: bytes | None = None) -> bytes:
 class VerificationWorkspace:
     """Pair an editable checkout with an independent verifier checkout."""
 
-    def __init__(self, repository: str, command: str) -> None:
+    def __init__(
+        self,
+        repository: str,
+        command: str,
+        *,
+        base_revision: str | None = None,
+        initial_patch: str = "",
+    ) -> None:
         """Select the repository and caller-supplied verification command."""
         self._repository = Path(repository).resolve()
         self._command = command
+        self._requested_base_revision = base_revision
+        self._initial_patch = initial_patch
         self._temporary: tempfile.TemporaryDirectory[str] | None = None
         self.workspace: Path
         self.base_revision: str
@@ -78,7 +87,14 @@ class VerificationWorkspace:
         self._verifier = root / "verifier"
         try:
             self.base_revision = (
-                _git(self._repository, "rev-parse", "--verify", "HEAD").decode().strip()
+                _git(
+                    self._repository,
+                    "rev-parse",
+                    "--verify",
+                    self._requested_base_revision or "HEAD",
+                )
+                .decode()
+                .strip()
             )
             for destination in (self.workspace, self._verifier):
                 _git(
@@ -92,6 +108,13 @@ class VerificationWorkspace:
                     str(destination),
                 )
                 _git(destination, "checkout", "--detach", self.base_revision)
+            if self._initial_patch:
+                _git(
+                    self.workspace,
+                    "apply",
+                    "-",
+                    patch=self._initial_patch.encode(errors="surrogateescape"),
+                )
         except BaseException:
             temporary.cleanup()
             raise
@@ -134,6 +157,10 @@ class VerificationWorkspace:
             )
         finally:
             _git(self._verifier, "read-tree", self.base_revision)
+
+    def capture_patch(self) -> str:
+        """Capture the candidate workspace diff against the pinned base revision."""
+        return self._capture_patch().decode(errors="surrogateescape")
 
     async def verify(self, config: SandboxConfig, candidate: Sandbox) -> VerificationResult:
         """Apply the candidate patch in the verifier checkout and run the check."""

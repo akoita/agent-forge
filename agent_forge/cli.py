@@ -380,14 +380,9 @@ async def _run_agent(
     Creates an ``EventBus`` so lifecycle events are emitted even in
     direct mode — this enables observability subscribers.
     """
-    from functools import partial
-
-    from agent_forge.agent.core import react_loop
     from agent_forge.agent.models import AgentConfig, AgentRun
     from agent_forge.agent.prompts import build_system_prompt
-    from agent_forge.agent.verification import VerificationWorkspace
     from agent_forge.orchestration.events import EventBus
-    from agent_forge.sandbox.factory import create_sandbox
     from agent_forge.tools import create_default_registry
 
     sandbox_config = _build_sandbox_config(cfg)
@@ -424,19 +419,79 @@ async def _run_agent(
         extension_prompts=extension_prompts,
     )
     agent_run = AgentRun(task=task, repo_path=repo, config=agent_config)
+    return await _execute_with_workspace(
+        agent_run,
+        cfg,
+        provider_name,
+        api_key,
+        tools,
+        event_bus,
+        verify_command=verify_command,
+    )
+
+
+def _make_checkpoint_callback(
+    workspace: Any,
+    verify_command: str | None,
+    save_fn: Any,
+) -> Any:
+    if workspace is None:
+        return None
+
+    async def _checkpoint(run: Any) -> None:
+        save_fn(
+            run,
+            base_revision=workspace.base_revision,
+            partial_patch=workspace.capture_patch(),
+            verify_command=verify_command,
+        )
+
+    return _checkpoint
+
+
+async def _execute_with_workspace(
+    agent_run: Any,
+    cfg: Any,
+    provider_name: str,
+    api_key: str,
+    tools: Any,
+    event_bus: Any,
+    *,
+    verify_command: str | None = None,
+    base_revision: str | None = None,
+    initial_patch: str = "",
+) -> Any:
+    from functools import partial
+
+    from agent_forge.agent.checkpoint import save_checkpoint
+    from agent_forge.agent.core import react_loop
+    from agent_forge.agent.verification import VerificationWorkspace
+    from agent_forge.sandbox.factory import create_sandbox
+
+    sandbox_config = _build_sandbox_config(cfg)
     sandbox = create_sandbox(sandbox_config)
     verification_workspace = (
-        VerificationWorkspace(repo, verify_command) if verify_command is not None else nullcontext()
+        VerificationWorkspace(
+            agent_run.repo_path,
+            verify_command,
+            base_revision=base_revision,
+            initial_patch=initial_patch,
+        )
+        if verify_command is not None
+        else nullcontext()
     )
 
     with console.status("[bold green]Agent running...", spinner="dots"):
         try:
             with verification_workspace as workspace:
-                path = str(workspace.workspace) if workspace is not None else repo
+                path = str(workspace.workspace) if workspace is not None else agent_run.repo_path
                 verify = (
                     partial(workspace.verify, sandbox_config, sandbox)
                     if workspace is not None
                     else None
+                )
+                on_checkpoint = _make_checkpoint_callback(
+                    workspace, verify_command, save_checkpoint
                 )
                 llm = create_provider(provider_name, api_key)
                 try:
@@ -449,6 +504,7 @@ async def _run_agent(
                         event_bus=event_bus,
                         verify=verify,
                         approval_gate=_build_approval_gate(cfg.agent.approval_mode),
+                        on_checkpoint=on_checkpoint,
                     )
                 finally:
                     try:
@@ -661,6 +717,7 @@ def _display_run_summary(run: Any) -> None:
         "failed": "red",
         "timeout": "yellow",
         "cancelled": "dim",
+        "paused": "cyan",
     }.get(run.state.value, "white")
 
     table = Table(show_header=False, padding=(0, 2))
@@ -782,6 +839,120 @@ def status(run_id: str, output_format: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# resume
+# ---------------------------------------------------------------------------
+
+
+@main.command()
+@click.argument("run_id")
+@click.option(
+    "--max-iterations",
+    default=None,
+    type=int,
+    help="Override max ReAct loop iterations when resuming.",
+)
+@click.option(
+    "--verify-command",
+    default=None,
+    help="Override verification command when resuming.",
+)
+@click.option(
+    "--output-format",
+    default="text",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    help="Render a human summary or a machine-readable JSON result.",
+)
+@click.option(
+    "--report-file",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Write the machine-readable run result to a JSON file.",
+)
+def resume(
+    run_id: str,
+    max_iterations: int | None,
+    verify_command: str | None,
+    output_format: str,
+    report_file: Path | None,
+) -> None:
+    """Resume an interrupted or paused run from its local checkpoint."""
+    from agent_forge.agent.checkpoint import load_checkpoint
+    from agent_forge.agent.models import RunState
+    from agent_forge.orchestration.events import EventBus
+    from agent_forge.tools import create_default_registry
+
+    try:
+        agent_run, checkpoint = load_checkpoint(run_id)
+    except FileNotFoundError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+
+    if agent_run.state not in (RunState.PAUSED, RunState.RUNNING):
+        err_console.print(
+            f"[red]Run '{run_id}' is in state '{agent_run.state.value}' and cannot resume.[/red]"
+        )
+        sys.exit(1)
+
+    if max_iterations is not None:
+        agent_run.config.max_iterations = max_iterations
+
+    cfg = _config_for_resume(agent_run.config)
+    api_key = _require_provider_key(cfg, agent_run.config.provider)
+    effective_verify = verify_command if verify_command is not None else checkpoint.verify_command
+    diagnostics = sys.stderr if output_format == "json" else sys.stdout
+    with redirect_stdout(diagnostics):
+        try:
+            result = asyncio.run(
+                _execute_with_workspace(
+                    agent_run,
+                    cfg,
+                    agent_run.config.provider,
+                    api_key,
+                    create_default_registry(),
+                    EventBus(),
+                    verify_command=effective_verify,
+                    base_revision=checkpoint.base_revision,
+                    initial_patch=checkpoint.partial_patch,
+                )
+            )
+        finally:
+            diagnostics.flush()
+
+    _emit_run_output(result, output_format=output_format, report_file=report_file)
+    _exit_on_verification_failure(effective_verify, result.state.value)
+
+
+def _config_for_resume(agent_cfg: Any) -> ForgeConfig:
+    cfg = load_config()
+    cfg.agent.default_provider = agent_cfg.provider
+    cfg.agent.default_model = agent_cfg.model
+    cfg.agent.max_iterations = agent_cfg.max_iterations
+    cfg.agent.max_tokens_per_run = agent_cfg.max_tokens_per_run
+    cfg.agent.temperature = agent_cfg.temperature
+    cfg.agent.approval_mode = agent_cfg.approval_mode
+    return cfg
+
+
+def _require_provider_key(cfg: ForgeConfig, provider_name: str) -> str:
+    provider_cfg = cfg.providers.get(provider_name)
+    available_providers = tuple(name for name in provider_names() if name in cfg.providers)
+    if provider_cfg is None or provider_name not in available_providers:
+        err_console.print(
+            f"[red]Unknown provider:[/red] '{provider_name}'. "
+            f"Available: {', '.join(available_providers)}"
+        )
+        sys.exit(1)
+    api_key = os.environ.get(provider_cfg.api_key_env, "")
+    if not api_key:
+        err_console.print(
+            f"[red]Missing API key:[/red] set [bold]{provider_cfg.api_key_env}[/bold] "
+            f"environment variable for provider '{provider_name}'"
+        )
+        sys.exit(1)
+    return api_key
+
+
+# ---------------------------------------------------------------------------
 # list
 # ---------------------------------------------------------------------------
 
@@ -822,6 +993,7 @@ def list_runs() -> None:
             "failed": "red",
             "timeout": "yellow",
             "cancelled": "dim",
+            "paused": "cyan",
             "running": "blue",
             "pending": "white",
         }.get(state, "white")

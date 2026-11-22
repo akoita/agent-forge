@@ -14,15 +14,22 @@ if TYPE_CHECKING:
 
 # ── Valid transition map ──────────────────────────────────────────────
 # PENDING  → RUNNING
-# RUNNING  → COMPLETED | FAILED | TIMEOUT | CANCELLED
+# RUNNING  → PAUSED | COMPLETED | FAILED | TIMEOUT | CANCELLED
+# PAUSED   → RUNNING | CANCELLED | FAILED
 
 VALID_TRANSITIONS: dict[RunState, set[RunState]] = {
     RunState.PENDING: {RunState.RUNNING},
     RunState.RUNNING: {
+        RunState.PAUSED,
         RunState.COMPLETED,
         RunState.FAILED,
         RunState.TIMEOUT,
         RunState.CANCELLED,
+    },
+    RunState.PAUSED: {
+        RunState.RUNNING,
+        RunState.CANCELLED,
+        RunState.FAILED,
     },
     RunState.COMPLETED: set(),
     RunState.FAILED: set(),
