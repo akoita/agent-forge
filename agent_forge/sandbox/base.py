@@ -10,6 +10,34 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 
+_SENSITIVE_ENV_SUFFIXES: tuple[str, ...] = (
+    "_API_KEY",
+    "_SECRET",
+    "_SECRET_KEY",
+    "_ACCESS_KEY",
+    "_TOKEN",
+    "_PASSWORD",
+)
+_SENSITIVE_ENV_EXACT: frozenset[str] = frozenset(
+    {
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+    }
+)
+
+
+def sanitize_sandbox_env(env_vars: dict[str, str]) -> dict[str, str]:
+    """Strip host/cloud credential variables before injecting env into a sandbox."""
+    sanitized: dict[str, str] = {}
+    for key, value in env_vars.items():
+        upper = key.upper()
+        if upper in _SENSITIVE_ENV_EXACT or upper.endswith(_SENSITIVE_ENV_SUFFIXES):
+            continue
+        sanitized[key] = value
+    return sanitized
+
 
 class SandboxState(Enum):
     """Container lifecycle state."""

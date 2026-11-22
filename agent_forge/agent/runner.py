@@ -89,6 +89,8 @@ async def execute_agent_run(
     approval_gate: Any = None,
     on_checkpoint: Any = None,
     emit_lifecycle: bool = True,
+    cancellation_token: Any = None,
+    on_sandbox_started: Callable[[Sandbox], None] | None = None,
     post_run_hook: PostRunHook | None = None,
     react_loop_fn: Any = None,
 ) -> AgentRun:
@@ -109,9 +111,13 @@ async def execute_agent_run(
         loop_kwargs["approval_gate"] = approval_gate
     if on_checkpoint is not None:
         loop_kwargs["on_checkpoint"] = on_checkpoint
+    if cancellation_token is not None:
+        loop_kwargs["cancellation_token"] = cancellation_token
 
     try:
         await sandbox.start(repo_path=repo_path or agent_run.repo_path, config=sandbox_config)
+        if on_sandbox_started is not None:
+            on_sandbox_started(sandbox)
         result: AgentRun = await loop_fn(agent_run, llm, tools, sandbox, **loop_kwargs)
         if post_run_hook is not None:
             await post_run_hook(agent_run, llm, tools, sandbox)
@@ -137,6 +143,8 @@ async def run_agent_task(
     discover_extensions: bool = True,
     event_bus: EventBus | None = None,
     emit_lifecycle: bool = True,
+    cancellation_token: Any = None,
+    on_sandbox_started: Callable[[Sandbox], None] | None = None,
     post_run_hook: PostRunHook | None = None,
     tools_factory: Callable[[], ToolRegistry] | None = None,
     sandbox_factory: Callable[[SandboxConfig], Sandbox] | None = None,
@@ -191,6 +199,8 @@ async def run_agent_task(
         sandbox,
         event_bus=event_bus,
         emit_lifecycle=emit_lifecycle,
+        cancellation_token=cancellation_token,
+        on_sandbox_started=on_sandbox_started,
         post_run_hook=post_run_hook,
         react_loop_fn=react_loop_fn,
     )

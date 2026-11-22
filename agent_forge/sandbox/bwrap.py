@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import platform
 import shlex
@@ -12,7 +13,13 @@ from typing import Final
 
 from agent_forge.llm.errors import SandboxStartupError
 from agent_forge.observability import get_logger
-from agent_forge.sandbox.base import ExecResult, Sandbox, SandboxConfig, SandboxState
+from agent_forge.sandbox.base import (
+    ExecResult,
+    Sandbox,
+    SandboxConfig,
+    SandboxState,
+    sanitize_sandbox_env,
+)
 
 logger = get_logger("sandbox")
 
@@ -39,6 +46,7 @@ class BwrapSandbox(Sandbox):
         self._state = SandboxState.IDLE
         self._repo_path: str | None = None
         self._bwrap_path = shutil.which("bwrap")
+        self._active_processes: set[asyncio.subprocess.Process] = set()
 
     @property
     def state(self) -> SandboxState:
@@ -82,7 +90,9 @@ class BwrapSandbox(Sandbox):
             *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env={},
         )
+        self._active_processes.add(process)
 
         try:
             stdout_raw, stderr_raw = await asyncio.wait_for(
@@ -97,6 +107,13 @@ class BwrapSandbox(Sandbox):
                 stdout="",
                 stderr=f"Command timed out after {timeout_seconds}s",
             )
+        except asyncio.CancelledError:
+            process.kill()
+            with contextlib.suppress(BaseException):
+                await process.communicate()
+            raise
+        finally:
+            self._active_processes.discard(process)
 
         return ExecResult(
             exit_code=process.returncode or 0,
@@ -129,7 +146,14 @@ class BwrapSandbox(Sandbox):
             raise OSError(msg)
 
     async def stop(self) -> None:
-        """Reset the logical sandbox state."""
+        """Kill active child processes and reset the logical sandbox state."""
+        for process in list(self._active_processes):
+            if process.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+                with contextlib.suppress(BaseException):
+                    await process.communicate()
+        self._active_processes.clear()
         self._repo_path = None
         self._state = SandboxState.STOPPED
         logger.info("sandbox_stopped", backend="bwrap")
@@ -144,6 +168,7 @@ class BwrapSandbox(Sandbox):
 
         argv = [
             self._bwrap_path,
+            "--clearenv",
             "--die-with-parent",
             "--new-session",
             "--unshare-pid",
@@ -168,6 +193,8 @@ class BwrapSandbox(Sandbox):
                 "--bind",
                 self._repo_path,
                 self._config.workspace_path,
+                "--remount-ro",
+                "/",
                 "--chdir",
                 self._config.workspace_path,
             ]
@@ -182,7 +209,7 @@ class BwrapSandbox(Sandbox):
 
     def _build_env_vars(self) -> dict[str, str]:
         env_vars = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
-        env_vars.update(self._config.env_vars)
+        env_vars.update(sanitize_sandbox_env(self._config.env_vars))
         if self._config.network_enabled and self._config.writable_cache_mounts:
             env_vars.setdefault("HOME", "/cache/home")
             env_vars.setdefault("XDG_CACHE_HOME", "/cache/xdg")

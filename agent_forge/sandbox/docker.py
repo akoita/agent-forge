@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 from typing import TYPE_CHECKING, Any, cast
 
 import docker
@@ -15,7 +16,13 @@ from docker.errors import APIError, NotFound
 
 from agent_forge.llm.errors import SandboxStartupError
 from agent_forge.observability import get_logger
-from agent_forge.sandbox.base import ExecResult, Sandbox, SandboxConfig, SandboxState
+from agent_forge.sandbox.base import (
+    ExecResult,
+    Sandbox,
+    SandboxConfig,
+    SandboxState,
+    sanitize_sandbox_env,
+)
 
 if TYPE_CHECKING:
     from docker.models.containers import Container
@@ -57,6 +64,11 @@ class DockerSandbox(Sandbox):
         """Effective command timeout cap exposed to tools."""
         return self._config.timeout_seconds
 
+    @property
+    def container_id(self) -> str | None:
+        """Return the underlying Docker container ID while active, if any."""
+        return str(self._container.id) if self._container is not None else None
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -76,7 +88,7 @@ class DockerSandbox(Sandbox):
 
         security_opts: list[str] = ["no-new-privileges"]
         tmpfs = self._build_tmpfs(cfg)
-        environment = dict(cfg.env_vars)
+        environment = sanitize_sandbox_env(cfg.env_vars)
         if cfg.network_enabled and cfg.writable_cache_mounts:
             environment.setdefault("HOME", "/cache/home")
             environment.setdefault("XDG_CACHE_HOME", "/cache/xdg")
@@ -93,8 +105,10 @@ class DockerSandbox(Sandbox):
             "image": cfg.image,
             "command": "sleep infinity",
             "detach": True,
+            "init": True,
             "remove": True,
             "read_only": True,
+            "cap_drop": ["ALL"],
             "security_opt": security_opts,
             "pids_limit": 256,
             "tmpfs": tmpfs,
@@ -157,12 +171,18 @@ class DockerSandbox(Sandbox):
             return
 
         try:
-            await asyncio.to_thread(self._container.stop, timeout=5)
+            await asyncio.to_thread(self._container.stop, timeout=2)
         except NotFound:
             # Container already removed (--rm flag)
             pass
         except APIError as exc:
-            logger.warning("container_stop_error", error=str(exc))
+            logger.warning("container_stop_error_forcing_remove", error=str(exc))
+            try:
+                await asyncio.to_thread(self._container.remove, force=True)
+            except NotFound:
+                pass
+            except APIError as remove_exc:
+                logger.warning("container_force_remove_error", error=str(remove_exc))
         finally:
             self._container = None
             self._state = SandboxState.STOPPED
@@ -228,7 +248,7 @@ class DockerSandbox(Sandbox):
 
     async def read_file(self, path: str) -> str:
         """Read a file from the sandbox filesystem."""
-        result = await self.exec(f"cat {path}")
+        result = await self.exec(f"cat {shlex.quote(path)}")
         if result.exit_code != 0:
             msg = f"File not found in sandbox: {path}"
             raise FileNotFoundError(msg)
@@ -239,18 +259,17 @@ class DockerSandbox(Sandbox):
         # Create parent directories first
         parent = "/".join(path.rsplit("/", 1)[:-1])
         if parent:
-            await self.exec(f"mkdir -p {parent}")
+            mkdir_result = await self.exec(f"mkdir -p {shlex.quote(parent)}")
+            if mkdir_result.exit_code != 0:
+                msg = f"Failed to create parent directory: {parent} — {mkdir_result.stderr}"
+                raise OSError(msg)
 
-        # Use tee to write (handles special characters better than echo)
-        # Pass content via stdin using exec_run with stdin
+        # Pass content via quoted shell argument
         self._ensure_running()
         assert self._container is not None  # noqa: S101
 
-        # Use a heredoc-style approach for content with special chars
-        import shlex
-
         escaped = shlex.quote(content)
-        result = await self.exec(f"printf %s {escaped} > {path}")
+        result = await self.exec(f"printf %s {escaped} > {shlex.quote(path)}")
         if result.exit_code != 0:
             msg = f"Failed to write file: {path} — {result.stderr}"
             raise OSError(msg)

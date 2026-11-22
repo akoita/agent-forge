@@ -551,15 +551,19 @@ Sandbox capabilities are configured through `SandboxConfig` and CLI flags. Each 
 
 These are the **default** security constraints applied to every sandbox. They represent the most restrictive baseline and can be selectively relaxed through the permission model above.
 
-| Constraint            | Implementation                                       |
-| --------------------- | ---------------------------------------------------- |
-| **No host network**   | `--network none` by default                          |
-| **Read-only root FS** | `--read-only` with `/workspace` as a bind-mount (rw) |
-| **No privileged**     | Never use `--privileged`                             |
-| **Resource caps**     | `--cpus`, `--memory`, `--pids-limit 256`             |
-| **No new privileges** | `--security-opt no-new-privileges`                   |
-| **Tmpfs for temp**    | `--tmpfs /tmp:rw,noexec,nosuid,size=64m`             |
-| **Auto-remove**       | `--rm` flag, plus cleanup on agent run completion    |
+| Constraint            | Implementation                                           |
+| --------------------- | -------------------------------------------------------- |
+| **No host network**   | `--network none` by default (bwrap: `--unshare-net`)     |
+| **Read-only root FS** | `--read-only` with `/workspace` RW (bwrap: `--remount-ro /`) |
+| **No privileged**     | Never use `--privileged`; drop all Linux caps (`cap_drop=["ALL"]`) |
+| **No new privileges** | `--security-opt no-new-privileges`                       |
+| **Init process**      | `--init` so PID 1 handles `SIGTERM` and reaps children   |
+| **Resource caps**     | `--cpus`, `--memory`, `--pids-limit 256` (Docker only)   |
+| **Credential scrubbing** | `sanitize_sandbox_env()` on config env vars; bwrap uses `--clearenv` + `env={}` |
+| **Tmpfs for temp**    | `--tmpfs /tmp:rw,noexec,nosuid,size=64m`                 |
+| **Auto-remove**       | `--rm`, `stop()` force-remove fallback, plus cancel/run cleanup |
+
+See [ADR 005](adr/005-hosted-sandbox-backend.md) for hosted qualification results across Docker and Bubblewrap.
 
 > **Note:** `--privileged` and `no-new-privileges` are **hard constraints** that cannot be relaxed. All other constraints are configurable.
 
@@ -948,6 +952,9 @@ resource:
   `source`, optional `target`, and optional artifact delivery preferences.
 - `GET /v1/runs/{run_id}` returns a `RunStatus` document that includes the run
   lifecycle state, client/profile echo fields, and stable artifact references.
+- `POST /v1/runs/{run_id}/cancel` authenticates the owner client, transitions the
+  run to `cancelled`, stops any active sandbox, and removes materialized source
+  workspaces under `<service.root_dir>/sources/`.
 - `GET /v1/runs/{run_id}/events` returns a paginated `StreamEventPage` (`after_seq`,
   `limit`), or streams Server-Sent Events (`text/event-stream`) when `?follow=true`
   or `Accept: text/event-stream` is set, resuming from `after_seq` or `Last-Event-ID`.

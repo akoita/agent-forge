@@ -54,6 +54,12 @@ sandbox scheduling, and per-tenant billing) is explicitly out of scope for
 `agent-forge` core and belongs in an external control plane such as
 `agent-forge-cloud`.
 
+Every per-run sandbox is hardened by default (`cap_drop=["ALL"]`, `--init`,
+`no-new-privileges`, read-only rootfs, `/tmp` `noexec`, `--network none`, CPU/RAM/PID
+cgroup limits, and `sanitize_sandbox_env` credential stripping). Bubblewrap adds
+`--clearenv` and `--remount-ro /` for local runs, but lacks cgroup limits and is
+disqualified for shared hosted use; see [ADR 005](adr/005-hosted-sandbox-backend.md).
+
 ### Installation Extras
 
 The base package (`pip install agent-forge`) installs no web-server or
@@ -437,6 +443,22 @@ curl -N "http://127.0.0.1:8000/v1/runs/$RUN_ID/events?follow=true" \
 SSE frames carry `id: <seq>`, `event: <type>`, and `data: <StreamEvent JSON>`
 (`schema_version: "run-event-v1"`). Passing `Last-Event-ID` or `?after_seq=N`
 replays missed events without duplicates or gaps.
+
+### 7. Cancel A Run
+
+To abort a queued or running job early, call `POST /v1/runs/{run_id}/cancel` or
+`HostedServiceClient.cancel_run(run_id)`:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/v1/runs/$RUN_ID/cancel" \
+  -H "X-Agent-Forge-API-Key: $POA_SERVICE_API_KEY"
+```
+
+The endpoint enforces API-key authentication (`401`) and client ownership
+(`403` for another client's run, `404` for unknown `run_id`), persists
+`status="cancelled"` atomically in SQLite, trips the run's `CancellationToken`,
+stops any active sandbox container, and removes ephemeral materialized sources
+under `<service.root_dir>/sources/`.
 
 ## Operations And Debugging
 

@@ -411,6 +411,48 @@ class HostedRunStore:
             )
             return cursor.rowcount == 1
 
+    def cancel_run(
+        self,
+        run_id: str,
+        *,
+        completed_at: datetime,
+        error_json: str | None = None,
+    ) -> tuple[PersistedRun | None, bool]:
+        """Atomically mark a non-terminal run cancelled and release any active lease."""
+        completed_str = _format_dt(completed_at)
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM hosted_runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return None, False
+
+            existing = _row_to_run(row)
+            if existing.status in TERMINAL_RUN_STATUSES:
+                return existing, False
+
+            conn.execute(
+                """
+                UPDATE hosted_runs
+                SET status = 'cancelled',
+                    completed_at = ?,
+                    error_json = COALESCE(?, error_json),
+                    lease_owner = NULL,
+                    lease_token = NULL,
+                    lease_expires_at = NULL
+                WHERE run_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')
+                """,
+                (completed_str, error_json, run_id),
+            )
+            updated = conn.execute(
+                "SELECT * FROM hosted_runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if updated is None:
+                return None, False
+            return _row_to_run(updated), True
+
     def list_recoverable(
         self,
         *,

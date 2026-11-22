@@ -194,7 +194,15 @@ class TestReportRecoveryIntegration:
 
         call_count = 0
 
-        async def fake_react_loop(run, llm, tools, sandbox, *, event_bus=None):
+        async def fake_react_loop(
+            run,
+            llm,
+            tools,
+            sandbox,
+            *,
+            event_bus=None,
+            cancellation_token=None,
+        ):
             nonlocal call_count
             assert isinstance(llm, AnthropicProvider)
             call_count += 1
@@ -255,7 +263,15 @@ class TestReportRecoveryIntegration:
         )
         service._records[task.id] = record
 
-        async def fake_react_loop(run, llm, tools, sandbox, *, event_bus=None):
+        async def fake_react_loop(
+            run,
+            llm,
+            tools,
+            sandbox,
+            *,
+            event_bus=None,
+            cancellation_token=None,
+        ):
             # Never writes the report
             return run
 
@@ -313,7 +329,15 @@ class TestReportRecoveryIntegration:
 
         call_count = 0
 
-        async def fake_react_loop(run, llm, tools, sandbox, *, event_bus=None):
+        async def fake_react_loop(
+            run,
+            llm,
+            tools,
+            sandbox,
+            *,
+            event_bus=None,
+            cancellation_token=None,
+        ):
             nonlocal call_count
             call_count += 1
             # Primary run writes the report

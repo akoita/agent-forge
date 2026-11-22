@@ -78,6 +78,14 @@ class BaseHostedServiceClient(Generic[ReportT]):
         )
         return self._parse_response(response, RunStatus)
 
+    async def cancel_run(self, run_id: str) -> RunStatus:
+        """Cancel a queued or running hosted run."""
+        response = await self._client.post(
+            f"/v1/runs/{run_id}/cancel",
+            headers=self._headers(),
+        )
+        return self._parse_response(response, RunStatus)
+
     async def get_report(self, run_id: str) -> ReportT:
         """Fetch the machine-readable report for a completed run."""
         response = await self._client.get(
@@ -101,7 +109,7 @@ class BaseHostedServiceClient(Generic[ReportT]):
             status = await self.get_status(run_id)
             if status.status == "completed":
                 return await self.get_report(run_id)
-            if status.status == "failed":
+            if status.status in {"failed", "cancelled"}:
                 error = status.error
                 raise HostedServiceClientError(
                     status_code=409,
@@ -109,7 +117,7 @@ class BaseHostedServiceClient(Generic[ReportT]):
                     message=(
                         error.message
                         if error is not None
-                        else "hosted service run failed without an error payload"
+                        else f"hosted service run {status.status} without an error payload"
                     ),
                 )
             await asyncio.sleep(poll_interval_seconds)
