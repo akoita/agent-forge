@@ -72,15 +72,18 @@ def save_run(run: AgentRun, *, base_dir: Path | str | None = None) -> Path:
     # ── events.jsonl ──────────────────────────────────────────────
     with (run_dir / "events.jsonl").open("w") as f:
         for inv in run.tool_invocations:
+            result_data: dict[str, Any] = {
+                "output": inv.result.output,
+                "error": inv.result.error,
+                "exit_code": inv.result.exit_code,
+                "execution_time_ms": inv.result.execution_time_ms,
+            }
+            if inv.result.metadata:
+                result_data["metadata"] = inv.result.metadata
             line_ev: dict[str, Any] = {
                 "tool_name": inv.tool_name,
                 "arguments": inv.arguments,
-                "result": {
-                    "output": inv.result.output,
-                    "error": inv.result.error,
-                    "exit_code": inv.result.exit_code,
-                    "execution_time_ms": inv.result.execution_time_ms,
-                },
+                "result": result_data,
                 "iteration": inv.iteration,
                 "timestamp": inv.timestamp.isoformat(),
                 "duration_ms": inv.duration_ms,
@@ -150,6 +153,7 @@ def load_run(run_id: str, *, base_dir: Path | str | None = None) -> AgentRun:
                         error=data["result"].get("error"),
                         exit_code=data["result"]["exit_code"],
                         execution_time_ms=data["result"].get("execution_time_ms", 0),
+                        metadata=data["result"].get("metadata", {}),
                     ),
                     iteration=data["iteration"],
                     timestamp=datetime.fromisoformat(data["timestamp"]),

@@ -49,6 +49,7 @@ graph TD
         read_file
         write_file
         edit_file
+        apply_patch
         list_directory
         run_shell
         search_codebase
@@ -170,6 +171,7 @@ Built-in tools, each implementing the `Tool` ABC:
 | `read_file`       | Read file contents from sandbox |
 | `write_file`      | Create/overwrite files          |
 | `edit_file`       | Surgical line-range edits       |
+| `apply_patch`     | Atomic multi-file patch transactions |
 | `list_directory`  | List files and directories      |
 | `run_shell`       | Execute shell commands          |
 | `search_codebase` | Grep/ripgrep code search        |

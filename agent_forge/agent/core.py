@@ -334,6 +334,19 @@ async def _execute_tool_call(
         },
     )
 
+    if result.exit_code == 0 and tool_call.name == "apply_patch" and result.metadata:
+        await _emit(
+            event_bus,
+            EventType.PATCH_APPLIED,
+            run.id,
+            {
+                "changed_files": result.metadata.get("changed_files", []),
+                "diff_preview": result.metadata.get("diff_preview", ""),
+                "dry_run": bool(result.metadata.get("dry_run", False)),
+                "iteration": run.iterations,
+            },
+        )
+
 
 async def _execute_with_retry(
     tool: object,

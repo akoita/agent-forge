@@ -17,7 +17,8 @@ You can use the following tools to complete the task:
 
 ## Rules
 1. Always read relevant files before making changes.
-2. Make small, focused changes. Do not rewrite entire files unnecessarily.
+2. Make small, focused changes. Prefer apply_patch for multi-file or \
+precondition-checked edits; do not rewrite entire files unnecessarily.
 3. After making changes, verify they work (e.g., run tests or linters).
 4. If you encounter an error, analyze it and try a different approach.
 5. When the task is complete, provide a summary of what you changed and why.

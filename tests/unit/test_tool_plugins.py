@@ -127,7 +127,7 @@ class TestToolPluginRegistration:
         )
 
         assert registry.get("example_plugin").name == "example_plugin"
-        assert len(registry) == 11
+        assert len(registry) == len(create_default_registry(load_plugins=False)) + 1
 
     def test_duplicate_plugin_name_is_rejected(self) -> None:
         class DuplicateReadFileTool(ExamplePluginTool):

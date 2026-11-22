@@ -31,6 +31,7 @@ class EventType(Enum):
     ITERATION_COMPLETED = "iteration.completed"
     TOOL_CALLED = "tool.called"
     TOOL_COMPLETED = "tool.completed"
+    PATCH_APPLIED = "patch.applied"
     TOKEN_USAGE = "token.usage"  # noqa: S105 — not a password
 
 

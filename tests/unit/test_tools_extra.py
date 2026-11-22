@@ -342,6 +342,7 @@ class TestDefaultRegistry:
             "read_file",
             "write_file",
             "edit_file",
+            "apply_patch",
             "list_directory",
             "run_shell",
             "search_codebase",
@@ -349,4 +350,4 @@ class TestDefaultRegistry:
             "git_commit",
             "git_create_branch",
         }
-        assert len(registry) == 10
+        assert len(registry) == 11
