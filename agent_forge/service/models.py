@@ -91,6 +91,7 @@ class RunRequest(BaseModel):
     source: SourceRef
     target: TargetRef | None = None
     artifacts: ArtifactPolicy | None = None
+    idempotency_key: str | None = None
 
 
 class RunArtifactRef(BaseModel):

@@ -999,6 +999,8 @@ Hosted deployments read a dedicated `service` config section:
 - `service.clients_path`
 - `service.allow_local_path_sources`
 - `service.max_source_size_bytes`
+- `service.lease_ttl_seconds` (`AGENT_FORGE_SERVICE_LEASE_TTL_SECONDS`)
+- `service.recovery_interval_seconds` (`AGENT_FORGE_SERVICE_RECOVERY_INTERVAL_SECONDS`)
 
 When `service.auth_enabled` is enabled, the hosted API requires an API key on
 all `/v1/runs` endpoints. Client identities and execution policy limits are
@@ -1030,7 +1032,10 @@ extras (`agent-forge[service]` and `agent-forge[gcs]`) so `pip install agent-for
 pulls no web-server or cloud-storage packages. Both the CLI and hosted service
 delegate run execution through the shared `agent_forge.agent.runner` runner.
 Docker-socket deployments (`docker-compose.yml`) assume a single-tenant host
-boundary; multi-tenant isolation is out of scope for core.
+boundary; multi-tenant isolation is out of scope for core. Hosted run ownership,
+idempotency keys (`Idempotency-Key` / `RunRequest.idempotency_key`), status,
+fenced leases, and authoritative reports persist in `<service.root_dir>/runs.db`
+so failed dispatch, duplicate delivery, expired leases, and restarts recover cleanly.
 
 ### 5.1 Configuration File Schema
 
@@ -1072,6 +1077,8 @@ api_key_header = "X-Agent-Forge-API-Key"
 clients_path = "~/.agent-forge/service/clients.toml"
 allow_local_path_sources = false
 max_source_size_bytes = 50_000_000
+lease_ttl_seconds = 300.0
+recovery_interval_seconds = 5.0
 
 [providers.gemini]
 api_key_env = "GEMINI_API_KEY"

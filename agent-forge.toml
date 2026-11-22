@@ -37,6 +37,8 @@ api_key_header = "X-Agent-Forge-API-Key"
 clients_path = "~/.agent-forge/service/clients.toml"
 allow_local_path_sources = false
 max_source_size_bytes = 50_000_000
+lease_ttl_seconds = 300.0
+recovery_interval_seconds = 5.0
 
 [providers.gemini]
 api_key_env = "GEMINI_API_KEY"
