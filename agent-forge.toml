@@ -49,3 +49,29 @@ default_model = "gpt-4o"
 [providers.anthropic]
 api_key_env = "ANTHROPIC_API_KEY"
 default_model = "claude-sonnet-4-20250514"
+
+[model_profiles.gemini-flash-lite]
+provider = "gemini"
+model = "gemini-3.1-flash-lite-preview"
+
+[model_profiles.gemini-25-flash]
+provider = "gemini"
+model = "gemini-2.5-flash"
+
+[model_profiles.gemini-3-flash]
+provider = "gemini"
+model = "gemini-3-flash-preview"
+
+[model_profiles.openai-gpt54]
+provider = "openai"
+model = "gpt-5.4"
+
+[model_profiles.anthropic-sonnet]
+provider = "anthropic"
+model = "claude-sonnet-4-6"
+
+[model_profiles.meta-llama]
+provider = "openai"
+model = "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
+base_url = "https://api.together.xyz/v1"
+api_key_env = "TOGETHER_API_KEY"

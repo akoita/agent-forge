@@ -177,7 +177,11 @@ identifier for an API the selected adapter supports.
 ```toml
 [model_profiles.candidate]
 provider = "openai"
-model = "gpt-4o"
+model = "gpt-5.4"
+# Optional overrides for OpenAI-compatible or custom endpoints:
+# base_url = "https://api.together.xyz/v1"
+# api_key_env = "TOGETHER_API_KEY"
+# temperature = 0.0
 ```
 
 Run these commands from the project directory.
@@ -208,8 +212,22 @@ and records the base revision and check exit code. A failed check gives the
 qualification command a nonzero exit code.
 
 Pass `--model-profile candidate` to `agent-forge run` to select the alias's provider
-and model together. The alias takes precedence over the other provider and model
+and model together (along with optional `base_url`, `api_key_env`, and
+`temperature` overrides). The alias takes precedence over the other provider and model
 selections for that invocation. Other run settings still use normal precedence.
+
+Run the pinned multi-profile benchmark to compare accessible models on verified
+fixes per attempt, median latency, and total cost including failures:
+
+```sh
+agent-forge models benchmark \
+  --sandbox-backend bwrap \
+  --output-json docs/eval/baseline-v0.4.0.json \
+  --output-md docs/eval/baseline-v0.4.0.md
+```
+
+See the [latest measured baseline](eval/baseline-v0.4.0.md) for current results
+and settings.
 
 ### JSON output
 

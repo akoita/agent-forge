@@ -95,20 +95,19 @@ def _validate_fix_options(
 def _grade_model_fix(
     config: ForgeConfig, name: str, repo: Path, task: str, command: str, live_result: object
 ) -> dict[str, object]:
-    from agent_forge.llm.qualification import resolve_model_profile
+    from agent_forge.llm.qualification import resolve_model_profile, resolve_profile_api_key_env
 
     if not isinstance(live_result, dict) or live_result["status"] != "passed":
         return {"status": "not_run", "reason": "Live tool exchange did not pass."}
 
     profile = resolve_model_profile(config, name)
-    key_env = config.providers[profile.provider].api_key_env
+    key_env = resolve_profile_api_key_env(config, profile)
     api_key = os.environ.get(key_env)
     if not api_key:
         return {"status": "failed", "reason": f"Missing credential variable {key_env}."}
 
     run_config = config.model_copy(deep=True)
-    run_config.agent.default_provider = profile.provider
-    run_config.agent.default_model = profile.model
+    _apply_model_profile(run_config, name)
     run_config.agent.max_iterations = min(run_config.agent.max_iterations, 6)
     run_config.agent.max_tokens_per_run = min(run_config.agent.max_tokens_per_run, 24_000)
     run_config.sandbox.network_enabled = False
@@ -142,6 +141,79 @@ def _grade_model_fix(
             else None
         ),
     }
+
+
+@models.command("benchmark")
+@click.option(
+    "--profile",
+    "profiles",
+    multiple=True,
+    help="Model profile to benchmark (defaults to all configured profiles).",
+)
+@click.option(
+    "--task",
+    "tasks",
+    multiple=True,
+    help="Benchmark task ID to run (defaults to all built-in tasks).",
+)
+@click.option("--attempts", default=1, type=int, help="Attempts per task for each profile.")
+@click.option("--sandbox-backend", default=None, help="Override sandbox backend (docker, bwrap).")
+@click.option("--max-iterations", default=8, type=int, help="Max iterations per task attempt.")
+@click.option("--max-tokens", default=40_000, type=int, help="Max token budget per attempt.")
+@click.option(
+    "--output-json",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Write the JSON benchmark report to this file.",
+)
+@click.option(
+    "--output-md",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Write a Markdown summary report to this file.",
+)
+def benchmark_models(
+    profiles: tuple[str, ...],
+    tasks: tuple[str, ...],
+    attempts: int,
+    sandbox_backend: str | None,
+    max_iterations: int,
+    max_tokens: int,
+    output_json: Path | None,
+    output_md: Path | None,
+) -> None:
+    """Benchmark configured model profiles on pinned coding tasks."""
+    from agent_forge.eval import render_markdown_report, run_benchmark
+
+    config = load_config()
+    diagnostics = sys.stderr
+    with redirect_stdout(diagnostics):
+        try:
+            report = asyncio.run(
+                run_benchmark(
+                    config,
+                    profile_names=list(profiles) if profiles else None,
+                    task_ids=list(tasks) if tasks else None,
+                    attempts=attempts,
+                    sandbox_backend=sandbox_backend,
+                    max_iterations=max_iterations,
+                    max_tokens_per_run=max_tokens,
+                )
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        finally:
+            diagnostics.flush()
+
+    json_payload = report.model_dump_json(indent=2) + "\n"
+    if output_json is not None:
+        output_json.parent.mkdir(parents=True, exist_ok=True)
+        output_json.write_text(json_payload, encoding="utf-8")
+    if output_md is not None:
+        output_md.parent.mkdir(parents=True, exist_ok=True)
+        output_md.write_text(render_markdown_report(report), encoding="utf-8")
+
+    click.echo(json_payload.rstrip("\n"))
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +438,11 @@ def run(
 
 def _apply_model_profile(config: Any, name: str | None) -> None:
     if name is not None:
-        from agent_forge.llm.qualification import resolve_model_profile
+        from agent_forge.llm.qualification import (
+            resolve_model_profile,
+            resolve_profile_api_key_env,
+            resolve_profile_base_url,
+        )
 
         try:
             selected = resolve_model_profile(config, name)
@@ -374,6 +450,23 @@ def _apply_model_profile(config: Any, name: str | None) -> None:
             raise click.ClickException(str(exc)) from exc
         config.agent.default_provider = selected.provider
         config.agent.default_model = selected.model
+        if selected.temperature is not None:
+            config.agent.temperature = selected.temperature
+        provider_cfg = config.providers.get(selected.provider)
+        if provider_cfg is not None:
+            provider_cfg.api_key_env = resolve_profile_api_key_env(config, selected)
+            resolved_base_url = resolve_profile_base_url(config, selected)
+            if resolved_base_url:
+                provider_cfg.base_url = resolved_base_url
+
+
+def _create_configured_provider(cfg: Any, provider_name: str, api_key: str) -> Any:
+    providers = getattr(cfg, "providers", None)
+    provider_cfg = providers.get(provider_name) if isinstance(providers, dict) else None
+    raw_base_url = getattr(provider_cfg, "base_url", None) if provider_cfg is not None else None
+    if isinstance(raw_base_url, str) and raw_base_url:
+        return create_provider(provider_name, api_key, base_url=raw_base_url)
+    return create_provider(provider_name, api_key)
 
 
 def _validate_verification_mode(command: str | None, queue_backend: str | None) -> None:
@@ -507,7 +600,7 @@ async def _execute_with_workspace(
                 on_checkpoint = _make_checkpoint_callback(
                     workspace, verify_command, save_checkpoint
                 )
-                llm = create_provider(provider_name, api_key)
+                llm = _create_configured_provider(cfg, provider_name, api_key)
                 await sink.attach(event_bus)
                 try:
                     await sandbox.start(repo_path=path, config=sandbox_config)
@@ -647,7 +740,7 @@ def _make_task_runner(
             id=task.id,
         )
         sandbox = create_sandbox(sandbox_config)
-        llm = create_provider(provider_name, api_key)
+        llm = _create_configured_provider(_cfg, provider_name, api_key)
 
         try:
             await sandbox.start(repo_path=task.repo_path, config=sandbox_config)
