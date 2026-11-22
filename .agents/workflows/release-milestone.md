@@ -39,7 +39,7 @@ git tag -a v<X.Y.Z> -m "v<X.Y.Z> — <Milestone title>"
 git push origin v<X.Y.Z>
 ```
 
-`.github/workflows/release.yml` verifies tag parity, builds and smoke-tests the wheel, generates `SHA256SUMS.txt`, and publishes the GitHub release with artifacts attached.
+`.github/workflows/release.yml` runs the full Python 3.11–3.13 unit/eval matrix, lint/quality/boundary checks, and integration tests before building, smoke-testing, checksum-signing, and publishing the release with artifacts attached. Trigger `Release` via `workflow_dispatch` on `main` beforehand for a validation-only dry run without publishing.
 
 ## 5. Curate release notes
 
