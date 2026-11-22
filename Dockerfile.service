@@ -9,7 +9,7 @@ COPY pyproject.toml README.md LICENSE ./
 COPY agent-forge.toml ./agent-forge.toml
 COPY agent_forge ./agent_forge
 
-RUN pip install --no-cache-dir ".[redis]"
+RUN pip install --no-cache-dir ".[service,gcs,redis]"
 
 EXPOSE 8000
 

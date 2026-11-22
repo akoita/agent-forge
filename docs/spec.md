@@ -1025,6 +1025,13 @@ such as `ProofOfAuditHostedClient` and `build_proof_of_audit_request` live in
 contract, poll `/v1/runs/{run_id}`, retrieve the report artifact, and preserve
 machine-readable failure codes for regressions.
 
+FastAPI/Uvicorn and Google Cloud Storage dependencies are packaged as optional
+extras (`agent-forge[service]` and `agent-forge[gcs]`) so `pip install agent-forge`
+pulls no web-server or cloud-storage packages. Both the CLI and hosted service
+delegate run execution through the shared `agent_forge.agent.runner` runner.
+Docker-socket deployments (`docker-compose.yml`) assume a single-tenant host
+boundary; multi-tenant isolation is out of scope for core.
+
 ### 5.1 Configuration File Schema
 
 Agent Forge uses a TOML configuration file (`agent-forge.toml`):

@@ -42,6 +42,34 @@ Trust boundaries to keep explicit:
 - LLM provider credentials stay in the host environment, never inside client payloads.
 - Audit logs and run artifacts must live on persistent storage outside ephemeral workers.
 
+### Trust Model & Single-Tenant Boundary
+
+`docker-compose.yml` mounts `/var/run/docker.sock` into the service container so
+it can launch per-run sandbox containers. Because access to the Docker daemon
+socket grants root-equivalent control over the host, that topology is
+**single-tenant and local-development only**.
+
+Multi-tenant isolation (untrusted tenants sharing a control plane, remote
+sandbox scheduling, and per-tenant billing) is explicitly out of scope for
+`agent-forge` core and belongs in an external control plane such as
+`agent-forge-cloud`.
+
+### Installation Extras
+
+The base package (`pip install agent-forge`) installs no web-server or
+cloud-storage dependencies. Install optional extras only when needed:
+
+```bash
+# Hosted FastAPI/Uvicorn server (`agent-forge serve`)
+pip install "agent-forge[service]"
+
+# Google Cloud Storage (`gs://` source URIs)
+pip install "agent-forge[gcs]"
+
+# Redis queue backend
+pip install "agent-forge[redis]"
+```
+
 ## Deployment Topology
 
 The current hosted deployment model assumes:

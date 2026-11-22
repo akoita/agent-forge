@@ -19,10 +19,10 @@ from rich.table import Table
 
 from agent_forge.config import USER_CONFIG_DIR, ForgeConfig, load_config
 from agent_forge.llm.factory import create_provider, provider_names
-from agent_forge.sandbox.base import SandboxConfig
 
 if TYPE_CHECKING:
     from agent_forge.orchestration.event_stream import RunEventStream, StreamEvent
+    from agent_forge.sandbox.base import SandboxConfig
 
 console = Console()
 err_console = Console(stderr=True)
@@ -496,32 +496,22 @@ async def _run_agent(
     direct mode — this enables observability subscribers.
     """
     from agent_forge.agent.models import AgentRun
-    from agent_forge.agent.prompts import build_system_prompt
+    from agent_forge.agent.runner import render_task_system_prompt
     from agent_forge.orchestration.events import EventBus
     from agent_forge.tools import create_default_registry
 
     sandbox_config = _build_sandbox_config(cfg)
     agent_config = _build_agent_config(cfg, provider_name, profile=profile)
-
-    # Resolve prompt_scope from profile
     prompt_scope = profile.prompt_scope if profile else None
-
-    # Discover extension prompt fragments
-    from agent_forge.extensions.discovery import discover_extension_prompt_fragments
-
-    extension_prompts = discover_extension_prompt_fragments() or None
 
     event_bus = EventBus()
     tools = create_default_registry()
-    agent_config.system_prompt = build_system_prompt(
+    agent_config.system_prompt = render_task_system_prompt(
         task,
-        tools.list_definitions(),
-        sandbox_backend=sandbox_config.backend,
-        sandbox_image=sandbox_config.image,
-        network_enabled=sandbox_config.network_enabled,
-        command_timeout_seconds=sandbox_config.timeout_seconds,
+        tools,
+        sandbox_config,
         prompt_scope=prompt_scope,
-        extension_prompts=extension_prompts,
+        discover_extensions=True,
     )
     agent_run = AgentRun(task=task, repo_path=repo, config=agent_config)
     return await _execute_with_workspace(
@@ -569,7 +559,7 @@ async def _execute_with_workspace(
     from functools import partial
 
     from agent_forge.agent.checkpoint import save_checkpoint
-    from agent_forge.agent.core import react_loop
+    from agent_forge.agent.runner import execute_agent_run
     from agent_forge.agent.verification import VerificationWorkspace
     from agent_forge.orchestration.event_stream import JournalEventSink
     from agent_forge.sandbox.factory import create_sandbox
@@ -603,12 +593,13 @@ async def _execute_with_workspace(
                 llm = _create_configured_provider(cfg, provider_name, api_key)
                 await sink.attach(event_bus)
                 try:
-                    await sandbox.start(repo_path=path, config=sandbox_config)
-                    return await react_loop(
+                    return await execute_agent_run(
                         agent_run,
+                        sandbox_config,
                         llm,
                         tools,
                         sandbox,
+                        repo_path=path,
                         event_bus=event_bus,
                         verify=verify,
                         approval_gate=_build_approval_gate(cfg.agent.approval_mode),
@@ -616,10 +607,6 @@ async def _execute_with_workspace(
                     )
                 finally:
                     await sink.detach(event_bus)
-                    try:
-                        await sandbox.stop()
-                    finally:
-                        await llm.close()
         except Exception as exc:  # noqa: BLE001 — top-level catch-all for CLI
             err_console.print(f"[red]Agent failed:[/red] {exc}")
             sys.exit(1)
@@ -712,64 +699,35 @@ def _make_task_runner(
 ) -> Any:
     """Build an async callable that the Worker invokes for each task.
 
-    Each invocation creates its own LLM client, sandbox, and tool
-    registry — resources are scoped to the single run.
+    Delegates composition and execution to :func:`agent_forge.agent.runner.run_agent_task`
+    so CLI queued mode shares one runner code path with the hosted service.
     """
-    from agent_forge.agent.core import react_loop
-    from agent_forge.agent.models import AgentRun
-    from agent_forge.agent.prompts import build_system_prompt
-    from agent_forge.sandbox.factory import create_sandbox
-    from agent_forge.tools import create_default_registry
 
-    sandbox_config = _build_sandbox_config(_cfg)
+    async def _runner(task: Any) -> Any:
+        from agent_forge.agent.runner import run_agent_task
 
-    async def _runner(task: Any) -> AgentRun:
-        tools = create_default_registry()
-        task.config.system_prompt = build_system_prompt(
+        return await run_agent_task(
             task.task_description,
-            tools.list_definitions(),
-            sandbox_backend=sandbox_config.backend,
-            sandbox_image=sandbox_config.image,
-            network_enabled=sandbox_config.network_enabled,
-            command_timeout_seconds=sandbox_config.timeout_seconds,
+            task.repo_path,
+            _cfg,
+            task.config,
+            provider_name,
+            api_key,
+            run_id=task.id,
+            discover_extensions=False,
+            event_bus=event_bus,
+            emit_lifecycle=False,
+            provider_factory=lambda name, key: _create_configured_provider(_cfg, name, key),
         )
-        agent_run = AgentRun(
-            task=task.task_description,
-            repo_path=task.repo_path,
-            config=task.config,
-            id=task.id,
-        )
-        sandbox = create_sandbox(sandbox_config)
-        llm = _create_configured_provider(_cfg, provider_name, api_key)
-
-        try:
-            await sandbox.start(repo_path=task.repo_path, config=sandbox_config)
-            return await react_loop(
-                agent_run,
-                llm,
-                tools,
-                sandbox,
-                event_bus=event_bus,
-                emit_lifecycle=False,
-            )
-        finally:
-            await sandbox.stop()
-            await llm.close()
 
     return _runner
 
 
 def _build_sandbox_config(cfg: Any) -> SandboxConfig:
     """Convert resolved app config into a sandbox runtime config."""
-    return SandboxConfig(
-        backend=cfg.sandbox.backend,
-        image=cfg.sandbox.image,
-        cpu_limit=cfg.sandbox.cpu_limit,
-        memory_limit=cfg.sandbox.memory_limit,
-        timeout_seconds=cfg.sandbox.timeout_seconds,
-        network_enabled=cfg.sandbox.network_enabled,
-        writable_cache_mounts=cfg.sandbox.writable_cache_mounts,
-    )
+    from agent_forge.agent.runner import build_sandbox_config
+
+    return build_sandbox_config(cfg)
 
 
 def _build_approval_gate(mode: object) -> Any:
@@ -1407,7 +1365,16 @@ def serve(
     instance_id: str | None,
 ) -> None:
     """Run the hosted FastAPI service."""
-    import uvicorn
+    try:
+        import uvicorn
+
+        from agent_forge.service import create_app
+    except ImportError:
+        err_console.print(
+            "[red]Hosted service dependencies missing.[/red] "
+            "Install with: pip install 'agent-forge\\[service]'"
+        )
+        sys.exit(1)
 
     cli_overrides: dict[str, Any] = {}
     if host is not None:
@@ -1419,14 +1386,19 @@ def serve(
 
     cfg = load_config(cli_overrides=cli_overrides or None)
 
-    from agent_forge.service import create_app
+    try:
+        app = create_app(
+            service_root=Path(cfg.service.root_dir).expanduser(),
+            config=cfg,
+            instance_id=instance_id,
+            persona=persona,
+        )
+    except (ImportError, RuntimeError) as exc:
+        from rich.markup import escape
 
-    app = create_app(
-        service_root=Path(cfg.service.root_dir).expanduser(),
-        config=cfg,
-        instance_id=instance_id,
-        persona=persona,
-    )
+        err_console.print(f"[red]Hosted service unavailable:[/red] {escape(str(exc))}")
+        sys.exit(1)
+
     uvicorn.run(app, host=cfg.service.host, port=cfg.service.port)
 
 
