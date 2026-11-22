@@ -52,3 +52,6 @@ Thumbs.db
 
 # Distribution
 *.tar.gz
+
+# Agent worktrees
+.claude/worktrees/

@@ -19,5 +19,19 @@
   },
   "enabledPlugins": {
     "utilities@agent-toolkit": true
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel 2>/dev/null || echo .)/scripts/cleanup_git.py\" --hook-post-tool-use",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   }
 }

@@ -104,7 +104,8 @@ developer approval**.
   *standing approval* (pre-authorizing merges for this task or session) counts —
   note that standing approval in the PR before merging.
 - **Absent standing approval, request review and stop.** Do not merge
-  autonomously. Prefer squash merge for clean history.
+  autonomously. Prefer squash merge with branch deletion:
+  `gh pr merge <N> --squash --delete-branch`.
 
 ## 11. Verify main branch CI (only if the merge happened)
 
@@ -114,13 +115,15 @@ developer approval**.
   - Fix the issue, push, create PR, merge
   - Repeat until main CI is green
 
-## 12. Clean up branches (only if the merge happened)
+## 12. Clean up branches and worktrees (only if the merge happened)
 
 - Skip this step entirely while the PR is still open awaiting review/approval
-- Delete the feature branch remotely: `git push origin --delete <branch-name>`
-- Delete the feature branch locally: `git branch -d <branch-name>`
-- Delete any fix branches (remote + local) the same way
-- **NEVER delete `main`**
+- If the task used a linked git worktree, switch back to the primary checkout first, then remove and prune it (`git worktree remove <path>` and `git worktree prune`) before deleting the branch
+- Confirm the remote branch was deleted by `--delete-branch` / `delete_branch_on_merge` (if still present on GitHub, run `git push origin --delete <branch-name>`)
+- Delete the feature branch locally (`git branch -d <branch-name>`, or `git branch -D <branch-name>` for squash-merged branches once `gh pr view <N> --json state` confirms `MERGED`)
+- Delete any associated fix branches (remote + local) the same way
+- Prune stale remote-tracking refs (`git fetch --prune origin`) and sweep leftovers: `python3 scripts/cleanup_git.py --apply`
+- **NEVER delete `main`** and **NEVER remove dirty worktrees or branches with open PRs**
 
 ## 13. Align local main (only if the merge happened)
 
@@ -128,7 +131,7 @@ developer approval**.
 
 - Switch to main: `git checkout main`
   // turbo
-- Pull latest: `git pull origin main`
+- Pull latest: `git pull --ff-only origin main`
   // turbo
 - Verify alignment: `git log --oneline -5`
 
