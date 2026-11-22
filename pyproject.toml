@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-forge"
-version = "0.1.0"
+version = "0.3.0"
 description = "A sandboxed AI coding agent runtime using the ReAct pattern"
 readme = "README.md"
 license = "MIT"
@@ -50,7 +50,6 @@ dev = [
     "respx>=0.21",
     "types-docker>=7.0",
     "types-PyYAML>=6.0",
-    "python-semantic-release>=9.0",
     "vulture>=2.11",
     "radon>=6.0",
 ]
@@ -117,24 +116,3 @@ markers = [
     "integration: marks tests requiring Docker (deselect with '-m \"not integration\"')",
     "e2e: marks end-to-end tests (deselect with '-m \"not e2e\"')",
 ]
-
-# ---------------------------------------------------------------------------
-# Semantic Release
-# ---------------------------------------------------------------------------
-
-[tool.semantic_release]
-version_toml = ["pyproject.toml:project.version"]
-branch = "main"
-commit_message = "chore(release): v{version}"
-build_command = ""
-tag_format = "v{version}"
-
-[tool.semantic_release.changelog.default_templates]
-changelog_file = "CHANGELOG.md"
-
-[tool.semantic_release.remote]
-type = "github"
-token = { env = "GH_TOKEN" }
-
-[tool.semantic_release.publish]
-upload_to_vcs_release = true

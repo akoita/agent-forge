@@ -30,6 +30,9 @@ jobs:
       - name: Check core boundaries
         run: python scripts/check_boundaries.py
 
+      - name: Check release version consistency
+        run: python scripts/check_release.py
+
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
