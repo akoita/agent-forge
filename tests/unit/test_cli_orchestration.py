@@ -5,18 +5,23 @@ Covers all execution configurations:
 - Memory queue: single task, multiple tasks
 - Redis queue: single task, multiple tasks
 - Concurrency forwarding, cleanup on failure
-- _create_llm and _make_task_runner helpers
+- Configured provider selection through direct and queued execution
 """
 
 from __future__ import annotations
 
+import asyncio
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent_forge.orchestration.events import EventBus
+from agent_forge.orchestration.events import Event, EventBus, EventType
 from agent_forge.orchestration.queue import Task, TaskStatus
 from agent_forge.sandbox.base import SandboxConfig
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -67,7 +72,7 @@ class TestDirectModeEventBus:
         from agent_forge.cli import _run_agent
 
         with (
-            patch("agent_forge.cli._create_llm") as mock_llm_factory,
+            patch("agent_forge.cli.create_provider") as mock_llm_factory,
             patch("agent_forge.tools.create_default_registry") as mock_tools,
             patch("agent_forge.agent.core.react_loop", new_callable=AsyncMock) as mock_react,
             patch("agent_forge.sandbox.factory.create_sandbox") as mock_create_sandbox,
@@ -90,7 +95,7 @@ class TestDirectModeEventBus:
         from agent_forge.cli import _run_agent
 
         with (
-            patch("agent_forge.cli._create_llm") as mock_llm_factory,
+            patch("agent_forge.cli.create_provider") as mock_llm_factory,
             patch("agent_forge.tools.create_default_registry") as mock_tools,
             patch("agent_forge.agent.core.react_loop", new_callable=AsyncMock) as mock_react,
             patch("agent_forge.sandbox.factory.create_sandbox") as mock_create_sandbox,
@@ -451,30 +456,6 @@ class TestQueueModeCleanup:
 
 
 # ---------------------------------------------------------------------------
-# _create_llm
-# ---------------------------------------------------------------------------
-
-
-class TestCreateLLM:
-    """_create_llm creates provider by name."""
-
-    def test_gemini_provider(self) -> None:
-        from agent_forge.cli import _create_llm
-
-        with patch("agent_forge.llm.gemini.GeminiProvider") as mock_cls:
-            mock_cls.return_value = MagicMock()
-            result = _create_llm("gemini", "test-key")
-            mock_cls.assert_called_once_with(api_key="test-key")
-            assert result is mock_cls.return_value
-
-    def test_unknown_provider_exits(self) -> None:
-        from agent_forge.cli import _create_llm
-
-        with pytest.raises(SystemExit):
-            _create_llm("unknown", "key")
-
-
-# ---------------------------------------------------------------------------
 # _make_task_runner
 # ---------------------------------------------------------------------------
 
@@ -487,7 +468,7 @@ class TestMakeTaskRunner:
         from agent_forge.cli import _make_task_runner
 
         with (
-            patch("agent_forge.cli._create_llm") as mock_llm_factory,
+            patch("agent_forge.cli.create_provider") as mock_llm_factory,
             patch("agent_forge.agent.core.react_loop", new_callable=AsyncMock) as mock_react,
             patch("agent_forge.sandbox.factory.create_sandbox") as mock_create_sandbox,
         ):
@@ -514,3 +495,74 @@ class TestMakeTaskRunner:
             mock_sandbox.start.assert_called_once()
             mock_sandbox.stop.assert_called_once()
             mock_llm.close.assert_called_once()
+
+
+@pytest.mark.parametrize("queue_args", [[], ["--queue", "memory"]], ids=["direct", "queued"])
+def test_run_uses_configured_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, queue_args: list[str]
+) -> None:
+    """Both CLI execution modes construct the configured adapter."""
+    from click.testing import CliRunner
+
+    from agent_forge.cli import main
+    from agent_forge.llm.openai import OpenAIProvider
+
+    monkeypatch.setenv("AGENT_FORGE_AGENT_DEFAULT_PROVIDER", "openai")
+    monkeypatch.setenv("AGENT_FORGE_AGENT_DEFAULT_MODEL", "gpt-4o")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    with (
+        patch("agent_forge.sandbox.factory.create_sandbox", return_value=AsyncMock()),
+        patch("agent_forge.agent.core.react_loop", return_value=_mock_react_result()) as react,
+        patch("agent_forge.cli._emit_run_output"),
+    ):
+        result = CliRunner().invoke(
+            main, ["run", "--task", "Check a fixture", "--repo", str(tmp_path), *queue_args]
+        )
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    react.assert_awaited_once()
+    run, provider, *_ = react.call_args.args
+    assert isinstance(provider, OpenAIProvider)
+    assert run.config.model == "gpt-4o"
+
+
+@pytest.mark.parametrize("state", ["failed", "timeout", "completed"])
+@pytest.mark.asyncio
+async def test_worker_preserves_cli_agent_outcome(state: str) -> None:
+    """The queue uses the agent result and preserves its artifact identity."""
+    from agent_forge.agent.models import AgentRun, RunState
+    from agent_forge.cli import _make_task_runner
+    from agent_forge.orchestration.queue import InMemoryQueue
+    from agent_forge.orchestration.worker import Worker
+
+    queue = InMemoryQueue()
+    bus = EventBus()
+    observed: list[tuple[EventType, str]] = []
+
+    async def record(event: Event) -> None:
+        observed.append((event.type, event.run_id))
+
+    for event in (EventType.RUN_STARTED, EventType.RUN_COMPLETED, EventType.RUN_FAILED):
+        await bus.subscribe(event, record)
+    task = Task(
+        id="queued-run", task_description="Fix a bug", repo_path="/tmp/repo", config=MagicMock()
+    )
+    await queue.enqueue(task)
+    result = AgentRun(task.task_description, task.repo_path, task.config, state=RunState(state))
+    with (
+        patch("agent_forge.cli.create_provider", return_value=AsyncMock()),
+        patch("agent_forge.sandbox.factory.create_sandbox", return_value=AsyncMock()),
+        patch("agent_forge.agent.core.react_loop", return_value=result) as react,
+    ):
+        runner = _make_task_runner(_fake_config(), "gemini", "key", bus)
+        worker = Worker(queue, bus, runner)
+        queued = await queue.dequeue()
+        assert queued is not None
+        await asyncio.wait_for(worker._process_task(queued), timeout=3)
+
+    assert await queue.get_status(task.id) == TaskStatus(state)
+    started_run = react.call_args.args[0]
+    assert started_run.id == task.id
+    assert react.call_args.kwargs["emit_lifecycle"] is False
+    terminal = EventType.RUN_COMPLETED if state == "completed" else EventType.RUN_FAILED
+    assert observed == [(EventType.RUN_STARTED, task.id), (terminal, task.id)]

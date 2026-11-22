@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from importlib.metadata import EntryPoint, entry_points
-from inspect import isclass
-from typing import cast
 
 from agent_forge.tools.base import Tool, ToolRegistry
 
@@ -45,10 +43,9 @@ def _instantiate_plugin(entry_point: EntryPoint) -> Tool:
     if isinstance(loaded, Tool):
         return loaded
 
-    if isclass(loaded) and issubclass(cast("type[object]", loaded), Tool):
-        tool_class = cast("type[Tool]", loaded)
+    if isinstance(loaded, type) and issubclass(loaded, Tool):
         try:
-            return tool_class()
+            return loaded()
         except Exception as exc:
             msg = (
                 f"Failed to instantiate tool plugin '{entry_point.name}' "

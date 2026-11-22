@@ -1,4 +1,4 @@
-.PHONY: setup build-sandbox build-sandbox-node build-sandbox-full test test-unit test-integration test-e2e lint format quality run clean update-prices
+.PHONY: setup build-sandbox build-sandbox-node build-sandbox-full test test-unit test-integration test-e2e eval lint format quality run clean update-prices
 
 update-prices:             ## Refresh vendored model pricing from LiteLLM
 	python scripts/update_prices.py
@@ -26,6 +26,9 @@ test-integration:          ## Run integration tests (requires Docker)
 
 test-e2e:                  ## Run e2e tests (requires GEMINI_API_KEY + Docker)
 	pytest tests/e2e -v -m e2e
+
+eval:                      ## Run the deterministic fix evaluation
+	pytest tests/eval -v
 
 lint:                      ## Run linters
 	ruff check agent_forge tests

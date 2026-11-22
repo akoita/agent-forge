@@ -23,8 +23,8 @@ from fastapi.responses import JSONResponse
 from agent_forge.agent.core import react_loop
 from agent_forge.agent.models import AgentConfig, AgentRun
 from agent_forge.agent.prompts import build_hosted_poa_system_prompt
-from agent_forge.cli import _create_llm
 from agent_forge.config import USER_CONFIG_DIR, ForgeConfig, load_config
+from agent_forge.llm.factory import create_provider, provider_names
 from agent_forge.orchestration.events import EventBus
 from agent_forge.orchestration.queue import InMemoryQueue, Task, TaskStatus
 from agent_forge.orchestration.worker import Worker
@@ -929,7 +929,7 @@ class HostedRunService:
             if resolved_profile and resolved_profile.llm_provider:
                 provider_name = resolved_profile.llm_provider
             provider_cfg = self._config.providers.get(provider_name)
-            if provider_cfg is None:
+            if provider_cfg is None or provider_name not in provider_names():
                 record.error = RunError(
                     code="invalid_request",
                     message=f"unknown provider: {provider_name}",
@@ -950,7 +950,6 @@ class HostedRunService:
             if resolved_profile and resolved_profile.llm_model:
                 model_name = resolved_profile.llm_model
 
-            llm = _create_llm(provider_name, api_key)
             tools = create_default_registry()
             sandbox_config = SandboxConfig(
                 backend=self._config.sandbox.backend,
@@ -986,6 +985,7 @@ class HostedRunService:
                 config=agent_config,
                 id=task.id,
             )
+            llm = create_provider(provider_name, api_key)
             try:
                 await sandbox.start(repo_path=task.repo_path, config=sandbox_config)
                 await react_loop(agent_run, llm, tools, sandbox, event_bus=self._event_bus)

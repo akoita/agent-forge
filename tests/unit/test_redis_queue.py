@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from agent_forge.orchestration.queue import Task, TaskStatus
+from agent_forge.orchestration.redis_queue import _FINISH_TASK
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -296,7 +297,14 @@ class TestRedisQueueLifecycle:
             q._max_concurrent = 0
 
         await q.complete("task-1")
-        mock_redis.decr.assert_called_once()
+        mock_redis.eval.assert_awaited_once_with(
+            _FINISH_TASK,
+            2,
+            "agent_forge:task:task-1",
+            "agent_forge:active",
+            "processing",
+            "completed",
+        )
 
     @pytest.mark.asyncio
     async def test_fail_decrements_counter(self) -> None:
@@ -315,7 +323,9 @@ class TestRedisQueueLifecycle:
             q._max_concurrent = 0
 
         await q.fail("task-1")
-        mock_redis.decr.assert_called_once()
+        mock_redis.eval.assert_awaited_once_with(
+            _FINISH_TASK, 2, "agent_forge:task:task-1", "agent_forge:active", "processing", "failed"
+        )
 
     @pytest.mark.asyncio
     async def test_close(self) -> None:

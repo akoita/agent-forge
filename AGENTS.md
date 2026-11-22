@@ -12,8 +12,15 @@ Agent Forge is a **small, measurable, high-correctness coding harness** — not 
 broad agent platform. Every change should make the harness more correct or
 better measured, not merely broader.
 
+- **Product references:** [vision](docs/vision.md) and [strategy](docs/strategy.md).
 - **Canonical roadmap:** `docs/roadmap.md`
 - **Pivot decision:** `docs/adr/002-harness-first-reset.md`
+
+For a substantive change, link the vision or strategy objective and its
+verification evidence in the issue or PR. Update the reference when an
+accepted decision changes direction. Use an RFC to compare options for
+significant changes and an ADR in `docs/adr/` to record accepted architectural
+decisions. Follow the [reference maintenance guide](docs/strategy.md#maintain-the-references).
 
 **Quality gates for every substantive change** (state each in the PR body):
 
@@ -174,3 +181,33 @@ Runners: `make test-unit`, `make test-integration`, `make test` (all + coverage)
 - Use **Google-style docstrings** for public APIs.
 - Follow [Conventional Commits](https://www.conventionalcommits.org/) for
   all commit messages.
+
+<!-- agent-toolkit:writing-policy -->
+
+## Writing documentation
+
+Write each document for one named reader and one task. Hold it to three tests:
+
+- **Useful:** lead with the answer, result or command. Every section helps the
+  reader decide, do or verify something. Cut history, narration and what the
+  code already says.
+- **Concise:** one point per paragraph, at most four sentences, sentences under
+  about 25 words, plain words. Use a list or table for parallel items, and
+  restructure prose blocks longer than about 120 words. Source line wrapping is
+  not paragraph structure.
+- **Complete:** give what the reader needs to finish without asking:
+  prerequisites, copy-paste-safe commands, the expected result, and what to do
+  when it fails. Link to the canonical source instead of copying it.
+
+Describe the system by concept, not as a changelog, and draw a Mermaid diagram
+for each flow, state machine or component map. Split a section past about 150
+lines and a page past about 4,000 words. State what is true now, label
+proposals and plans, and delete stale content in the same change. When the
+tests pull apart, completeness wins in procedures and concision wins in
+overviews.
+
+The full guide is the agent-toolkit `document-software` skill
+(`references/writing.md`). This section is installed by its
+`scripts/install_policy.py`; edit the skill, not this copy.
+
+<!-- /agent-toolkit:writing-policy -->

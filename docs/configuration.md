@@ -141,6 +141,11 @@ agent-forge run --task "Fix the health endpoint" --repo ./my-app
 
 ### OpenAI Provider
 
+Direct CLI runs, queued runs, and hosted runs use the same adapter registry
+for Gemini, OpenAI, and Anthropic. Configure both the provider and a model
+identifier supported by its API. When switching providers in the CLI, set
+both `--provider` and `--model` to override the configured defaults.
+
 ```toml
 # agent-forge.toml
 [agent]
@@ -152,6 +157,12 @@ default_model = "gpt-4o"
 export OPENAI_API_KEY="sk-..."
 agent-forge run --task "Add input validation" --repo ./my-app
 ```
+
+### JSON output
+
+Direct CLI runs with `--output-format json` write one result object to stdout.
+Runtime logs and the human summary go to stderr. Use `--report-file` to save the
+same result object to disk.
 
 ### Sandbox Tuning
 

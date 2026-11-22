@@ -6,6 +6,8 @@ import asyncio
 import json
 import os
 import sys
+from contextlib import nullcontext, redirect_stdout
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from agent_forge.config import USER_CONFIG_DIR, load_config
+from agent_forge.llm.factory import create_provider, provider_names
 from agent_forge.sandbox.base import SandboxConfig
 
 console = Console()
@@ -36,6 +39,7 @@ def main() -> None:
 @main.command()
 @click.option("--task", required=True, help="Coding task description")
 @click.option("--repo", required=True, help="Path to target repository")
+@click.option("--verify-command", help="Verify a coding patch from a fresh Git checkout.")
 @click.option("--model", default=None, help="LLM model to use")
 @click.option("--provider", default=None, help="LLM provider (gemini, openai, anthropic)")
 @click.option("--max-iterations", default=None, type=int, help="Max ReAct loop iterations")
@@ -115,6 +119,7 @@ def run(
     report_file: Path | None,
     profile: str | None,
     profiles_dir: Path | None,
+    verify_command: str | None,
 ) -> None:
     """Run an agent task on a repository."""
     # --- Resolve profile early so it can override provider/model ---
@@ -153,9 +158,11 @@ def run(
     # Resolve API key
     provider_name = cfg.agent.default_provider
     provider_cfg = cfg.providers.get(provider_name)
-    if provider_cfg is None:
+    available_providers = tuple(name for name in provider_names() if name in cfg.providers)
+    if provider_cfg is None or provider_name not in available_providers:
         err_console.print(
-            f"[red]Unknown provider:[/red] '{provider_name}'. Available: {', '.join(cfg.providers)}"
+            f"[red]Unknown provider:[/red] '{provider_name}'. "
+            f"Available: {', '.join(available_providers)}"
         )
         sys.exit(1)
 
@@ -166,6 +173,8 @@ def run(
             f"environment variable for provider '{provider_name}'"
         )
         sys.exit(1)
+
+    _validate_verification_mode(verify_command, queue_backend)
 
     if queue_backend is not None:
         if output_format == "json" or report_file is not None:
@@ -186,15 +195,40 @@ def run(
             )
         )
     else:
-        result = asyncio.run(
-            _run_agent(task, repo, cfg, provider_name, api_key, profile=resolved_profile),
-        )
+        diagnostics = sys.stderr if output_format == "json" else sys.stdout
+        with redirect_stdout(diagnostics):
+            try:
+                result = asyncio.run(
+                    _run_agent(
+                        task,
+                        repo,
+                        cfg,
+                        provider_name,
+                        api_key,
+                        profile=resolved_profile,
+                        verify_command=verify_command,
+                    ),
+                )
+            finally:
+                diagnostics.flush()
         _emit_run_output(
             result,
             output_format=output_format,
             report_file=report_file,
             profile=resolved_profile,
         )
+        _exit_on_verification_failure(verify_command, result.state.value)
+
+
+def _validate_verification_mode(command: str | None, queue_backend: str | None) -> None:
+    if command is not None and (queue_backend is not None or not command.strip()):
+        msg = "--verify-command requires direct mode and a non-empty command."
+        raise click.UsageError(msg)
+
+
+def _exit_on_verification_failure(command: str | None, state: str) -> None:
+    if command is not None and state != "completed":
+        raise click.exceptions.Exit(1)
 
 
 async def _run_agent(
@@ -205,15 +239,19 @@ async def _run_agent(
     api_key: str,
     *,
     profile: Any | None = None,
+    verify_command: str | None = None,
 ) -> Any:
     """Execute the full agent pipeline (direct mode).
 
     Creates an ``EventBus`` so lifecycle events are emitted even in
     direct mode — this enables observability subscribers.
     """
+    from functools import partial
+
     from agent_forge.agent.core import react_loop
     from agent_forge.agent.models import AgentConfig, AgentRun
     from agent_forge.agent.prompts import build_system_prompt
+    from agent_forge.agent.verification import VerificationWorkspace
     from agent_forge.orchestration.events import EventBus
     from agent_forge.sandbox.factory import create_sandbox
     from agent_forge.tools import create_default_registry
@@ -236,7 +274,6 @@ async def _run_agent(
     extension_prompts = discover_extension_prompt_fragments() or None
 
     event_bus = EventBus()
-    llm = _create_llm(provider_name, api_key)
     tools = create_default_registry()
     agent_config.system_prompt = build_system_prompt(
         task,
@@ -250,25 +287,33 @@ async def _run_agent(
     )
     agent_run = AgentRun(task=task, repo_path=repo, config=agent_config)
     sandbox = create_sandbox(sandbox_config)
+    verification_workspace = (
+        VerificationWorkspace(repo, verify_command) if verify_command is not None else nullcontext()
+    )
 
     with console.status("[bold green]Agent running...", spinner="dots"):
         try:
-            await sandbox.start(repo_path=repo, config=sandbox_config)
-            result = await react_loop(
-                agent_run,
-                llm,
-                tools,
-                sandbox,
-                event_bus=event_bus,
-            )
+            with verification_workspace as workspace:
+                path = str(workspace.workspace) if workspace is not None else repo
+                verify = (
+                    partial(workspace.verify, sandbox_config, sandbox)
+                    if workspace is not None
+                    else None
+                )
+                llm = create_provider(provider_name, api_key)
+                try:
+                    await sandbox.start(repo_path=path, config=sandbox_config)
+                    return await react_loop(
+                        agent_run, llm, tools, sandbox, event_bus=event_bus, verify=verify
+                    )
+                finally:
+                    try:
+                        await sandbox.stop()
+                    finally:
+                        await llm.close()
         except Exception as exc:  # noqa: BLE001 — top-level catch-all for CLI
             err_console.print(f"[red]Agent failed:[/red] {exc}")
             sys.exit(1)
-        finally:
-            await sandbox.stop()
-            await llm.close()
-
-    return result
 
 
 async def _run_agent_queued(
@@ -335,12 +380,12 @@ async def _run_agent_queued(
             # Poll until the task completes or fails
             while True:
                 status = await queue.get_status(task_id)
-                if status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+                if status not in (TaskStatus.QUEUED, TaskStatus.PROCESSING):
                     break
                 await asyncio.sleep(0.5)
 
-            if status == TaskStatus.FAILED:
-                err_console.print("[red]Task failed.[/red]")
+            if status != TaskStatus.COMPLETED:
+                err_console.print(f"[red]Task {status.value}.[/red]")
                 sys.exit(1)
             console.print("[green]Task completed.[/green]")
         except Exception as exc:  # noqa: BLE001 — top-level catch-all
@@ -350,18 +395,6 @@ async def _run_agent_queued(
             await worker.stop()
             if hasattr(queue, "close"):
                 await queue.close()
-
-
-def _create_llm(provider_name: str, api_key: str) -> Any:
-    """Create an LLM provider instance by name."""
-    from agent_forge.llm.gemini import GeminiProvider
-
-    if provider_name == "gemini":
-        return GeminiProvider(api_key=api_key)
-    err_console.print(
-        f"[red]Provider '{provider_name}' not yet implemented.[/red] Only 'gemini' is available."
-    )
-    sys.exit(1)
 
 
 def _make_task_runner(
@@ -383,7 +416,7 @@ def _make_task_runner(
 
     sandbox_config = _build_sandbox_config(_cfg)
 
-    async def _runner(task: Any) -> None:
+    async def _runner(task: Any) -> AgentRun:
         tools = create_default_registry()
         task.config.system_prompt = build_system_prompt(
             task.task_description,
@@ -397,18 +430,20 @@ def _make_task_runner(
             task=task.task_description,
             repo_path=task.repo_path,
             config=task.config,
+            id=task.id,
         )
-        llm = _create_llm(provider_name, api_key)
         sandbox = create_sandbox(sandbox_config)
+        llm = create_provider(provider_name, api_key)
 
         try:
             await sandbox.start(repo_path=task.repo_path, config=sandbox_config)
-            await react_loop(
+            return await react_loop(
                 agent_run,
                 llm,
                 tools,
                 sandbox,
                 event_bus=event_bus,
+                emit_lifecycle=False,
             )
         finally:
             await sandbox.stop()
@@ -481,6 +516,11 @@ def _display_run_summary(run: Any) -> None:
         table.add_row("Duration", f"{elapsed:.1f}s")
     if run.error:
         table.add_row("Error", f"[red]{run.error}[/red]")
+    if run.verification is not None:
+        table.add_row("Verification", run.verification.reason)
+        table.add_row("Base revision", run.verification.base_revision)
+        if run.verification.patch:
+            table.add_row("Patch", str(USER_CONFIG_DIR / "runs" / run.id / "change.patch"))
 
     console.print(Panel(table, title="[bold]Agent Run Complete", border_style=state_color))
 
@@ -516,6 +556,15 @@ def _run_output_payload(run: Any, *, profile: Any | None = None) -> dict[str, ob
             "summary_json": str(run_dir / "summary.json"),
         },
     }
+    from agent_forge.agent.verification import VerificationResult
+
+    verification = getattr(run, "verification", None)
+    if isinstance(verification, VerificationResult):
+        payload["verification"] = asdict(verification)
+        if verification.patch:
+            artifacts = payload["artifacts"]
+            if isinstance(artifacts, dict):
+                artifacts["patch"] = str(run_dir / "change.patch")
     if profile is not None:
         payload["profile"] = {
             "id": profile.id,

@@ -52,6 +52,12 @@ jobs:
       - name: Run unit tests
         run: make test-unit
 
+      - name: Run deterministic fix evaluation
+        if: matrix.python-version == '3.13'
+        run: |
+          pip install -r tests/fixtures/sample_repo/requirements.txt
+          make eval
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
