@@ -6,11 +6,14 @@ import asyncio
 import os
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
-from agent_forge.config import ForgeConfig, ModelProfileSettings, load_config
 from agent_forge.llm.base import LLMConfig, Message, Role, TokenUsage, ToolDefinition
 from agent_forge.llm.errors import LLMError
 from agent_forge.llm.factory import create_provider, provider_names
+
+if TYPE_CHECKING:
+    from agent_forge.config import ForgeConfig, ModelProfileSettings
 
 _TOOL = ToolDefinition(
     name="read_probe_value",
@@ -111,9 +114,8 @@ async def probe_model(config: ForgeConfig, profile: ModelProfileSettings) -> Pro
     return result
 
 
-def qualification_report(name: str, *, live: bool) -> dict[str, object]:
+def qualification_report(config: ForgeConfig, name: str, *, live: bool) -> dict[str, object]:
     """Return separately labelled configuration and live qualification results."""
-    config = load_config()
     profile = resolve_model_profile(config, name)
     return {
         "profile": name,

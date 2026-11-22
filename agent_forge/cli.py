@@ -17,7 +17,7 @@ from rich.json import JSON
 from rich.panel import Panel
 from rich.table import Table
 
-from agent_forge.config import USER_CONFIG_DIR, load_config
+from agent_forge.config import USER_CONFIG_DIR, ForgeConfig, load_config
 from agent_forge.llm.factory import create_provider, provider_names
 from agent_forge.sandbox.base import SandboxConfig
 
@@ -39,18 +39,106 @@ def models() -> None:
 @models.command("validate")
 @click.argument("profile")
 @click.option("--live", is_flag=True, help="Allow a limited, two-turn provider API probe.")
-def validate_model(profile: str, live: bool) -> None:
-    """Report qualification results for a configured model profile."""
+@click.option("--fix-repo", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--fix-task", help="Coding task for an independently graded fixture.")
+@click.option("--verify-command", help="Check to run on a fresh checkout with the candidate patch.")
+def validate_model(
+    profile: str,
+    live: bool,
+    fix_repo: Path | None,
+    fix_task: str | None,
+    verify_command: str | None,
+) -> None:
+    """Report tool and coding qualification for a configured model profile."""
     from agent_forge.llm.qualification import qualification_report
 
-    try:
-        report = qualification_report(profile, live=live)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
+    _validate_fix_options(live, fix_repo, fix_task, verify_command)
+    config = load_config()
+    diagnostics = sys.stderr
+    with redirect_stdout(diagnostics):
+        try:
+            report = qualification_report(config, profile, live=live)
+            if fix_repo is not None and fix_task and verify_command:
+                report["independent_fix"] = _grade_model_fix(
+                    config,
+                    profile,
+                    fix_repo,
+                    fix_task,
+                    verify_command,
+                    report["live_tool_exchange"],
+                )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        finally:
+            diagnostics.flush()
+
     click.echo(json.dumps(report, indent=2))
-    live_report = report["live_tool_exchange"]
-    if isinstance(live_report, dict) and live_report["status"] == "failed":
-        raise click.exceptions.Exit(1)
+    for key in ("live_tool_exchange", "independent_fix"):
+        stage = report[key]
+        if isinstance(stage, dict) and stage["status"] == "failed":
+            raise click.exceptions.Exit(1)
+
+
+def _validate_fix_options(
+    live: bool, repo: Path | None, task: str | None, command: str | None
+) -> None:
+    if any(value is not None for value in (repo, task, command)) and not (
+        live and repo and task and task.strip() and command and command.strip()
+    ):
+        msg = "A coding probe requires --live, --fix-repo, --fix-task, and --verify-command."
+        raise click.UsageError(msg)
+
+
+def _grade_model_fix(
+    config: ForgeConfig, name: str, repo: Path, task: str, command: str, live_result: object
+) -> dict[str, object]:
+    from agent_forge.llm.qualification import resolve_model_profile
+
+    if not isinstance(live_result, dict) or live_result["status"] != "passed":
+        return {"status": "not_run", "reason": "Live tool exchange did not pass."}
+
+    profile = resolve_model_profile(config, name)
+    key_env = config.providers[profile.provider].api_key_env
+    api_key = os.environ.get(key_env)
+    if not api_key:
+        return {"status": "failed", "reason": f"Missing credential variable {key_env}."}
+
+    run_config = config.model_copy(deep=True)
+    run_config.agent.default_provider = profile.provider
+    run_config.agent.default_model = profile.model
+    run_config.agent.max_iterations = min(run_config.agent.max_iterations, 6)
+    run_config.agent.max_tokens_per_run = min(run_config.agent.max_tokens_per_run, 24_000)
+    run_config.sandbox.network_enabled = False
+    run_config.sandbox.writable_cache_mounts = False
+
+    async def bounded_run() -> Any:
+        async with asyncio.timeout(180):
+            return await _run_agent(
+                task, str(repo), run_config, profile.provider, api_key, verify_command=command
+            )
+
+    try:
+        run = asyncio.run(bounded_run())
+    except TimeoutError:
+        return {"status": "failed", "reason": "Coding probe exceeded its 180-second deadline."}
+    except SystemExit:
+        return {"status": "failed", "reason": "Coding probe could not run. See stderr."}
+
+    verification = run.verification
+    passed = verification is not None and verification.passed and run.state.value == "completed"
+    return {
+        "status": "passed" if passed else "failed",
+        "reason": verification.reason if verification is not None else run.error,
+        "run_id": run.id,
+        "total_tokens": asdict(run.total_tokens),
+        "base_revision": verification.base_revision if verification is not None else None,
+        "check_exit_code": verification.exit_code if verification is not None else None,
+        "patch": (
+            str(USER_CONFIG_DIR / "runs" / run.id / "change.patch")
+            if verification is not None and verification.patch
+            else None
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
