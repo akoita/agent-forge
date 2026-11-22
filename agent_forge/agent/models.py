@@ -36,6 +36,7 @@ class AgentConfig:
     temperature: float = 0.0
     system_prompt: str | None = None  # Override default system prompt
     profile_id: str | None = None  # Active agent profile for this run
+    approval_mode: str = "auto"  # "auto" | "prompt" | "deny"
 
 
 @dataclass

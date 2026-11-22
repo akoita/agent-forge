@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -37,6 +37,7 @@ class AgentSettings(BaseModel):
     default_model: str = "gemini-3.1-flash-lite-preview"
     temperature: float = 0.0
     system_prompt_path: str = ""
+    approval_mode: Literal["auto", "prompt", "deny"] = "auto"
 
 
 class SandboxSettings(BaseModel):

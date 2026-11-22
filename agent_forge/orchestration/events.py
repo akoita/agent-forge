@@ -32,6 +32,8 @@ class EventType(Enum):
     TOOL_CALLED = "tool.called"
     TOOL_COMPLETED = "tool.completed"
     PATCH_APPLIED = "patch.applied"
+    APPROVAL_REQUESTED = "approval.requested"
+    APPROVAL_DECIDED = "approval.decided"
     TOKEN_USAGE = "token.usage"  # noqa: S105 — not a password
 
 

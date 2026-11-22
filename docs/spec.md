@@ -784,6 +784,9 @@ class EventType(Enum):
     ITERATION_COMPLETED = "iteration.completed"
     TOOL_CALLED = "tool.called"
     TOOL_COMPLETED = "tool.completed"
+    PATCH_APPLIED = "patch.applied"
+    APPROVAL_REQUESTED = "approval.requested"
+    APPROVAL_DECIDED = "approval.decided"
     TOKEN_USAGE = "token.usage"
 
 @dataclass
@@ -798,6 +801,14 @@ class EventBus:
     async def subscribe(self, event_type: EventType, handler: Callable) -> str: ...
     async def unsubscribe(self, subscription_id: str) -> None: ...
 ```
+
+##### Destructive-Operation Approval Gates
+
+Before executing a tool call, `ApprovalGate` classifies destructive actions (`apply_patch` deletes, `rm`, `git push --force`/`-f`/`--force-with-lease`, `git reset --hard`, `git clean -f`, `git branch -D`, `git checkout --`, `git restore`) and evaluates `[agent].approval_mode`:
+
+- `auto` (default): logs `approval.requested` / `approval.decided` (`approved=True`) and executes.
+- `prompt`: invokes the operator callback (or fails closed when non-interactive).
+- `deny`: rejects destructive calls before execution and returns a structured denial error to the model.
 
 ---
 

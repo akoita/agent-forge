@@ -154,6 +154,12 @@ def _grade_model_fix(
 @click.option("--model-profile", help="Use a named provider and model from configuration.")
 @click.option("--provider", default=None, help="LLM provider (gemini, openai, anthropic)")
 @click.option("--max-iterations", default=None, type=int, help="Max ReAct loop iterations")
+@click.option(
+    "--approval-mode",
+    default=None,
+    type=click.Choice(["auto", "prompt", "deny"], case_sensitive=False),
+    help="Approval policy for destructive operations (auto, prompt, deny)",
+)
 @click.option("--sandbox-image", default=None, help="Sandbox image to run")
 @click.option(
     "--sandbox-backend",
@@ -219,6 +225,7 @@ def run(
     model: str | None,
     provider: str | None,
     max_iterations: int | None,
+    approval_mode: str | None,
     sandbox_image: str | None,
     sandbox_backend: str | None,
     network: bool | None,
@@ -260,6 +267,7 @@ def run(
             model=model,
             provider=provider,
             max_iterations=max_iterations,
+            approval_mode=approval_mode,
             sandbox_image=sandbox_image,
             sandbox_backend=sandbox_backend,
             network=network,
@@ -390,6 +398,9 @@ async def _run_agent(
         max_tokens_per_run=cfg.agent.max_tokens_per_run,
         temperature=cfg.agent.temperature,
         profile_id=profile.id if profile else None,
+        approval_mode=cfg.agent.approval_mode
+        if isinstance(cfg.agent.approval_mode, str)
+        else "auto",
     )
 
     # Resolve prompt_scope from profile
@@ -431,7 +442,13 @@ async def _run_agent(
                 try:
                     await sandbox.start(repo_path=path, config=sandbox_config)
                     return await react_loop(
-                        agent_run, llm, tools, sandbox, event_bus=event_bus, verify=verify
+                        agent_run,
+                        llm,
+                        tools,
+                        sandbox,
+                        event_bus=event_bus,
+                        verify=verify,
+                        approval_gate=_build_approval_gate(cfg.agent.approval_mode),
                     )
                 finally:
                     try:
@@ -470,6 +487,9 @@ async def _run_agent_queued(
         max_iterations=cfg.agent.max_iterations,
         max_tokens_per_run=cfg.agent.max_tokens_per_run,
         temperature=cfg.agent.temperature,
+        approval_mode=cfg.agent.approval_mode
+        if isinstance(cfg.agent.approval_mode, str)
+        else "auto",
     )
 
     event_bus = EventBus()
@@ -593,32 +613,44 @@ def _build_sandbox_config(cfg: Any) -> SandboxConfig:
     )
 
 
+def _build_approval_gate(mode: object) -> Any:
+    """Create an ``ApprovalGate`` that prompts interactively only on a TTY."""
+    from agent_forge.agent.approvals import ApprovalGate, ApprovalRequest
+
+    normalized = mode if isinstance(mode, str) else "auto"
+    if normalized != "prompt" or not sys.stdin.isatty():
+        return ApprovalGate(mode=normalized)
+
+    async def _confirm(request: ApprovalRequest) -> bool:
+        prompt = f"Approve destructive {request.tool_name} ({request.category}): {request.reason}?"
+        return bool(click.confirm(prompt, default=False, err=True))
+
+    return ApprovalGate(mode=normalized, callback=_confirm)
+
+
 def _build_cli_overrides(
     *,
     model: str | None,
     provider: str | None,
     max_iterations: int | None,
-    sandbox_image: str | None,
-    sandbox_backend: str | None,
-    network: bool | None,
-    command_timeout: int | None,
+    approval_mode: str | None = None,
+    sandbox_image: str | None = None,
+    sandbox_backend: str | None = None,
+    network: bool | None = None,
+    command_timeout: int | None = None,
 ) -> dict[str, Any] | None:
     """Collect non-empty CLI overrides into config dotted keys."""
-    cli_overrides: dict[str, Any] = {}
-    if model is not None:
-        cli_overrides["agent.default_model"] = model
-    if provider is not None:
-        cli_overrides["agent.default_provider"] = provider
-    if max_iterations is not None:
-        cli_overrides["agent.max_iterations"] = max_iterations
-    if sandbox_image is not None:
-        cli_overrides["sandbox.image"] = sandbox_image
-    if sandbox_backend is not None:
-        cli_overrides["sandbox.backend"] = sandbox_backend
-    if network is not None:
-        cli_overrides["sandbox.network_enabled"] = network
-    if command_timeout is not None:
-        cli_overrides["sandbox.timeout_seconds"] = command_timeout
+    mapping = {
+        "agent.default_model": model,
+        "agent.default_provider": provider,
+        "agent.max_iterations": max_iterations,
+        "agent.approval_mode": approval_mode.lower() if approval_mode is not None else None,
+        "sandbox.image": sandbox_image,
+        "sandbox.backend": sandbox_backend,
+        "sandbox.network_enabled": network,
+        "sandbox.timeout_seconds": command_timeout,
+    }
+    cli_overrides = {key: value for key, value in mapping.items() if value is not None}
     return cli_overrides or None
 
 

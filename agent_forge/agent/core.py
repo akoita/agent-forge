@@ -6,6 +6,7 @@ import asyncio
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from agent_forge.agent.approvals import ApprovalGate
 from agent_forge.agent.models import AgentRun, RunState, ToolInvocation
 from agent_forge.agent.persistence import save_run
 from agent_forge.agent.prompts import build_system_prompt
@@ -26,7 +27,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from agent_forge.agent.verification import VerificationResult
-    from agent_forge.llm.base import LLMProvider
+    from agent_forge.llm.base import LLMProvider, ToolCall
     from agent_forge.sandbox.base import Sandbox
     from agent_forge.tools.base import ToolRegistry, ToolResult
 
@@ -46,6 +47,7 @@ async def react_loop(
     event_bus: EventBus | None = None,
     verify: Callable[[], Awaitable[VerificationResult]] | None = None,
     emit_lifecycle: bool = True,
+    approval_gate: ApprovalGate | None = None,
 ) -> AgentRun:
     """Execute the ReAct loop: Observe → Reason (LLM) → Act (Tool) → Repeat.
 
@@ -72,6 +74,7 @@ async def react_loop(
     )
     tool_definitions = tools.list_definitions()
     lifecycle_bus = event_bus if emit_lifecycle else None
+    active_gate = _resolve_approval_gate(run, approval_gate)
 
     await _emit(
         lifecycle_bus,
@@ -155,6 +158,7 @@ async def react_loop(
                     sandbox,
                     tool_call,
                     event_bus=event_bus,
+                    approval_gate=active_gate,
                 )
 
             await _emit(
@@ -222,6 +226,101 @@ async def _finish_run(
     transition(run, RunState.COMPLETED)
 
 
+def _resolve_approval_gate(run: AgentRun, gate: ApprovalGate | None) -> ApprovalGate | None:
+    if gate is not None:
+        return gate
+    if run.config.approval_mode != "auto":
+        return ApprovalGate(mode=run.config.approval_mode)
+    return None
+
+
+async def _check_approval(
+    run: AgentRun,
+    tool_call: ToolCall,
+    approval_gate: ApprovalGate | None,
+    event_bus: EventBus | None,
+) -> bool:
+    """Evaluate destructive-operation approval; record denial if rejected."""
+    from agent_forge.tools.base import ToolResult
+
+    if approval_gate is None:
+        return True
+
+    request, decision = await approval_gate.evaluate(tool_call.name, dict(tool_call.arguments))
+    if request is None or decision is None:
+        return True
+
+    await _emit(
+        event_bus,
+        EventType.APPROVAL_REQUESTED,
+        run.id,
+        {
+            "tool_name": request.tool_name,
+            "category": request.category,
+            "reason": request.reason,
+            "iteration": run.iterations,
+        },
+    )
+    await _emit(
+        event_bus,
+        EventType.APPROVAL_DECIDED,
+        run.id,
+        {
+            "tool_name": request.tool_name,
+            "category": request.category,
+            "approved": decision.approved,
+            "decided_by": decision.decided_by,
+            "reason": decision.reason,
+            "iteration": run.iterations,
+        },
+    )
+    if decision.approved:
+        return True
+
+    denial_msg = f"Approval denied ({request.category}): {request.reason}" + (
+        f" — {decision.reason}" if decision.reason else ""
+    )
+    denied_result = ToolResult(
+        output="",
+        error=denial_msg,
+        exit_code=1,
+        metadata={
+            "approval_denied": True,
+            "category": request.category,
+            "decided_by": decision.decided_by,
+        },
+    )
+    run.tool_invocations.append(
+        ToolInvocation(
+            tool_name=tool_call.name,
+            arguments=dict(tool_call.arguments),
+            result=denied_result,
+            iteration=run.iterations,
+            timestamp=datetime.now(UTC),
+            duration_ms=0,
+        )
+    )
+    run.messages.append(
+        Message(
+            role=Role.TOOL,
+            content=f"[ERROR] {denial_msg}",
+            tool_call_id=tool_call.id,
+        )
+    )
+    await _emit(
+        event_bus,
+        EventType.TOOL_COMPLETED,
+        run.id,
+        {
+            "tool_name": tool_call.name,
+            "error": denial_msg,
+            "duration_ms": 0,
+            "has_error": True,
+        },
+    )
+    return False
+
+
 async def _execute_tool_call(
     run: AgentRun,
     tools: ToolRegistry,
@@ -229,6 +328,7 @@ async def _execute_tool_call(
     tool_call: object,
     *,
     event_bus: EventBus | None = None,
+    approval_gate: ApprovalGate | None = None,
 ) -> None:
     """Execute a single tool call and append the result to conversation history.
 
@@ -293,6 +393,9 @@ async def _execute_tool_call(
                 "duration_ms": 0,
             },
         )
+        return
+
+    if not await _check_approval(run, tool_call, approval_gate, event_bus):
         return
 
     # Execute with retry on transient sandbox failures (spec § 7.2)
