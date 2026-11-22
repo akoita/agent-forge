@@ -237,19 +237,12 @@ plugins/
 
 ## Direction
 
-Agent Forge is being reset to a **harness-first** strategy: a small, measurable,
-high-correctness coding harness that competes on correctness and verified task
-completion rather than feature breadth. The rationale is recorded in
-[ADR-002: Harness-First Strategic Reset](docs/adr/002-harness-first-reset.md).
+Agent Forge starts with verified local coding changes and carries the same
+workflow into a hosted pilot. The [vision](docs/vision.md) describes the user
+experience and the [strategy](docs/strategy.md) sets the engineering priorities.
 
-The work is now organized into milestones **M0–M6** — starting with an evaluation
-harness and quality gate (M0), then the agent-computer interface, context engine,
-provider API, policy engine, durable execution, and standards interop. Hosted,
-multi-tenant, and scaling concerns (web dashboard, RBAC, Kubernetes, fleet
-scaling) move to a separate `agent-forge-cloud` project.
-
-See the **[Roadmap](docs/roadmap.md)** for milestones, exit criteria, and tracking
-issues. The former Phase 1–7 plan is superseded.
+See the [roadmap](docs/roadmap.md) for current milestones and the evidence
+required to close them.
 
 ---
 

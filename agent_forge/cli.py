@@ -16,6 +16,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from agent_forge.config import USER_CONFIG_DIR, load_config
+from agent_forge.llm.factory import create_provider, provider_names
 from agent_forge.sandbox.base import SandboxConfig
 
 console = Console()
@@ -153,9 +154,11 @@ def run(
     # Resolve API key
     provider_name = cfg.agent.default_provider
     provider_cfg = cfg.providers.get(provider_name)
-    if provider_cfg is None:
+    available_providers = tuple(name for name in provider_names() if name in cfg.providers)
+    if provider_cfg is None or provider_name not in available_providers:
         err_console.print(
-            f"[red]Unknown provider:[/red] '{provider_name}'. Available: {', '.join(cfg.providers)}"
+            f"[red]Unknown provider:[/red] '{provider_name}'. "
+            f"Available: {', '.join(available_providers)}"
         )
         sys.exit(1)
 
@@ -236,7 +239,6 @@ async def _run_agent(
     extension_prompts = discover_extension_prompt_fragments() or None
 
     event_bus = EventBus()
-    llm = _create_llm(provider_name, api_key)
     tools = create_default_registry()
     agent_config.system_prompt = build_system_prompt(
         task,
@@ -250,6 +252,7 @@ async def _run_agent(
     )
     agent_run = AgentRun(task=task, repo_path=repo, config=agent_config)
     sandbox = create_sandbox(sandbox_config)
+    llm = create_provider(provider_name, api_key)
 
     with console.status("[bold green]Agent running...", spinner="dots"):
         try:
@@ -352,18 +355,6 @@ async def _run_agent_queued(
                 await queue.close()
 
 
-def _create_llm(provider_name: str, api_key: str) -> Any:
-    """Create an LLM provider instance by name."""
-    from agent_forge.llm.gemini import GeminiProvider
-
-    if provider_name == "gemini":
-        return GeminiProvider(api_key=api_key)
-    err_console.print(
-        f"[red]Provider '{provider_name}' not yet implemented.[/red] Only 'gemini' is available."
-    )
-    sys.exit(1)
-
-
 def _make_task_runner(
     _cfg: Any,
     provider_name: str,
@@ -398,8 +389,8 @@ def _make_task_runner(
             repo_path=task.repo_path,
             config=task.config,
         )
-        llm = _create_llm(provider_name, api_key)
         sandbox = create_sandbox(sandbox_config)
+        llm = create_provider(provider_name, api_key)
 
         try:
             await sandbox.start(repo_path=task.repo_path, config=sandbox_config)

@@ -18,6 +18,11 @@ _PROVIDERS: dict[str, type[LLMProvider]] = {
 }
 
 
+def provider_names() -> tuple[str, ...]:
+    """Return the names supported by the provider factory."""
+    return tuple(sorted(_PROVIDERS))
+
+
 def create_provider(
     name: str,
     api_key: str,
@@ -40,7 +45,7 @@ def create_provider(
     """
     provider_cls = _PROVIDERS.get(name)
     if provider_cls is None:
-        available = ", ".join(sorted(_PROVIDERS))
+        available = ", ".join(provider_names())
         msg = f"Unknown LLM provider '{name}'. Available: {available}"
         raise ValueError(msg)
 

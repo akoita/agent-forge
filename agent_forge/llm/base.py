@@ -95,6 +95,9 @@ class LLMConfig:
 class LLMProvider(ABC):
     """Abstract base class for all LLM provider adapters."""
 
+    async def close(self) -> None:  # noqa: B027 - stateless adapters need no cleanup
+        """Release any resources held by the provider."""
+
     @abstractmethod
     async def complete(
         self,

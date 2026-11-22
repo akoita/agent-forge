@@ -1452,17 +1452,5 @@ clean:                     ## Clean up containers and build artifacts
 
 ## 12. Roadmap
 
-The roadmap has moved. The canonical roadmap now lives in
-[`docs/roadmap.md`](roadmap.md), and its direction is set by
-[ADR-002: Harness-First Strategic Reset](adr/002-harness-first-reset.md).
-
-The former Phase 1–7 checklist that occupied this section is **superseded**.
-Phases 1 and 2 were in fact delivered (the unchecked boxes were stale). The
-remaining phases were re-scoped into the harness-first milestones (M0–M6) in
-[`docs/roadmap.md`](roadmap.md) or moved to the `agent-forge-cloud` backlog
-(umbrella issue [#142](https://github.com/akoita/agent-forge/issues/142)) — web
-dashboard, multi-tenant RBAC/billing/quotas, Kubernetes scheduling, warm-pool
-scaling, and the tool marketplace among them.
-
-See [`docs/roadmap.md`](roadmap.md) for current milestones, exit criteria, and
-tracking issues.
+The [canonical roadmap](roadmap.md) lists the current local and hosted milestones.
+The [delivery plan](delivery-plan.md) records their issue order and exit criteria.
