@@ -338,6 +338,28 @@ async def _check_cancellation(backend: str, *, image: str) -> QualificationCheck
             await sandbox.stop()
 
 
+async def _wait_for_container_removal(
+    container_id: str,
+    *,
+    timeout_seconds: float = 5.0,
+) -> tuple[bool, str | None]:
+    """Wait briefly for Docker ``--rm`` auto-removal after ``stop()`` returns."""
+    client = docker.from_env()
+    deadline = time.monotonic() + timeout_seconds
+    last_status: str | None = None
+    while True:
+        try:
+            container = await asyncio.to_thread(client.containers.get, container_id)
+        except NotFound:
+            return True, None
+        last_status = str(getattr(container, "status", "unknown"))
+        if last_status == "running":
+            return False, last_status
+        if time.monotonic() >= deadline:
+            return False, last_status
+        await asyncio.sleep(0.1)
+
+
 async def _check_cleanup(backend: str, *, image: str) -> QualificationCheck:
     """Verify stop() leaves no live sandbox container or tracked child processes."""
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -350,23 +372,22 @@ async def _check_cleanup(backend: str, *, image: str) -> QualificationCheck:
         alive_after = await sandbox.is_alive()
 
         container_gone = True
+        last_status: str | None = None
         if backend == "docker" and container_id:
-            client = docker.from_env()
-            try:
-                await asyncio.to_thread(client.containers.get, container_id)
-                container_gone = False
-            except NotFound:
-                container_gone = True
+            container_gone, last_status = await _wait_for_container_removal(container_id)
 
         active_procs = len(getattr(sandbox, "_active_processes", ()))
         ok = (not alive_after) and container_gone and active_procs == 0
+        details: dict[str, Any] = {
+            "alive_after_stop": alive_after,
+            "container_removed": container_gone,
+            "active_processes": active_procs,
+        }
+        if last_status is not None:
+            details["last_container_status"] = last_status
         return QualificationCheck(
             name="cleanup",
             passed=ok,
             summary="stop() terminated sandbox with zero leaked containers or processes",
-            details={
-                "alive_after_stop": alive_after,
-                "container_removed": container_gone,
-                "active_processes": active_procs,
-            },
+            details=details,
         )
