@@ -53,12 +53,20 @@ class BaseHostedServiceClient(Generic[ReportT]):
         if self._owns_client:
             await self._client.aclose()
 
-    async def submit_run(self, request: RunRequest) -> RunStatus:
+    async def submit_run(
+        self,
+        request: RunRequest,
+        *,
+        idempotency_key: str | None = None,
+    ) -> RunStatus:
         """Submit a hosted run request."""
+        headers = self._headers()
+        if idempotency_key is not None:
+            headers["Idempotency-Key"] = idempotency_key
         response = await self._client.post(
             "/v1/runs",
             json=request.model_dump(mode="json"),
-            headers=self._headers(),
+            headers=headers,
         )
         return self._parse_response(response, RunStatus)
 

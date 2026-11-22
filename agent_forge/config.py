@@ -83,6 +83,8 @@ class ServiceSettings(BaseModel):
     clients_path: str = str(USER_CONFIG_DIR / "service" / "clients.toml")
     allow_local_path_sources: bool = False
     max_source_size_bytes: int = 50_000_000
+    lease_ttl_seconds: float = Field(default=300.0, gt=0)
+    recovery_interval_seconds: float = Field(default=5.0, gt=0)
 
 
 class ProviderSettings(BaseModel):

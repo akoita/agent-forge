@@ -285,18 +285,38 @@ api_key_header = "X-Agent-Forge-API-Key"
 clients_path = "~/.agent-forge/service/clients.toml"
 allow_local_path_sources = false
 max_source_size_bytes = 50_000_000
+lease_ttl_seconds = 300.0
+recovery_interval_seconds = 5.0
 ```
 
 Relevant settings:
 
-- `service.root_dir`: hosted data root for extracted sources and audit logs
+- `service.root_dir`: hosted data root for extracted sources, SQLite run state (`runs.db`), and audit logs
 - `service.healthcheck_path`: readiness endpoint used by load balancers and compose health checks
 - `service.auth_enabled`: turns API-key enforcement on for all `/v1/runs` endpoints
 - `service.clients_path`: TOML registry describing external clients and their policy limits
 - `service.allow_local_path_sources`: global safety switch for colocated `local_path` submissions
 - `service.max_source_size_bytes`: upper bound on accepted source material size
+- `service.lease_ttl_seconds`: lease duration for active worker execution before recovery can reclaim a stalled run (`AGENT_FORGE_SERVICE_LEASE_TTL_SECONDS`)
+- `service.recovery_interval_seconds`: background sweep interval for recovering undispatched or lease-expired runs (`AGENT_FORGE_SERVICE_RECOVERY_INTERVAL_SECONDS`)
 - Authentication is enforced before request validation and run lookup on `/v1/runs*`
   so anonymous callers receive `401` instead of schema or existence errors.
+
+### Run Persistence, Idempotency & Recovery
+
+Hosted runs persist ownership, status, idempotency keys, worker leases with
+fencing tokens, and authoritative report/error payloads in
+`<service.root_dir>/runs.db` (SQLite WAL mode):
+
+- Callers may supply `Idempotency-Key` as a request header or
+  `RunRequest.idempotency_key`. Replaying an identical request for the same
+  client returns the original run without re-enqueueing or consuming quota;
+  reusing a key with a different payload returns `409 Conflict`.
+- On startup and at `service.recovery_interval_seconds`, the service recovers
+  runs whose initial dispatch failed (`accepted`/`pending`), runs left queued
+  across a restart, and `running` runs whose lease expired.
+- Stale workers holding an expired lease token are fenced out at finalization so
+  only the current lease owner writes the authoritative result.
 
 ### Client Registry
 

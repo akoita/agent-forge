@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import hashlib
 import hmac
 import importlib
 import json
+import logging
 import os
 import shutil
 import tarfile
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, cast
@@ -57,6 +61,12 @@ from agent_forge.service.models import (
     TargetRef,
 )
 from agent_forge.service.security import ServiceClientPolicy, load_client_registry
+from agent_forge.service.store import (
+    TERMINAL_RUN_STATUSES,
+    HostedRunStore,
+    IdempotencyConflictError,
+    PersistedRun,
+)
 from agent_forge.tools import create_default_registry
 
 if TYPE_CHECKING:
@@ -64,6 +74,7 @@ if TYPE_CHECKING:
 
     from agent_forge.orchestration.event_stream import StreamEvent
 
+_logger = logging.getLogger(__name__)
 _REPORT_RELATIVE_PATH = Path(".agent-forge/report.json")
 
 _REPORT_REQUIRED_FIELDS = {"schema_version", "run_id", "summary"}
@@ -79,17 +90,21 @@ _REPORT_RECOVERY_PROMPT = (
 
 @dataclass
 class HostedRunRecord:
-    """Persistent in-memory record for a hosted run."""
+    """Record for a hosted run mirrored from durable persistence."""
 
     run_id: str
     request: RunRequest
     workspace_dir: Path
     created_at: datetime
+    owner_service_id: str | None = None
+    idempotency_key: str | None = None
+    status: str = "accepted"
     request_origin: str | None = None
     user_agent: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
     error: RunError | None = None
+    report_json: str | None = None
 
     @property
     def report_path(self) -> Path:
@@ -124,6 +139,9 @@ class HostedRunService:
         self._queue = InMemoryQueue()
         self._event_bus = EventBus()
         self._event_sink = JournalEventSink(base_dir=self._runs_dir)
+        self._store = HostedRunStore(self._service_root / "runs.db")
+        self._store_initialized = False
+        self._worker_id = f"{instance_id or 'service'}-{uuid.uuid4().hex[:8]}"
         self._records: dict[str, HostedRunRecord] = {}
         self._client_policies: dict[str, ServiceClientPolicy] = {}
         self._profile_registry: dict[str, AgentProfile] = {}
@@ -135,10 +153,13 @@ class HostedRunService:
             task_runner=self._make_task_runner(),
             poll_interval=0.05,
         )
+        self._recovery_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
-        """Start the background worker for hosted runs."""
+        """Start persistence hydration, dispatch recovery, and the background worker."""
         self._service_root.mkdir(parents=True, exist_ok=True)
+        self._ensure_store_initialized()
+        self._hydrate_records_from_store()
         clients_path = Path(self._config.service.clients_path).expanduser()
         self._client_policies = load_client_registry(clients_path)
         # Load core + plugin profiles (auto-discover from plugins/ directory)
@@ -157,10 +178,17 @@ class HostedRunService:
                 raise ValueError(msg)
             self._resolved_persona = self._profile_registry[self._persona_id]
         await self._event_sink.attach(self._event_bus)
+        await self.recover_runs(reclaim_all_running=True)
         await self._worker.start()
+        self._recovery_task = asyncio.create_task(self._recovery_loop())
 
     async def stop(self) -> None:
-        """Stop the background worker for hosted runs."""
+        """Stop background recovery and worker loops cleanly."""
+        if self._recovery_task is not None:
+            self._recovery_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._recovery_task
+            self._recovery_task = None
         try:
             await self._worker.stop()
         finally:
@@ -174,7 +202,8 @@ class HostedRunService:
         request_origin: str | None = None,
         user_agent: str | None = None,
     ) -> RunStatus:
-        """Accept a new hosted run request and enqueue it."""
+        """Accept a new hosted run request, persist it durably, and enqueue dispatch."""
+        self._ensure_store_initialized()
         client_service_id, client_policy = self._authenticate_headers(
             headers,
             request_origin=request_origin,
@@ -188,6 +217,19 @@ class HostedRunService:
             user_agent=user_agent,
         )
         self._validate_request(request)
+
+        owner_service_id = client_service_id or request.client.service_id
+        owner_key = owner_service_id or request.client.name
+        idempotency_key = self._resolve_idempotency_key(request, headers)
+        request_fingerprint = self._request_fingerprint(request)
+        if idempotency_key is not None:
+            existing = self._store.get_by_idempotency_key(owner_key, idempotency_key)
+            if existing is not None:
+                if existing.request_fingerprint != request_fingerprint:
+                    self._raise_idempotency_conflict()
+                existing_record = self._hydrate_record(existing)
+                return await self._status_for_record(existing_record)
+
         self._enforce_quotas(
             client_service_id,
             request=request,
@@ -203,18 +245,35 @@ class HostedRunService:
             max_tokens_per_run=self._config.agent.max_tokens_per_run,
             temperature=self._config.agent.temperature,
         )
-        record = HostedRunRecord(
-            run_id=run_id,
-            request=request,
-            workspace_dir=workspace_dir,
-            created_at=datetime.now(UTC),
-            request_origin=request_origin,
-            user_agent=user_agent,
-        )
-        self._records[run_id] = record
+        created_at = datetime.now(UTC)
+        try:
+            persisted, created = self._store.create_or_get(
+                run_id=run_id,
+                owner_service_id=owner_service_id,
+                owner_key=owner_key,
+                idempotency_key=idempotency_key,
+                request_fingerprint=request_fingerprint,
+                request_json=request.model_dump_json(),
+                workspace_dir=workspace_dir,
+                task_prompt=prompt,
+                agent_config_json=self._serialize_agent_config(agent_config),
+                request_origin=request_origin,
+                user_agent=user_agent,
+                created_at=created_at,
+            )
+        except IdempotencyConflictError:
+            shutil.rmtree(workspace_dir, ignore_errors=True)
+            self._raise_idempotency_conflict()
+
+        if not created:
+            shutil.rmtree(workspace_dir, ignore_errors=True)
+            existing_record = self._hydrate_record(persisted)
+            return await self._status_for_record(existing_record)
+
+        record = self._hydrate_record(persisted)
         self._append_access_event(
             event="run.accepted",
-            client_service_id=request.client.service_id,
+            client_service_id=owner_service_id,
             run_id=run_id,
             request_id=request.client.request_id,
             profile_id=request.profile.id,
@@ -223,14 +282,13 @@ class HostedRunService:
             request_origin=request_origin,
             user_agent=user_agent,
         )
-        await self._queue.enqueue(
-            Task(
-                id=run_id,
-                task_description=prompt,
-                repo_path=str(workspace_dir),
-                config=agent_config,
-            )
+        task = Task(
+            id=run_id,
+            task_description=prompt,
+            repo_path=str(workspace_dir),
+            config=agent_config,
         )
+        await self._dispatch_new_task(record, task)
         return self._build_status(record, status="accepted")
 
     async def get_status(
@@ -247,17 +305,14 @@ class HostedRunService:
             request_origin=request_origin,
             user_agent=user_agent,
         )
-        record = self._records.get(run_id)
-        if record is None:
-            raise KeyError(run_id)
+        record = self._require_record(run_id)
         self._authorize_run_access(
             record,
             client_service_id=client_service_id,
             request_origin=request_origin,
             user_agent=user_agent,
         )
-        queue_status = await self._queue.get_status(run_id)
-        return self._build_status(record, status=self._map_status(queue_status))
+        return await self._status_for_record(record)
 
     def get_report(
         self,
@@ -280,11 +335,14 @@ class HostedRunService:
             request_origin=request_origin,
             user_agent=user_agent,
         )
-        if record.error is not None:
+        if record.error is not None or record.status == "failed":
             raise RuntimeError("run_failed")
-        if not record.report_path.exists():
+        if record.report_json is not None:
+            payload = json.loads(record.report_json)
+        elif record.report_path.exists():
+            payload = json.loads(record.report_path.read_text(encoding="utf-8"))
+        else:
             raise RuntimeError("run_not_completed")
-        payload = json.loads(record.report_path.read_text(encoding="utf-8"))
         if "schema_version" not in payload:
             payload["schema_version"] = record.request.profile.report_schema
         if "run_id" not in payload:
@@ -580,7 +638,8 @@ class HostedRunService:
     ) -> None:
         if client_service_id is None:
             return
-        if record.request.client.service_id == client_service_id:
+        owner = record.owner_service_id or record.request.client.service_id
+        if owner == client_service_id:
             return
         self._append_access_event(
             event="run.denied",
@@ -622,16 +681,7 @@ class HostedRunService:
                 user_agent=user_agent,
             )
 
-        now = datetime.now(UTC)
-        active_runs = 0
-        daily_runs = 0
-        for record in self._records.values():
-            if record.request.client.service_id != client_service_id:
-                continue
-            if record.completed_at is None:
-                active_runs += 1
-            if (now - record.created_at).total_seconds() <= 86_400:
-                daily_runs += 1
+        active_runs, daily_runs = self._owner_usage_counts(client_service_id)
 
         if active_runs >= policy.max_active_runs:
             self._append_access_event(
@@ -672,6 +722,31 @@ class HostedRunService:
                 request_origin=request_origin,
                 user_agent=user_agent,
             )
+
+    def _owner_usage_counts(self, client_service_id: str) -> tuple[int, int]:
+        now = datetime.now(UTC)
+        active_runs = 0
+        daily_runs = 0
+        seen_ids: set[str] = set()
+        for record in self._records.values():
+            owner = record.owner_service_id or record.request.client.service_id
+            if owner != client_service_id:
+                continue
+            seen_ids.add(record.run_id)
+            is_active = record.completed_at is None and record.status not in TERMINAL_RUN_STATUSES
+            active_runs += int(is_active)
+            daily_runs += int((now - record.created_at).total_seconds() <= 86_400)
+        if not self._store_initialized:
+            return active_runs, daily_runs
+        for persisted in self._store.list_all():
+            if persisted.run_id in seen_ids or persisted.owner_service_id != client_service_id:
+                continue
+            is_active = (
+                persisted.completed_at is None and persisted.status not in TERMINAL_RUN_STATUSES
+            )
+            active_runs += int(is_active)
+            daily_runs += int((now - persisted.created_at).total_seconds() <= 86_400)
+        return active_runs, daily_runs
 
     def _source_size_bytes(self, source_uri: str) -> int:
         parsed = urlparse(source_uri)
@@ -735,7 +810,7 @@ class HostedRunService:
         )
 
     def _require_record(self, run_id: str) -> HostedRunRecord:
-        record = self._records.get(run_id)
+        record = self._sync_record_from_store(run_id)
         if record is None:
             raise KeyError(run_id)
         return record
@@ -989,91 +1064,71 @@ class HostedRunService:
 
     def _make_task_runner(self) -> Any:
         async def _runner(task: Task) -> None:
-            record = self._records[task.id]
-            record.started_at = datetime.now(UTC)
-
-            resolved_profile = self._profile_registry.get(record.request.profile.id)
-            prompt_scope = resolved_profile.prompt_scope if resolved_profile else None
-
-            provider_name = (
-                resolved_profile.llm_provider
-                if resolved_profile and resolved_profile.llm_provider
-                else self._config.agent.default_provider
+            self._ensure_store_initialized()
+            record = self._require_record(task.id)
+            self._ensure_record_persisted(record, task)
+            lease = self._store.try_claim_lease(
+                task.id,
+                worker_id=self._worker_id,
+                lease_ttl_seconds=self._config.service.lease_ttl_seconds,
             )
-            provider_cfg = self._config.providers.get(provider_name)
-            if provider_cfg is None or provider_name not in provider_names():
-                record.error = RunError(
-                    code="invalid_request",
-                    message=f"unknown provider: {provider_name}",
-                    retryable=False,
+            if lease is None:
+                self._append_access_event(
+                    event="run.duplicate_delivery_ignored",
+                    client_service_id=record.owner_service_id or record.request.client.service_id,
+                    run_id=record.run_id,
+                    request_id=record.request.client.request_id,
+                    profile_id=record.request.profile.id,
+                    submitted_at=record.created_at,
+                    final_status=record.status,
+                    reason="active lease held or run already finalized",
+                    request_origin=record.request_origin,
+                    user_agent=record.user_agent,
                 )
-                raise RuntimeError(record.error.message)
-            api_key = os.environ.get(provider_cfg.api_key_env, "")
-            if not api_key:
-                record.error = RunError(
-                    code="unauthorized",
-                    message=f"missing provider API key env: {provider_cfg.api_key_env}",
-                    retryable=False,
+                return
+
+            record.status = "running"
+            if record.started_at is None:
+                record.started_at = datetime.now(UTC)
+
+            heartbeat_task = asyncio.create_task(self._lease_heartbeat(task.id, lease.lease_token))
+            try:
+                resolved_profile = self._profile_registry.get(record.request.profile.id)
+                prompt_scope = resolved_profile.prompt_scope if resolved_profile else None
+                provider_name, api_key = self._resolve_provider_credentials(
+                    record,
+                    resolved_profile,
                 )
-                raise RuntimeError(record.error.message)
 
-            model_name = (
-                resolved_profile.llm_model
-                if resolved_profile and resolved_profile.llm_model
-                else task.config.model
-            )
-            agent_config = AgentConfig(
-                model=model_name,
-                max_iterations=task.config.max_iterations,
-                max_tokens_per_run=task.config.max_tokens_per_run,
-                temperature=task.config.temperature,
-                profile_id=resolved_profile.id if resolved_profile else None,
-            )
+                model_name = (
+                    resolved_profile.llm_model
+                    if resolved_profile and resolved_profile.llm_model
+                    else task.config.model
+                )
+                agent_config = AgentConfig(
+                    model=model_name,
+                    max_iterations=task.config.max_iterations,
+                    max_tokens_per_run=task.config.max_tokens_per_run,
+                    temperature=task.config.temperature,
+                    profile_id=resolved_profile.id if resolved_profile else None,
+                )
 
-            async def _post_run_hook(
-                agent_run: AgentRun,
-                llm: Any,
-                tools: Any,
-                sandbox: Any,
-            ) -> None:
-                if not record.report_path.exists():
-                    self._append_access_event(
-                        event="run.report_recovery_started",
-                        client_service_id=record.request.client.service_id,
-                        run_id=record.run_id,
-                        request_id=record.request.client.request_id,
-                        profile_id=record.request.profile.id,
-                        submitted_at=record.created_at,
-                        final_status="running",
-                        reason="report missing after primary run; attempting recovery",
-                        request_origin=record.request_origin,
-                        user_agent=record.user_agent,
-                    )
-                    recovery_config = AgentConfig(
-                        model=agent_config.model,
-                        max_iterations=1,
-                        max_tokens_per_run=agent_config.max_tokens_per_run,
-                        temperature=agent_config.temperature,
-                    )
-                    recovery_run = AgentRun(
-                        task=_REPORT_RECOVERY_PROMPT,
-                        repo_path=task.repo_path,
-                        config=recovery_config,
-                        id=f"{task.id}_recovery",
-                    )
-                    # Carry forward conversation history so the model has context
-                    recovery_run.messages = list(agent_run.messages)
-                    await react_loop(
-                        recovery_run,
+                async def _post_run_hook(
+                    agent_run: AgentRun,
+                    llm: Any,
+                    tools: Any,
+                    sandbox: Any,
+                ) -> None:
+                    await self._finalize_run_report(
+                        record,
+                        task,
+                        agent_run,
+                        agent_config,
                         llm,
                         tools,
                         sandbox,
-                        event_bus=self._event_bus,
                     )
 
-                self._validate_report_artifact(record)
-
-            try:
                 await run_agent_task(
                     task.task_description,
                     task.repo_path,
@@ -1092,41 +1147,406 @@ class HostedRunService:
                     provider_factory=create_provider,
                     react_loop_fn=react_loop,
                 )
-                record.completed_at = datetime.now(UTC)
-                self._append_access_event(
-                    event="run.completed",
-                    client_service_id=record.request.client.service_id,
-                    run_id=record.run_id,
-                    request_id=record.request.client.request_id,
-                    profile_id=record.request.profile.id,
-                    submitted_at=record.created_at,
-                    final_status="completed",
-                    request_origin=record.request_origin,
-                    user_agent=record.user_agent,
+                completed_at = datetime.now(UTC)
+                report_json = record.report_path.read_text(encoding="utf-8")
+                finalized = self._store.finalize_run(
+                    task.id,
+                    lease_token=lease.lease_token,
+                    status="completed",
+                    completed_at=completed_at,
+                    report_json=report_json,
                 )
-            except Exception as exc:
-                if record.error is None:
-                    record.error = RunError(
-                        code="sandbox_execution_failed",
-                        message=str(exc),
-                        retryable=False,
+                if finalized:
+                    record.status = "completed"
+                    record.completed_at = completed_at
+                    record.report_json = report_json
+                    self._append_access_event(
+                        event="run.completed",
+                        client_service_id=record.owner_service_id
+                        or record.request.client.service_id,
+                        run_id=record.run_id,
+                        request_id=record.request.client.request_id,
+                        profile_id=record.request.profile.id,
+                        submitted_at=record.created_at,
+                        final_status="completed",
+                        request_origin=record.request_origin,
+                        user_agent=record.user_agent,
                     )
-                record.completed_at = datetime.now(UTC)
-                self._append_access_event(
-                    event="run.failed",
-                    client_service_id=record.request.client.service_id,
-                    run_id=record.run_id,
-                    request_id=record.request.client.request_id,
-                    profile_id=record.request.profile.id,
-                    submitted_at=record.created_at,
-                    final_status="failed",
-                    reason=record.error.message,
-                    request_origin=record.request_origin,
-                    user_agent=record.user_agent,
+                else:
+                    self._handle_stale_lease(record)
+            except Exception as exc:
+                run_error = record.error or RunError(
+                    code="sandbox_execution_failed",
+                    message=str(exc),
+                    retryable=False,
                 )
+                completed_at = datetime.now(UTC)
+                finalized = self._store.finalize_run(
+                    task.id,
+                    lease_token=lease.lease_token,
+                    status="failed",
+                    completed_at=completed_at,
+                    error_json=run_error.model_dump_json(),
+                )
+                if finalized:
+                    record.error = run_error
+                    record.status = "failed"
+                    record.completed_at = completed_at
+                    self._append_access_event(
+                        event="run.failed",
+                        client_service_id=record.owner_service_id
+                        or record.request.client.service_id,
+                        run_id=record.run_id,
+                        request_id=record.request.client.request_id,
+                        profile_id=record.request.profile.id,
+                        submitted_at=record.created_at,
+                        final_status="failed",
+                        reason=run_error.message,
+                        request_origin=record.request_origin,
+                        user_agent=record.user_agent,
+                    )
+                else:
+                    self._handle_stale_lease(record)
                 raise
+            finally:
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
 
         return _runner
+
+    def _ensure_store_initialized(self) -> None:
+        if not self._store_initialized:
+            self._store.initialize()
+            self._store_initialized = True
+
+    def _hydrate_record(self, persisted: PersistedRun) -> HostedRunRecord:
+        existing = self._records.get(persisted.run_id)
+        request = RunRequest.model_validate_json(persisted.request_json)
+        error = RunError.model_validate_json(persisted.error_json) if persisted.error_json else None
+        if existing is None:
+            record = HostedRunRecord(
+                run_id=persisted.run_id,
+                request=request,
+                workspace_dir=persisted.workspace_dir,
+                created_at=persisted.created_at,
+                owner_service_id=persisted.owner_service_id,
+                idempotency_key=persisted.idempotency_key,
+                status=persisted.status,
+                request_origin=persisted.request_origin,
+                user_agent=persisted.user_agent,
+                started_at=persisted.started_at,
+                completed_at=persisted.completed_at,
+                error=error,
+                report_json=persisted.report_json,
+            )
+            self._records[persisted.run_id] = record
+            return record
+
+        existing.workspace_dir = persisted.workspace_dir
+        existing.owner_service_id = persisted.owner_service_id
+        existing.idempotency_key = persisted.idempotency_key
+        existing.status = persisted.status
+        existing.started_at = persisted.started_at or existing.started_at
+        existing.completed_at = persisted.completed_at or existing.completed_at
+        if error is not None:
+            existing.error = error
+        if persisted.report_json is not None:
+            existing.report_json = persisted.report_json
+        return existing
+
+    def _hydrate_records_from_store(self) -> None:
+        for persisted in self._store.list_all():
+            self._hydrate_record(persisted)
+
+    def _sync_record_from_store(self, run_id: str) -> HostedRunRecord | None:
+        if self._store_initialized:
+            persisted = self._store.get(run_id)
+            if persisted is not None:
+                return self._hydrate_record(persisted)
+        return self._records.get(run_id)
+
+    def _serialize_agent_config(self, config: AgentConfig) -> str:
+        return json.dumps(asdict(config))
+
+    def _deserialize_agent_config(self, raw: str) -> AgentConfig:
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            msg = "persisted agent_config must be a JSON object"
+            raise ValueError(msg)
+        return AgentConfig(**payload)
+
+    def _ensure_record_persisted(self, record: HostedRunRecord, task: Task) -> None:
+        if self._store.get(record.run_id) is not None:
+            return
+        agent_config = (
+            task.config
+            if isinstance(task.config, AgentConfig)
+            else AgentConfig(model=str(task.config.model))
+        )
+        owner_service_id = record.owner_service_id or record.request.client.service_id
+        owner_key = owner_service_id or record.request.client.name
+        self._store.create_or_get(
+            run_id=record.run_id,
+            owner_service_id=owner_service_id,
+            owner_key=owner_key,
+            idempotency_key=record.idempotency_key,
+            request_fingerprint=self._request_fingerprint(record.request),
+            request_json=record.request.model_dump_json(),
+            workspace_dir=record.workspace_dir,
+            task_prompt=task.task_description,
+            agent_config_json=self._serialize_agent_config(agent_config),
+            request_origin=record.request_origin,
+            user_agent=record.user_agent,
+            created_at=record.created_at,
+        )
+
+    def _resolve_idempotency_key(
+        self,
+        request: RunRequest,
+        headers: dict[str, str] | None,
+    ) -> str | None:
+        header_key: str | None = None
+        if headers:
+            lowered = {k.lower(): v for k, v in headers.items()}
+            raw_header = lowered.get("idempotency-key")
+            if raw_header is not None:
+                header_key = raw_header.strip()
+                if not header_key:
+                    self._deny(
+                        status_code=400,
+                        code="invalid_request",
+                        message="Idempotency-Key header must not be empty",
+                        request_origin=None,
+                        user_agent=None,
+                    )
+        body_key = request.idempotency_key.strip() if request.idempotency_key is not None else None
+        if body_key is not None and not body_key:
+            self._deny(
+                status_code=400,
+                code="invalid_request",
+                message="idempotency_key must not be empty",
+                request_origin=None,
+                user_agent=None,
+            )
+        if header_key is not None and body_key is not None and header_key != body_key:
+            self._deny(
+                status_code=400,
+                code="invalid_request",
+                message="conflicting Idempotency-Key header and request.idempotency_key",
+                request_origin=None,
+                user_agent=None,
+            )
+        return header_key or body_key
+
+    def _request_fingerprint(self, request: RunRequest) -> str:
+        payload = request.model_dump(mode="json", exclude={"idempotency_key"})
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def _raise_idempotency_conflict(self) -> NoReturn:
+        raise HTTPException(
+            status_code=409,
+            detail=ErrorResponse(
+                error=RunError(
+                    code="invalid_request",
+                    message="idempotency key already used with a different request payload",
+                    retryable=False,
+                )
+            ).model_dump(),
+        )
+
+    async def _dispatch_new_task(self, record: HostedRunRecord, task: Task) -> None:
+        try:
+            await self._queue.enqueue(task)
+        except Exception as exc:  # noqa: BLE001 — preserve accepted record for recovery loop
+            self._append_access_event(
+                event="run.dispatch_failed",
+                client_service_id=record.owner_service_id or record.request.client.service_id,
+                run_id=record.run_id,
+                request_id=record.request.client.request_id,
+                profile_id=record.request.profile.id,
+                submitted_at=record.created_at,
+                final_status="accepted",
+                reason=str(exc),
+                request_origin=record.request_origin,
+                user_agent=record.user_agent,
+            )
+            return
+        self._store.mark_dispatched(record.run_id)
+        record.status = "queued"
+
+    async def _status_for_record(self, record: HostedRunRecord) -> RunStatus:
+        if record.status in TERMINAL_RUN_STATUSES or record.status == "running":
+            return self._build_status(record, status=record.status)
+        try:
+            queue_status = await self._queue.get_status(record.run_id)
+            mapped = self._map_status(queue_status)
+        except KeyError:
+            mapped = record.status
+        return self._build_status(record, status=mapped)
+
+    def _resolve_provider_credentials(
+        self,
+        record: HostedRunRecord,
+        resolved_profile: AgentProfile | None,
+    ) -> tuple[str, str]:
+        provider_name = (
+            resolved_profile.llm_provider
+            if resolved_profile and resolved_profile.llm_provider
+            else self._config.agent.default_provider
+        )
+        provider_cfg = self._config.providers.get(provider_name)
+        if provider_cfg is None or provider_name not in provider_names():
+            record.error = RunError(
+                code="invalid_request",
+                message=f"unknown provider: {provider_name}",
+                retryable=False,
+            )
+            raise RuntimeError(record.error.message)
+        api_key = os.environ.get(provider_cfg.api_key_env, "")
+        if not api_key:
+            record.error = RunError(
+                code="unauthorized",
+                message=f"missing provider API key env: {provider_cfg.api_key_env}",
+                retryable=False,
+            )
+            raise RuntimeError(record.error.message)
+        return provider_name, api_key
+
+    async def _finalize_run_report(
+        self,
+        record: HostedRunRecord,
+        task: Task,
+        agent_run: AgentRun,
+        agent_config: AgentConfig,
+        llm: Any,
+        tools: Any,
+        sandbox: Any,
+    ) -> None:
+        if not record.report_path.exists():
+            self._append_access_event(
+                event="run.report_recovery_started",
+                client_service_id=record.owner_service_id or record.request.client.service_id,
+                run_id=record.run_id,
+                request_id=record.request.client.request_id,
+                profile_id=record.request.profile.id,
+                submitted_at=record.created_at,
+                final_status="running",
+                reason="report missing after primary run; attempting recovery",
+                request_origin=record.request_origin,
+                user_agent=record.user_agent,
+            )
+            recovery_config = AgentConfig(
+                model=agent_config.model,
+                max_iterations=1,
+                max_tokens_per_run=agent_config.max_tokens_per_run,
+                temperature=agent_config.temperature,
+            )
+            recovery_run = AgentRun(
+                task=_REPORT_RECOVERY_PROMPT,
+                repo_path=task.repo_path,
+                config=recovery_config,
+                id=f"{task.id}_recovery",
+            )
+            recovery_run.messages = list(agent_run.messages)
+            await react_loop(
+                recovery_run,
+                llm,
+                tools,
+                sandbox,
+                event_bus=self._event_bus,
+            )
+        self._validate_report_artifact(record)
+
+    def _handle_stale_lease(self, record: HostedRunRecord) -> None:
+        self._sync_record_from_store(record.run_id)
+        self._append_access_event(
+            event="run.stale_lease_ignored",
+            client_service_id=record.owner_service_id or record.request.client.service_id,
+            run_id=record.run_id,
+            request_id=record.request.client.request_id,
+            profile_id=record.request.profile.id,
+            submitted_at=record.created_at,
+            final_status=record.status,
+            reason="fencing token rejected after lease expiry or takeover",
+            request_origin=record.request_origin,
+            user_agent=record.user_agent,
+        )
+
+    async def _lease_heartbeat(self, run_id: str, lease_token: str) -> None:
+        ttl = self._config.service.lease_ttl_seconds
+        interval = max(0.05, min(ttl / 2.0, 30.0))
+        while True:
+            await asyncio.sleep(interval)
+            if not self._store.renew_lease(
+                run_id,
+                lease_token=lease_token,
+                lease_ttl_seconds=ttl,
+            ):
+                return
+
+    async def recover_runs(
+        self,
+        *,
+        now: datetime | None = None,
+        reclaim_all_running: bool = False,
+    ) -> list[str]:
+        """Recover pending dispatches and expired leases into the worker queue."""
+        self._ensure_store_initialized()
+        check_time = now.astimezone(UTC) if now is not None else datetime.now(UTC)
+        recoverable = self._store.list_recoverable(
+            now=check_time,
+            reclaim_all_running=reclaim_all_running,
+        )
+        recovered: list[str] = []
+        for persisted in recoverable:
+            is_expired_running = persisted.status == "running" and (
+                reclaim_all_running
+                or persisted.lease_expires_at is None
+                or persisted.lease_expires_at <= check_time
+            )
+            if not is_expired_running and await self._is_queued_or_processing(persisted.run_id):
+                continue
+
+            if not self._store.requeue_for_recovery(
+                persisted.run_id,
+                expected_attempt=persisted.attempt,
+            ):
+                continue
+
+            record = self._hydrate_record(persisted)
+            record.status = "queued"
+            if not record.workspace_dir.exists():
+                record.workspace_dir = self._materialize_source(record.run_id, record.request)
+            agent_config = self._deserialize_agent_config(persisted.agent_config_json)
+            task = Task(
+                id=record.run_id,
+                task_description=persisted.task_prompt,
+                repo_path=str(record.workspace_dir),
+                config=agent_config,
+            )
+            try:
+                await self._queue.enqueue(task)
+            except Exception as exc:  # noqa: BLE001 — keep persisted run recoverable
+                _logger.warning("Failed to recover run %s: %s", record.run_id, exc)
+                continue
+            recovered.append(record.run_id)
+        return recovered
+
+    async def _is_queued_or_processing(self, run_id: str) -> bool:
+        try:
+            queue_status = await self._queue.get_status(run_id)
+        except KeyError:
+            return False
+        return queue_status in (TaskStatus.QUEUED, TaskStatus.PROCESSING)
+
+    async def _recovery_loop(self) -> None:
+        interval = self._config.service.recovery_interval_seconds
+        while True:
+            await asyncio.sleep(interval)
+            with contextlib.suppress(Exception):
+                await self.recover_runs()
 
     def _build_status(self, record: HostedRunRecord, *, status: str) -> RunStatus:
         return RunStatus(
