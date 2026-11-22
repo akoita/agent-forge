@@ -32,6 +32,7 @@ except ImportError as exc:
     raise ImportError(msg) from exc
 
 from agent_forge import __version__
+from agent_forge.agent.budget import CancellationToken
 from agent_forge.agent.core import react_loop
 from agent_forge.agent.models import AgentConfig, AgentRun
 from agent_forge.agent.runner import run_agent_task
@@ -73,6 +74,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from agent_forge.orchestration.event_stream import StreamEvent
+    from agent_forge.sandbox.base import Sandbox
 
 _logger = logging.getLogger(__name__)
 _REPORT_RELATIVE_PATH = Path(".agent-forge/report.json")
@@ -143,6 +145,8 @@ class HostedRunService:
         self._store_initialized = False
         self._worker_id = f"{instance_id or 'service'}-{uuid.uuid4().hex[:8]}"
         self._records: dict[str, HostedRunRecord] = {}
+        self._cancel_tokens: dict[str, CancellationToken] = {}
+        self._active_sandboxes: dict[str, Sandbox] = {}
         self._client_policies: dict[str, ServiceClientPolicy] = {}
         self._profile_registry: dict[str, AgentProfile] = {}
         self._resolved_persona: AgentProfile | None = None
@@ -314,6 +318,83 @@ class HostedRunService:
         )
         return await self._status_for_record(record)
 
+    async def cancel_run(
+        self,
+        run_id: str,
+        *,
+        headers: dict[str, str] | None = None,
+        request_origin: str | None = None,
+        user_agent: str | None = None,
+    ) -> RunStatus:
+        """Cancel a queued or active run, stop its sandbox, and clean up workspace."""
+        client_service_id, _ = self._authenticate_headers(
+            headers,
+            request_origin=request_origin,
+            user_agent=user_agent,
+        )
+        self._ensure_store_initialized()
+        record = self._require_record(run_id)
+        self._authorize_run_access(
+            record,
+            client_service_id=client_service_id,
+            request_origin=request_origin,
+            user_agent=user_agent,
+        )
+
+        token = self._cancel_tokens.get(run_id)
+        if token is not None:
+            token.cancel("Cancelled by operator")
+
+        now = datetime.now(UTC)
+        persisted, transitioned = self._store.cancel_run(run_id, completed_at=now)
+        if persisted is not None:
+            record = self._hydrate_record(persisted)
+        elif record.status not in TERMINAL_RUN_STATUSES:
+            record.status = "cancelled"
+            record.completed_at = now
+            transitioned = True
+
+        with contextlib.suppress(KeyError):
+            await self._queue.cancel(run_id)
+
+        active_sandbox = self._active_sandboxes.pop(run_id, None)
+        if active_sandbox is not None:
+            with contextlib.suppress(Exception):
+                await active_sandbox.stop()
+
+        self._cleanup_ephemeral_workspace(record.workspace_dir)
+
+        if transitioned:
+            self._append_access_event(
+                event="run.cancelled",
+                client_service_id=record.owner_service_id or record.request.client.service_id,
+                run_id=record.run_id,
+                request_id=record.request.client.request_id,
+                profile_id=record.request.profile.id,
+                submitted_at=record.created_at,
+                final_status="cancelled",
+                reason="cancelled via API",
+                request_origin=request_origin,
+                user_agent=user_agent,
+            )
+
+        return await self._status_for_record(record)
+
+    def _cleanup_ephemeral_workspace(self, workspace_dir: Path) -> None:
+        """Remove staged workspace only when strictly inside service sources root."""
+        sources_root = (self._service_root / "sources").resolve()
+        try:
+            resolved = workspace_dir.resolve()
+        except OSError:
+            return
+        if not resolved.is_relative_to(sources_root) or resolved == sources_root:
+            return
+        shutil.rmtree(resolved, ignore_errors=True)
+        # Also remove the run container directory under sources/<run_id> if empty/owned
+        parent = resolved.parent
+        if parent != sources_root and parent.is_relative_to(sources_root):
+            shutil.rmtree(parent, ignore_errors=True)
+
     def get_report(
         self,
         run_id: str,
@@ -335,6 +416,8 @@ class HostedRunService:
             request_origin=request_origin,
             user_agent=user_agent,
         )
+        if record.status == "cancelled":
+            raise RuntimeError("run_cancelled")
         if record.error is not None or record.status == "failed":
             raise RuntimeError("run_failed")
         if record.report_json is not None:
@@ -1063,157 +1146,201 @@ class HostedRunService:
             raise RuntimeError(record.error.message)
 
     def _make_task_runner(self) -> Any:
-        async def _runner(task: Task) -> None:
-            self._ensure_store_initialized()
-            record = self._require_record(task.id)
-            self._ensure_record_persisted(record, task)
-            lease = self._store.try_claim_lease(
-                task.id,
-                worker_id=self._worker_id,
-                lease_ttl_seconds=self._config.service.lease_ttl_seconds,
+        return self._execute_leased_task
+
+    async def _execute_leased_task(self, task: Task) -> None:
+        self._ensure_store_initialized()
+        record = self._require_record(task.id)
+        self._ensure_record_persisted(record, task)
+        lease = self._store.try_claim_lease(
+            task.id,
+            worker_id=self._worker_id,
+            lease_ttl_seconds=self._config.service.lease_ttl_seconds,
+        )
+        if lease is None:
+            self._append_access_event(
+                event="run.duplicate_delivery_ignored",
+                client_service_id=record.owner_service_id or record.request.client.service_id,
+                run_id=record.run_id,
+                request_id=record.request.client.request_id,
+                profile_id=record.request.profile.id,
+                submitted_at=record.created_at,
+                final_status=record.status,
+                reason="active lease held or run already finalized",
+                request_origin=record.request_origin,
+                user_agent=record.user_agent,
             )
-            if lease is None:
-                self._append_access_event(
-                    event="run.duplicate_delivery_ignored",
-                    client_service_id=record.owner_service_id or record.request.client.service_id,
-                    run_id=record.run_id,
-                    request_id=record.request.client.request_id,
-                    profile_id=record.request.profile.id,
-                    submitted_at=record.created_at,
-                    final_status=record.status,
-                    reason="active lease held or run already finalized",
-                    request_origin=record.request_origin,
-                    user_agent=record.user_agent,
-                )
+            return
+
+        record.status = "running"
+        if record.started_at is None:
+            record.started_at = datetime.now(UTC)
+
+        cancel_token = CancellationToken()
+        self._cancel_tokens[task.id] = cancel_token
+        heartbeat_task = asyncio.create_task(self._lease_heartbeat(task.id, lease.lease_token))
+        try:
+            await self._run_leased_task_agent(record, task, cancel_token)
+            if cancel_token.is_cancelled or self._is_run_cancelled(task.id):
+                self._sync_record_from_store(task.id)
                 return
-
-            record.status = "running"
-            if record.started_at is None:
-                record.started_at = datetime.now(UTC)
-
-            heartbeat_task = asyncio.create_task(self._lease_heartbeat(task.id, lease.lease_token))
-            try:
-                resolved_profile = self._profile_registry.get(record.request.profile.id)
-                prompt_scope = resolved_profile.prompt_scope if resolved_profile else None
-                provider_name, api_key = self._resolve_provider_credentials(
-                    record,
-                    resolved_profile,
-                )
-
-                model_name = (
-                    resolved_profile.llm_model
-                    if resolved_profile and resolved_profile.llm_model
-                    else task.config.model
-                )
-                agent_config = AgentConfig(
-                    model=model_name,
-                    max_iterations=task.config.max_iterations,
-                    max_tokens_per_run=task.config.max_tokens_per_run,
-                    temperature=task.config.temperature,
-                    profile_id=resolved_profile.id if resolved_profile else None,
-                )
-
-                async def _post_run_hook(
-                    agent_run: AgentRun,
-                    llm: Any,
-                    tools: Any,
-                    sandbox: Any,
-                ) -> None:
-                    await self._finalize_run_report(
-                        record,
-                        task,
-                        agent_run,
-                        agent_config,
-                        llm,
-                        tools,
-                        sandbox,
-                    )
-
-                await run_agent_task(
-                    task.task_description,
-                    task.repo_path,
-                    self._config,
-                    agent_config,
-                    provider_name,
-                    api_key,
-                    run_id=task.id,
-                    prompt_scope=prompt_scope,
-                    report_schema=record.request.profile.report_schema,
-                    discover_extensions=True,
-                    event_bus=self._event_bus,
-                    post_run_hook=_post_run_hook,
-                    tools_factory=create_default_registry,
-                    sandbox_factory=create_sandbox,
-                    provider_factory=create_provider,
-                    react_loop_fn=react_loop,
-                )
-                completed_at = datetime.now(UTC)
-                report_json = record.report_path.read_text(encoding="utf-8")
-                finalized = self._store.finalize_run(
-                    task.id,
-                    lease_token=lease.lease_token,
-                    status="completed",
-                    completed_at=completed_at,
-                    report_json=report_json,
-                )
-                if finalized:
-                    record.status = "completed"
-                    record.completed_at = completed_at
-                    record.report_json = report_json
-                    self._append_access_event(
-                        event="run.completed",
-                        client_service_id=record.owner_service_id
-                        or record.request.client.service_id,
-                        run_id=record.run_id,
-                        request_id=record.request.client.request_id,
-                        profile_id=record.request.profile.id,
-                        submitted_at=record.created_at,
-                        final_status="completed",
-                        request_origin=record.request_origin,
-                        user_agent=record.user_agent,
-                    )
-                else:
-                    self._handle_stale_lease(record)
-            except Exception as exc:
-                run_error = record.error or RunError(
-                    code="sandbox_execution_failed",
-                    message=str(exc),
-                    retryable=False,
-                )
-                completed_at = datetime.now(UTC)
-                finalized = self._store.finalize_run(
-                    task.id,
-                    lease_token=lease.lease_token,
-                    status="failed",
-                    completed_at=completed_at,
-                    error_json=run_error.model_dump_json(),
-                )
-                if finalized:
-                    record.error = run_error
-                    record.status = "failed"
-                    record.completed_at = completed_at
-                    self._append_access_event(
-                        event="run.failed",
-                        client_service_id=record.owner_service_id
-                        or record.request.client.service_id,
-                        run_id=record.run_id,
-                        request_id=record.request.client.request_id,
-                        profile_id=record.request.profile.id,
-                        submitted_at=record.created_at,
-                        final_status="failed",
-                        reason=run_error.message,
-                        request_origin=record.request_origin,
-                        user_agent=record.user_agent,
-                    )
-                else:
-                    self._handle_stale_lease(record)
+            self._complete_leased_run(record, task, lease.lease_token)
+        except BaseException as exc:
+            if cancel_token.is_cancelled or self._is_run_cancelled(task.id):
+                self._sync_record_from_store(task.id)
+                return
+            if not isinstance(exc, Exception):
                 raise
-            finally:
-                heartbeat_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await heartbeat_task
+            self._fail_leased_run(record, task, lease.lease_token, exc)
+            raise
+        finally:
+            self._cancel_tokens.pop(task.id, None)
+            self._active_sandboxes.pop(task.id, None)
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
 
-        return _runner
+    async def _run_leased_task_agent(
+        self,
+        record: HostedRunRecord,
+        task: Task,
+        cancel_token: CancellationToken,
+    ) -> None:
+        resolved_profile = self._profile_registry.get(record.request.profile.id)
+        prompt_scope = resolved_profile.prompt_scope if resolved_profile else None
+        provider_name, api_key = self._resolve_provider_credentials(record, resolved_profile)
+        model_name = (
+            resolved_profile.llm_model
+            if resolved_profile and resolved_profile.llm_model
+            else task.config.model
+        )
+        agent_config = AgentConfig(
+            model=model_name,
+            max_iterations=task.config.max_iterations,
+            max_tokens_per_run=task.config.max_tokens_per_run,
+            temperature=task.config.temperature,
+            profile_id=resolved_profile.id if resolved_profile else None,
+        )
+
+        async def _post_run_hook(
+            agent_run: AgentRun,
+            llm: Any,
+            tools: Any,
+            sandbox: Any,
+        ) -> None:
+            if cancel_token.is_cancelled or self._is_run_cancelled(task.id):
+                return
+            await self._finalize_run_report(
+                record,
+                task,
+                agent_run,
+                agent_config,
+                llm,
+                tools,
+                sandbox,
+            )
+
+        def _on_sandbox_started(sandbox: Sandbox) -> None:
+            self._active_sandboxes[task.id] = sandbox
+            if cancel_token.is_cancelled or self._is_run_cancelled(task.id):
+                raise asyncio.CancelledError
+
+        await run_agent_task(
+            task.task_description,
+            task.repo_path,
+            self._config,
+            agent_config,
+            provider_name,
+            api_key,
+            run_id=task.id,
+            prompt_scope=prompt_scope,
+            report_schema=record.request.profile.report_schema,
+            discover_extensions=True,
+            event_bus=self._event_bus,
+            cancellation_token=cancel_token,
+            on_sandbox_started=_on_sandbox_started,
+            post_run_hook=_post_run_hook,
+            tools_factory=create_default_registry,
+            sandbox_factory=create_sandbox,
+            provider_factory=create_provider,
+            react_loop_fn=react_loop,
+        )
+
+    def _complete_leased_run(
+        self,
+        record: HostedRunRecord,
+        task: Task,
+        lease_token: str,
+    ) -> None:
+        completed_at = datetime.now(UTC)
+        report_json = record.report_path.read_text(encoding="utf-8")
+        finalized = self._store.finalize_run(
+            task.id,
+            lease_token=lease_token,
+            status="completed",
+            completed_at=completed_at,
+            report_json=report_json,
+        )
+        if not finalized:
+            self._handle_stale_lease(record)
+            return
+        record.status = "completed"
+        record.completed_at = completed_at
+        record.report_json = report_json
+        self._append_access_event(
+            event="run.completed",
+            client_service_id=record.owner_service_id or record.request.client.service_id,
+            run_id=record.run_id,
+            request_id=record.request.client.request_id,
+            profile_id=record.request.profile.id,
+            submitted_at=record.created_at,
+            final_status="completed",
+            request_origin=record.request_origin,
+            user_agent=record.user_agent,
+        )
+
+    def _fail_leased_run(
+        self,
+        record: HostedRunRecord,
+        task: Task,
+        lease_token: str,
+        exc: Exception,
+    ) -> None:
+        run_error = record.error or RunError(
+            code="sandbox_execution_failed",
+            message=str(exc),
+            retryable=False,
+        )
+        completed_at = datetime.now(UTC)
+        finalized = self._store.finalize_run(
+            task.id,
+            lease_token=lease_token,
+            status="failed",
+            completed_at=completed_at,
+            error_json=run_error.model_dump_json(),
+        )
+        if not finalized:
+            self._handle_stale_lease(record)
+            return
+        record.error = run_error
+        record.status = "failed"
+        record.completed_at = completed_at
+        self._append_access_event(
+            event="run.failed",
+            client_service_id=record.owner_service_id or record.request.client.service_id,
+            run_id=record.run_id,
+            request_id=record.request.client.request_id,
+            profile_id=record.request.profile.id,
+            submitted_at=record.created_at,
+            final_status="failed",
+            reason=run_error.message,
+            request_origin=record.request_origin,
+            user_agent=record.user_agent,
+        )
+
+    def _is_run_cancelled(self, run_id: str) -> bool:
+        persisted = self._store.get(run_id)
+        return persisted is not None and persisted.status == "cancelled"
 
     def _ensure_store_initialized(self) -> None:
         if not self._store_initialized:
@@ -1708,6 +1835,25 @@ def create_app(  # noqa: C901
     async def get_run(run_id: str, http_request: Request) -> RunStatus:
         try:
             return await service.get_status(
+                run_id,
+                headers=dict(http_request.headers),
+                request_origin=_request_origin(http_request),
+                user_agent=http_request.headers.get("user-agent"),
+            )
+        except KeyError as exc:
+            error = ErrorResponse(
+                error=RunError(
+                    code="invalid_request",
+                    message=f"unknown run id: {run_id}",
+                    retryable=False,
+                )
+            )
+            raise HTTPException(status_code=404, detail=error.model_dump()) from exc
+
+    @app.post("/v1/runs/{run_id}/cancel", response_model=RunStatus)
+    async def cancel_run(run_id: str, http_request: Request) -> RunStatus:
+        try:
+            return await service.cancel_run(
                 run_id,
                 headers=dict(http_request.headers),
                 request_origin=_request_origin(http_request),
