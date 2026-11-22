@@ -4,7 +4,7 @@
 > (Claude Code, Codex CLI, Gemini Code Assist, GitHub Copilot, etc.).
 > `CLAUDE.md` is a symlink to this file — there is one source of truth.
 > Keep it concise and current. Tool-specific configuration lives in
-> `.codex/config.toml` and `.claude/settings.json`.
+> `.codex/config.toml`, `.codex/hooks.json`, and `.claude/settings.json`.
 
 ## 1. Mission & direction
 
@@ -53,9 +53,16 @@ one merge policy, stated once below.
   session) satisfies the approval half — record that standing approval in the
   PR. Absent standing approval, request review and stop; do not merge.
 - **Never force-push `main`.** Force-push feature branches only when necessary.
-- **Use git worktrees for parallel tasks** so concurrent branches stay isolated.
-- **Clean up after merge** — delete the merged feature branch (local + remote)
-  and realign local `main`.
+- **Use git worktrees for parallel tasks** so concurrent branches stay
+  isolated, and remove any linked worktree once its PR merges or closes
+  (`git worktree remove <path>` then `git worktree prune`).
+- **Clean up after merge** — pass `--delete-branch` when merging
+  (`gh pr merge <N> --squash --delete-branch`; GitHub `delete_branch_on_merge`
+  is enabled). Remove the task's linked worktree before deleting its branch,
+  delete the merged local branch (`git branch -d <branch>`, or `git branch -D
+  <branch>` once confirmed `MERGED` after a squash merge), prune stale remote
+  refs (`git fetch --prune origin`), realign local `main`, and run
+  `python3 scripts/cleanup_git.py --apply`.
 
 Use the workflows in `.agents/workflows/start-issue.md` and
 `.agents/workflows/finish-issue.md`.
