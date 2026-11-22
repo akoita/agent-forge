@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 220" width="960" height="220" role="img" aria-label="Agent Forge banner">
+  <defs>
+    <pattern id="banner-grid-light" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.1" fill="#cbd5e1" opacity="0.55"/>
+    </pattern>
+    <radialGradient id="banner-glow1-light" cx="15%" cy="35%" r="55%">
+      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="banner-glow2-light" cx="90%" cy="85%" r="50%">
+      <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#f59e0b" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="banner-title-light" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0e7490"/>
+      <stop offset="100%" stop-color="#4338ca"/>
+    </linearGradient>
+    <linearGradient id="banner-anvil-light" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ecfeff"/>
+      <stop offset="100%" stop-color="#eef2ff"/>
+    </linearGradient>
+    <clipPath id="banner-clip-light">
+      <rect x="4" y="4" width="952" height="212" rx="16"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#banner-clip-light)">
+    <rect x="4" y="4" width="952" height="212" rx="16" fill="#f8fafc"/>
+    <rect x="4" y="4" width="952" height="212" rx="16" fill="url(#banner-grid-light)"/>
+    <rect x="4" y="4" width="952" height="212" rx="16" fill="url(#banner-glow1-light)"/>
+    <rect x="4" y="4" width="952" height="212" rx="16" fill="url(#banner-glow2-light)"/>
+  </g>
+  <rect x="4" y="4" width="952" height="212" rx="16" fill="none" stroke="#cbd5e1" stroke-width="1.5"/>
+
+  <!-- Geometric Forge Emblem -->
+  <g transform="translate(110, 110)">
+    <polygon points="0,-60 52,-30 52,30 0,60 -52,30 -52,-30" fill="url(#banner-anvil-light)" stroke="#0e7490" stroke-width="2"/>
+    <polygon points="0,-49 42.5,-24.5 42.5,24.5 0,49 -42.5,24.5 -42.5,-24.5" fill="none" stroke="#a5b4fc" stroke-width="1" opacity="0.8"/>
+    <!-- Anvil base silhouette -->
+    <path d="M -28,16 L 28,16 L 20,28 L -20,28 Z" fill="#4338ca" opacity="0.85"/>
+    <rect x="-12" y="10" width="24" height="6" rx="2" fill="#0e7490"/>
+    <!-- Code brackets inside forge -->
+    <path d="M -13,-14 L -24,-3 L -13,8" fill="none" stroke="#0f172a" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 13,-14 L 24,-3 L 13,8" fill="none" stroke="#0f172a" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <line x1="4" y1="-16" x2="-4" y2="10" stroke="#0e7490" stroke-width="3" stroke-linecap="round"/>
+    <!-- Forge spark -->
+    <path d="M 0,-36 L 3.2,-27 L 12,-24 L 3.2,-21 L 0,-12 L -3.2,-21 L -12,-24 L -3.2,-27 Z" fill="#f59e0b"/>
+  </g>
+
+  <!-- Eyebrow Pill -->
+  <rect x="208" y="34" width="194" height="24" rx="12" fill="#eef2ff" stroke="#a5b4fc" stroke-width="1"/>
+  <text x="305" y="50" text-anchor="middle" font-family="'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="700" letter-spacing="0.8" fill="#4338ca">HARNESS-FIRST RUNTIME</text>
+
+  <!-- Title & Tagline -->
+  <text x="208" y="100" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="42" font-weight="800" letter-spacing="-0.8" fill="#0f172a">Agent <tspan fill="url(#banner-title-light)">Forge</tspan></text>
+  <text x="208" y="132" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.5" font-weight="500" fill="#334155">Domain-agnostic AI coding harness — built for correctness and measurement.</text>
+
+  <!-- Feature Chips -->
+  <rect x="208" y="156" width="236" height="30" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/><circle cx="224" cy="171" r="4" fill="#0e7490"/><text x="236" y="175" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#334155">Docker &amp; Bubblewrap Sandboxes</text><rect x="454" y="156" width="224" height="30" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/><circle cx="470" cy="171" r="4" fill="#6d28d9"/><text x="482" y="175" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#334155">Multi-Provider Qualification</text><rect x="688" y="156" width="242" height="30" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/><circle cx="704" cy="171" r="4" fill="#047857"/><text x="716" y="175" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#334155">Independently Verified Patches</text>
+</svg>
