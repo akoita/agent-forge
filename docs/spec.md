@@ -351,6 +351,15 @@ class Tool(ABC):
 | Behavior    | Reads file, replaces first occurrence of `old_text` with `new_text`, writes back.       |
 | Error       | If `old_text` not found, return error with message + file content preview.              |
 
+##### `apply_patch`
+
+| Field       | Value                                                                                                          |
+| ----------- | -------------------------------------------------------------------------------------------------------------- |
+| Description | Atomically apply multi-file patch operations (`modify`, `create`, `delete`) with preconditions & rollback      |
+| Parameters  | `operations` (array of `{path, action?, expected_sha256?, content?, hunks?}`, required), `dry_run` (bool)      |
+| Behavior    | Validates all paths, SHA-256 preconditions, and hunks in memory before committing; rolls back on write error.  |
+| Output      | Returns `changed_files` manifest + unified diff preview and emits `patch.applied` on the event stream.         |
+
 ##### `run_shell`
 
 | Field       | Value                                                                                   |
@@ -1247,6 +1256,7 @@ agent-forge/
 │   │   ├── read_file.py
 │   │   ├── write_file.py
 │   │   ├── edit_file.py
+│   │   ├── apply_patch.py
 │   │   ├── git_common.py
 │   │   ├── git_diff.py
 │   │   ├── git_commit.py

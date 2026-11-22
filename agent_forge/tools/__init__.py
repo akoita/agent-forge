@@ -3,6 +3,7 @@
 from collections.abc import Callable, Iterable
 from importlib.metadata import EntryPoint
 
+from agent_forge.tools.apply_patch import ApplyPatchTool
 from agent_forge.tools.base import Tool, ToolRegistry, ToolResult, validate_path
 from agent_forge.tools.create_pr import CreatePRTool
 from agent_forge.tools.edit_file import EditFileTool
@@ -24,6 +25,7 @@ from agent_forge.tools.write_file import WriteFileTool
 
 __all__ = [
     "TOOL_PLUGIN_GROUP",
+    "ApplyPatchTool",
     "CreatePRTool",
     "EditFileTool",
     "GitCommitTool",
@@ -56,6 +58,7 @@ def create_default_registry(
     registry.register(ReadFileTool())
     registry.register(WriteFileTool())
     registry.register(EditFileTool())
+    registry.register(ApplyPatchTool())
     registry.register(ListDirectoryTool())
     registry.register(RunShellTool())
     registry.register(SearchCodebaseTool())

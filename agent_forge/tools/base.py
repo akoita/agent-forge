@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import posixpath
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from agent_forge.llm.base import ToolDefinition
@@ -30,6 +30,7 @@ class ToolResult:
     error: str | None = None
     exit_code: int = 0
     execution_time_ms: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
