@@ -9,7 +9,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from agent_forge.llm.capabilities import ProviderCapabilities
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -50,6 +52,8 @@ class TokenUsage:
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+    cached_prompt_tokens: int = 0
+    reasoning_tokens: int = 0
 
     def __add__(self, other: TokenUsage) -> TokenUsage:
         """Combine two TokenUsage instances."""
@@ -57,6 +61,8 @@ class TokenUsage:
             prompt_tokens=self.prompt_tokens + other.prompt_tokens,
             completion_tokens=self.completion_tokens + other.completion_tokens,
             total_tokens=self.total_tokens + other.total_tokens,
+            cached_prompt_tokens=self.cached_prompt_tokens + other.cached_prompt_tokens,
+            reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
         )
 
 
@@ -68,6 +74,8 @@ class Message:
     content: str
     tool_call_id: str | None = None
     tool_calls: list[ToolCall] | None = None
+    reasoning_blocks: list[dict[str, Any]] | None = None
+    response_id: str | None = None
 
 
 @dataclass
@@ -80,6 +88,8 @@ class LLMResponse:
     model: str = ""
     finish_reason: str = ""  # "stop", "tool_calls", "length", "error"
     reported_model: str | None = None
+    response_id: str | None = None
+    reasoning_blocks: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -94,10 +104,20 @@ class LLMConfig:
     max_retries: int | None = None
     cache_key: str | None = None
     cache_breakpoint_index: int | None = None
+    previous_response_id: str | None = None
+    response_schema: dict[str, Any] | None = None
+    reasoning_effort: str | None = None
+    parallel_tool_calls: bool | None = None
+    thinking_budget_tokens: int | None = None
 
 
 class LLMProvider(ABC):
     """Abstract base class for all LLM provider adapters."""
+
+    def capabilities(self, model: str | None = None) -> ProviderCapabilities:
+        """Return declared capabilities for this provider and optional *model*."""
+        del model
+        return ProviderCapabilities()
 
     async def close(self) -> None:  # noqa: B027 - stateless adapters need no cleanup
         """Release any resources held by the provider."""

@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from agent_forge.llm.base import ToolDefinition
+    from agent_forge.llm.capabilities import ProviderCapabilities
 
 import httpx
 
@@ -28,6 +29,7 @@ from agent_forge.llm.base import (
     TokenUsage,
     ToolCall,
 )
+from agent_forge.llm.capabilities import resolve_capabilities
 from agent_forge.llm.errors import (
     LLMAuthError,
     LLMRateLimitError,
@@ -58,6 +60,10 @@ class GeminiProvider(LLMProvider):
             base_url=self._base_url,
             timeout=httpx.Timeout(120.0),
         )
+
+    def capabilities(self, model: str | None = None) -> ProviderCapabilities:
+        """Return declared capabilities for Gemini generateContent API."""
+        return resolve_capabilities("gemini", model or _DEFAULT_MODEL)
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""
@@ -133,11 +139,17 @@ class GeminiProvider(LLMProvider):
         body: dict[str, Any] = {"contents": contents}
 
         # Generation config
-        body["generationConfig"] = {
+        gen_cfg: dict[str, Any] = {
             "temperature": config.temperature,
             "maxOutputTokens": config.max_tokens,
             "topP": config.top_p,
         }
+        if config.response_schema:
+            gen_cfg["responseMimeType"] = "application/json"
+            gen_cfg["responseSchema"] = config.response_schema
+        if config.thinking_budget_tokens is not None:
+            gen_cfg["thinkingConfig"] = {"thinkingBudget": config.thinking_budget_tokens}
+        body["generationConfig"] = gen_cfg
 
         # System instruction (extract from messages)
         system_parts = [{"text": m.content} for m in messages if m.role == Role.SYSTEM]
@@ -231,9 +243,12 @@ class GeminiProvider(LLMProvider):
 
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
+        reasoning_blocks: list[dict[str, Any]] = []
 
         for part in parts:
-            if "text" in part:
+            if part.get("thought") is True:
+                reasoning_blocks.append(dict(part))
+            elif "text" in part:
                 text_parts.append(part["text"])
             elif "functionCall" in part:
                 fc = part["functionCall"]
@@ -252,6 +267,8 @@ class GeminiProvider(LLMProvider):
             prompt_tokens=usage_data.get("promptTokenCount", 0),
             completion_tokens=usage_data.get("candidatesTokenCount", 0),
             total_tokens=usage_data.get("totalTokenCount", 0),
+            cached_prompt_tokens=int(usage_data.get("cachedContentTokenCount", 0)),
+            reasoning_tokens=int(usage_data.get("thoughtsTokenCount", 0)),
         )
 
         # Map Gemini finish reasons to our standard
@@ -264,6 +281,7 @@ class GeminiProvider(LLMProvider):
             model=model,
             finish_reason=mapped_reason,
             reported_model=data.get("modelVersion"),
+            reasoning_blocks=reasoning_blocks,
         )
 
     @staticmethod

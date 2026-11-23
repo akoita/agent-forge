@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -110,6 +110,7 @@ class ProviderSettings(BaseModel):
     api_key_env: str = ""
     default_model: str = ""
     base_url: str = ""
+    api_mode: Literal["auto", "responses", "chat_completions"] = "auto"
 
 
 class ModelProfileSettings(BaseModel):
@@ -122,6 +123,18 @@ class ModelProfileSettings(BaseModel):
     base_url: str = ""
     api_key_env: str = ""
     temperature: float | None = None
+    api_mode: Literal["auto", "responses", "chat_completions"] = "auto"
+    capabilities: dict[str, Any] = Field(default_factory=dict)
+
+
+class RoutingSettings(BaseModel):
+    """Settings for capability- and cost-aware task/turn routing."""
+
+    enabled: bool = False
+    strategy: Literal["cost_first", "balanced", "capability_first"] = "balanced"
+    candidates: list[str] = Field(default_factory=list)
+    downgrade_budget_fraction: float = 0.75
+    escalate_on_failures: int = 2
 
 
 class ForgeConfig(BaseModel):
@@ -129,6 +142,7 @@ class ForgeConfig(BaseModel):
 
     agent: AgentSettings = Field(default_factory=AgentSettings)
     context: ContextSettings = Field(default_factory=ContextSettings)
+    routing: RoutingSettings = Field(default_factory=RoutingSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     queue: QueueSettings = Field(default_factory=QueueSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
@@ -198,6 +212,7 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 _SECTION_MODELS: dict[str, type[BaseModel]] = {
     "agent": AgentSettings,
     "context": ContextSettings,
+    "routing": RoutingSettings,
     "sandbox": SandboxSettings,
     "queue": QueueSettings,
     "logging": LoggingSettings,
@@ -213,6 +228,8 @@ def _coerce_value(field_type: object, raw: str) -> Any:
         return int(raw)
     if field_type is float:
         return float(raw)
+    if get_origin(field_type) is list:
+        return [item.strip() for item in raw.split(",") if item.strip()]
     return raw
 
 

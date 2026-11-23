@@ -162,7 +162,17 @@ User ──▶ CLI/API
 
 #### Purpose
 
-Provide a **unified interface** to interact with multiple LLM providers, hiding provider-specific serialization, auth, and error formats behind a common adapter.
+Provide a **unified capability-aware interface** (`LLMProvider`) across LLM providers, hiding wire serialization, authentication, and retries while exposing runtime capabilities (`ProviderCapabilities`) and optional multi-profile routing (`RoutingLLMProvider`).
+
+```mermaid
+flowchart LR
+    Loop[ReAct Loop] --> Router["RoutingLLMProvider / Active Provider"]
+    Router --> Caps["ProviderCapabilities Negotiation"]
+    Caps -->|OpenAI native| Resp["POST /v1/responses"]
+    Caps -->|Custom base_url or fallback| Chat["POST /v1/chat/completions"]
+    Caps -->|Anthropic| Ant["POST /v1/messages"]
+    Caps -->|Gemini| Gem["POST :generateContent"]
+```
 
 #### Interface Contract
 
@@ -170,7 +180,8 @@ Provide a **unified interface** to interact with multiple LLM providers, hiding 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
+
 
 class Role(Enum):
     SYSTEM = "system"
@@ -178,38 +189,51 @@ class Role(Enum):
     ASSISTANT = "assistant"
     TOOL = "tool"
 
+
 @dataclass
 class Message:
     role: Role
     content: str
-    tool_call_id: str | None = None       # set when role=TOOL
-    tool_calls: list["ToolCall"] | None = None  # set when role=ASSISTANT
+    tool_call_id: str | None = None
+    tool_calls: list["ToolCall"] | None = None
+    reasoning_blocks: list[dict[str, Any]] | None = None
+    response_id: str | None = None
+
 
 @dataclass
 class ToolCall:
-    id: str               # unique ID for this call
-    name: str             # tool name, e.g. "read_file"
-    arguments: dict       # parsed JSON arguments
+    id: str
+    name: str
+    arguments: dict
+
 
 @dataclass
 class ToolDefinition:
     name: str
     description: str
-    parameters: dict      # JSON Schema object
+    parameters: dict
+
 
 @dataclass
 class LLMResponse:
     content: str | None
-    tool_calls: list[ToolCall]
-    usage: "TokenUsage"
-    model: str
-    finish_reason: str    # "stop", "tool_calls", "length", "error"
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    usage: "TokenUsage" = ...
+    model: str = ""
+    finish_reason: str = ""  # "stop", "tool_calls", "length", "error"
+    reported_model: str | None = None
+    response_id: str | None = None
+    reasoning_blocks: list[dict[str, Any]] = field(default_factory=list)
+
 
 @dataclass
 class TokenUsage:
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+    cached_prompt_tokens: int = 0
+    reasoning_tokens: int = 0
+
 
 @dataclass
 class LLMConfig:
@@ -218,9 +242,22 @@ class LLMConfig:
     max_tokens: int = 4096
     top_p: float = 1.0
     timeout_seconds: int = 120
+    max_retries: int | None = None
+    cache_key: str | None = None
+    cache_breakpoint_index: int | None = None
+    previous_response_id: str | None = None
+    response_schema: dict[str, Any] | None = None
+    reasoning_effort: str | None = None
+    parallel_tool_calls: bool | None = None
+    thinking_budget_tokens: int | None = None
+
 
 class LLMProvider(ABC):
     """Base class for all LLM provider adapters."""
+
+    def capabilities(self, model: str | None = None) -> "ProviderCapabilities":
+        """Return declared capabilities for this adapter and model."""
+        ...
 
     @abstractmethod
     async def complete(
@@ -228,9 +265,7 @@ class LLMProvider(ABC):
         messages: list[Message],
         tools: list[ToolDefinition] | None = None,
         config: LLMConfig | None = None,
-    ) -> LLMResponse:
-        """Send a completion request and return the full response."""
-        ...
+    ) -> LLMResponse: ...
 
     @abstractmethod
     async def stream(
@@ -238,34 +273,34 @@ class LLMProvider(ABC):
         messages: list[Message],
         tools: list[ToolDefinition] | None = None,
         config: LLMConfig | None = None,
-    ) -> AsyncIterator[LLMResponse]:
-        """Stream partial responses as they arrive."""
-        ...
+    ) -> AsyncIterator[LLMResponse]: ...
 ```
 
 #### Provider Implementations
 
-| Provider      | Module                      | Auth                        | Model Default              |
-| ------------- | --------------------------- | --------------------------- | -------------------------- |
-| **Gemini**    | `agent_forge.llm.gemini`    | `GEMINI_API_KEY` env var    | `gemini-2.0-flash`         |
-| **OpenAI**    | `agent_forge.llm.openai`    | `OPENAI_API_KEY` env var    | `gpt-4o`                   |
-| **Anthropic** | `agent_forge.llm.anthropic` | `ANTHROPIC_API_KEY` env var | `claude-sonnet-4-20250514` |
+| Provider      | Module                      | Auth                        | Protocol & Model Default                          |
+| ------------- | --------------------------- | --------------------------- | ------------------------------------------------- |
+| **Gemini**    | `agent_forge.llm.gemini`    | `GEMINI_API_KEY` env var    | `generateContent`, `gemini-3.1-flash-lite-preview` |
+| **OpenAI**    | `agent_forge.llm.openai`    | `OPENAI_API_KEY` env var    | `/v1/responses` (auto fallback to `/v1/chat/completions`), `gpt-4o` / `gpt-5.4` |
+| **Anthropic** | `agent_forge.llm.anthropic` | `ANTHROPIC_API_KEY` env var | `/v1/messages`, `claude-sonnet-4-20250514`        |
+| **Router**    | `agent_forge.llm.router`    | Profile credentials         | Data-driven per-turn selection across configured profiles |
 
 #### Provider-Specific Mapping Rules
 
-- **Gemini:** Translate `ToolDefinition.parameters` to Gemini's `FunctionDeclaration` schema. Map `tool_calls` ↔ `function_call` / `function_response` parts.
-- **OpenAI:** Direct mapping to `tools` array in chat completions API. Use `tool_choice: "auto"`.
-- **Anthropic:** Map to Anthropic's `tools` format. Handle `tool_use` / `tool_result` content blocks.
+- **OpenAI:** Native OpenAI endpoints (`api_mode="auto"` or `"responses"`) call `POST /v1/responses` with `instructions`, `input` items, delta slicing after matching `previous_response_id`, `prompt_cache_key`, `reasoning.effort`, and `text.format` JSON schemas. Custom `base_url` endpoints or explicit `api_mode="chat_completions"` automatically use `POST /v1/chat/completions`.
+- **Anthropic:** Emits ephemeral `cache_control` breakpoints on `system` and final tools when `cache_key` is set, maps `parallel_tool_calls=False` to `disable_parallel_tool_use`, passes `thinking` budgets, roundtrips `thinking`/`redacted_thinking` blocks, and records `cache_read_input_tokens`.
+- **Gemini:** Translates schemas to `functionDeclarations`, sets `responseMimeType`/`responseSchema` and `thinkingConfig.thinkingBudget`, extracts `thought: True` parts into `reasoning_blocks`, and reads `cachedContentTokenCount` / `thoughtsTokenCount`.
+- **Inspecting capabilities:** Run `agent-forge models capabilities [PROFILE] [--output-format text|json]`.
 
 #### Error Handling
 
 | Error Type         | Strategy                                                    |
 | ------------------ | ----------------------------------------------------------- |
-| Rate limit (429)   | Exponential backoff: 1s → 2s → 4s → 8s → 16s, max 3 retries |
-| Auth error (401)   | Fail immediately with clear message                         |
-| Timeout            | Cancel after `config.timeout_seconds`, retry once           |
-| Malformed response | Log raw response, retry once with same prompt               |
-| Context overflow   | Truncate oldest non-system messages, retry                  |
+| Rate limit (429)   | Exponential backoff with bounded retries                    |
+| Auth error (401)   | Fail immediately (`LLMAuthError`)                           |
+| Timeout            | Cancel after `config.timeout_seconds`, bounded retry        |
+| Malformed response | Retry within limit, then raise `LLMResponseError`           |
+| Context overflow   | Compact via `ContextEngine` (clearing `previous_response_id`) |
 
 ---
 
@@ -1112,6 +1147,13 @@ compaction_target_ratio = 0.45
 keep_recent_turns = 4
 stale_tool_result_max_chars = 600
 
+[routing]
+enabled = false
+strategy = "balanced"            # "cost_first", "balanced", or "capability_first"
+candidates = []                  # Ordered model profile names (empty = all profiles)
+downgrade_budget_fraction = 0.75
+escalate_on_failures = 2
+
 [sandbox]
 image = "agent-forge-sandbox:latest"
 cpu_limit = 1.0
@@ -1149,10 +1191,16 @@ default_model = "gemini-3.1-flash-lite-preview"
 [providers.openai]
 api_key_env = "OPENAI_API_KEY"
 default_model = "gpt-4o"
+api_mode = "auto"                # "auto", "responses", or "chat_completions"
 
 [providers.anthropic]
 api_key_env = "ANTHROPIC_API_KEY"
 default_model = "claude-sonnet-4-20250514"
+
+[model_profiles.openai-gpt54]
+provider = "openai"
+model = "gpt-5.4"
+# Optional: api_mode = "auto", base_url = "", capabilities = { parallel_tool_calls = true }
 ```
 
 ### 5.2 Run Persistence
@@ -1200,6 +1248,11 @@ Format: `AGENT_FORGE_{SECTION}_{KEY}` (uppercase, underscored).
 | `AGENT_FORGE_CONTEXT_CONTEXT_WINDOW_TOKENS` | `context.context_window_tokens` |
 | `AGENT_FORGE_CONTEXT_COMPACTION_TRIGGER_RATIO` | `context.compaction_trigger_ratio` |
 | `AGENT_FORGE_CONTEXT_KEEP_RECENT_TURNS` | `context.keep_recent_turns` |
+| `AGENT_FORGE_ROUTING_ENABLED` | `routing.enabled` |
+| `AGENT_FORGE_ROUTING_STRATEGY` | `routing.strategy` |
+| `AGENT_FORGE_ROUTING_CANDIDATES` | `routing.candidates` (comma-separated) |
+| `AGENT_FORGE_ROUTING_DOWNGRADE_BUDGET_FRACTION` | `routing.downgrade_budget_fraction` |
+| `AGENT_FORGE_ROUTING_ESCALATE_ON_FAILURES` | `routing.escalate_on_failures` |
 | `AGENT_FORGE_SANDBOX_MEMORY_LIMIT` | `sandbox.memory_limit` |
 | `AGENT_FORGE_QUEUE_BACKEND`        | `queue.backend`        |
 | `AGENT_FORGE_SERVICE_AUTH_ENABLED` | `service.auth_enabled` |

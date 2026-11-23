@@ -236,6 +236,62 @@ def benchmark_models(
     click.echo(json_payload.rstrip("\n"))
 
 
+@models.command("capabilities")
+@click.argument("profile", required=False, default=None)
+@click.option(
+    "--output-format",
+    default="text",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    help="Render a human table or machine-readable JSON capability payload.",
+)
+def model_capabilities(profile: str | None, output_format: str) -> None:
+    """Inspect declared provider capabilities for configured model profiles."""
+    from agent_forge.llm.capabilities import resolve_capabilities
+    from agent_forge.llm.qualification import (
+        resolve_model_profile,
+        resolve_profile_api_mode,
+        resolve_profile_base_url,
+    )
+
+    config = load_config()
+    if profile is not None:
+        try:
+            targets = {profile: resolve_model_profile(config, profile)}
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+    else:
+        targets = dict(config.model_profiles)
+
+    payload: dict[str, dict[str, Any]] = {}
+    for name, item in targets.items():
+        caps = resolve_capabilities(
+            item.provider,
+            item.model,
+            api_mode=resolve_profile_api_mode(config, item),
+            base_url=resolve_profile_base_url(config, item),
+            overrides=item.capabilities,
+        )
+        payload[name] = {
+            "provider": item.provider,
+            "model": item.model,
+            **caps.to_dict(),
+        }
+
+    if output_format == "json":
+        click.echo(json.dumps(payload, indent=2))
+        return
+
+    table = Table(title="Model Capabilities", show_lines=False)
+    table.add_column("Profile", style="bold")
+    table.add_column("Provider")
+    table.add_column("Protocol")
+    table.add_column("Enabled Capabilities")
+    for name, entry in payload.items():
+        enabled = ", ".join(k for k, v in entry.items() if isinstance(v, bool) and v)
+        table.add_row(name, str(entry["provider"]), str(entry["api_protocol"]), enabled or "-")
+    console.print(table)
+
+
 # ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
@@ -486,15 +542,27 @@ def _apply_model_profile(config: Any, name: str | None) -> None:
             resolved_base_url = resolve_profile_base_url(config, selected)
             if resolved_base_url:
                 provider_cfg.base_url = resolved_base_url
+            if selected.api_mode != "auto":
+                provider_cfg.api_mode = selected.api_mode
 
 
 def _create_configured_provider(cfg: Any, provider_name: str, api_key: str) -> Any:
+    from agent_forge.config import RoutingSettings
+    from agent_forge.llm.router import RoutingLLMProvider
+
+    routing_cfg = getattr(cfg, "routing", None)
+    if isinstance(routing_cfg, RoutingSettings) and routing_cfg.enabled:
+        return RoutingLLMProvider.from_config(cfg)
     providers = getattr(cfg, "providers", None)
     provider_cfg = providers.get(provider_name) if isinstance(providers, dict) else None
     raw_base_url = getattr(provider_cfg, "base_url", None) if provider_cfg is not None else None
+    raw_api_mode = getattr(provider_cfg, "api_mode", None) if provider_cfg is not None else None
+    kwargs: dict[str, Any] = {}
     if isinstance(raw_base_url, str) and raw_base_url:
-        return create_provider(provider_name, api_key, base_url=raw_base_url)
-    return create_provider(provider_name, api_key)
+        kwargs["base_url"] = raw_base_url
+    if provider_name == "openai" and isinstance(raw_api_mode, str) and raw_api_mode != "auto":
+        kwargs["api_mode"] = raw_api_mode
+    return create_provider(provider_name, api_key, **kwargs)
 
 
 def _validate_verification_mode(command: str | None, queue_backend: str | None) -> None:

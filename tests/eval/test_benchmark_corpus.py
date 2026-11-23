@@ -466,3 +466,203 @@ async def test_context_engine_reduces_tokens_per_task_on_m0_corpus(
     assert raw_verified == 4
     assert managed_verified == 4
     assert managed_tokens < raw_tokens * 0.85
+
+
+def _build_responses_mock_payload(task: BenchmarkTask, turn: int) -> dict[str, object]:
+    src_file = next(iter(task.files))
+    if turn == 1:
+        output: list[dict[str, object]] = [
+            {
+                "type": "function_call",
+                "call_id": f"call_{task.id}_read",
+                "name": "read_file",
+                "arguments": json.dumps({"path": f"/workspace/{src_file}"}),
+            }
+        ]
+        cached = 0
+    elif turn == 2:
+        output = [
+            {
+                "type": "function_call",
+                "call_id": f"call_{task.id}_fix_{idx}",
+                "name": "write_file",
+                "arguments": json.dumps({"path": f"/workspace/{path}", "content": content}),
+            }
+            for idx, (path, content) in enumerate(task.known_good_files.items())
+        ]
+        cached = 450
+    else:
+        output = [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Fix verified."}],
+            }
+        ]
+        cached = 520
+    return {
+        "id": f"resp_{task.id}_{turn}",
+        "model": "gpt-5.4",
+        "status": "completed",
+        "output": output,
+        "usage": {
+            "input_tokens": 560 if turn > 1 else 420,
+            "output_tokens": 35,
+            "total_tokens": 595 if turn > 1 else 455,
+            "input_tokens_details": {"cached_tokens": cached},
+        },
+    }
+
+
+def _build_chat_mock_payload(task: BenchmarkTask, turn: int, full_tokens: int) -> dict[str, object]:
+    src_file = next(iter(task.files))
+    if turn == 1:
+        message: dict[str, object] = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": f"call_{task.id}_read",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": json.dumps({"path": f"/workspace/{src_file}"}),
+                    },
+                }
+            ],
+        }
+        finish_reason = "tool_calls"
+    elif turn == 2:
+        message = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": f"call_{task.id}_fix_{idx}",
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "arguments": json.dumps({"path": f"/workspace/{path}", "content": content}),
+                    },
+                }
+                for idx, (path, content) in enumerate(task.known_good_files.items())
+            ],
+        }
+        finish_reason = "tool_calls"
+    else:
+        message = {"role": "assistant", "content": "Fix verified."}
+        finish_reason = "stop"
+    return {
+        "model": "gpt-5.4",
+        "choices": [{"message": message, "finish_reason": finish_reason}],
+        "usage": {
+            "prompt_tokens": max(full_tokens, 560 if turn > 1 else 420),
+            "completion_tokens": 35,
+            "total_tokens": max(full_tokens, 560 if turn > 1 else 420) + 35,
+        },
+    }
+
+
+async def _run_single_openai_task(
+    task: BenchmarkTask,
+    api_mode: str,
+) -> tuple[int, float]:
+    import tempfile
+
+    import httpx
+    import respx
+
+    from agent_forge.agent.context import ContextEngine, ContextPolicy
+    from agent_forge.agent.core import react_loop
+    from agent_forge.agent.models import AgentConfig, AgentRun, RunState
+    from agent_forge.agent.verification import VerificationWorkspace
+    from agent_forge.eval.deterministic import SubprocessEvalSandbox
+    from agent_forge.llm.openai import OpenAIProvider
+    from agent_forge.observability.cost import _estimate_cost
+    from agent_forge.sandbox.base import SandboxConfig
+    from agent_forge.tools import create_default_registry
+
+    tools = create_default_registry(load_plugins=False)
+    sandbox_cfg = SandboxConfig(
+        backend="subprocess-eval",
+        network_enabled=False,
+        writable_cache_mounts=False,
+        timeout_seconds=20,
+    )
+    policy = ContextPolicy(discover_instructions=False, repo_map_enabled=False)
+    state = {"turn": 0, "cont_bytes": 0}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        state["turn"] += 1
+        turn = state["turn"]
+        body = json.loads(request.content)
+        if turn > 1:
+            state["cont_bytes"] += len(request.content)
+        if api_mode == "responses":
+            assert "prompt_cache_key" in body
+            if turn > 1:
+                assert body["previous_response_id"] == f"resp_{task.id}_{turn - 1}"
+            return httpx.Response(200, json=_build_responses_mock_payload(task, turn))
+        msg_tokens = len(json.dumps(body.get("messages", []))) // 4
+        return httpx.Response(200, json=_build_chat_mock_payload(task, turn, msg_tokens))
+
+    endpoint = (
+        "https://api.openai.com/v1/responses"
+        if api_mode == "responses"
+        else "https://api.openai.com/v1/chat/completions"
+    )
+    with (
+        tempfile.TemporaryDirectory() as td,
+        respx.mock(assert_all_called=True) as mock_router,
+    ):
+        mock_router.post(endpoint).mock(side_effect=_handler)
+        repo = materialize_task_repo(task, Path(td) / "repo")
+        cfg = AgentConfig(model="gpt-5.4", provider="openai", max_iterations=8)
+        run = AgentRun(task=task.prompt, repo_path=str(repo), config=cfg)
+        sb = SubprocessEvalSandbox()
+        provider = OpenAIProvider(api_key="test-key", api_mode=api_mode)  # type: ignore[arg-type]
+        with VerificationWorkspace(
+            str(repo), task.verify_command, extra_verifier_files=task.hidden_tests
+        ) as ws:
+            await sb.start(repo_path=str(ws.workspace), config=sandbox_cfg)
+            engine = ContextEngine(ws.workspace, task=task.prompt, policy=policy)
+            try:
+                await react_loop(
+                    run,
+                    provider,
+                    tools,
+                    sb,
+                    verify=lambda: ws.verify(
+                        sandbox_cfg,
+                        sb,
+                        sandbox_factory=lambda _c: SubprocessEvalSandbox(),
+                    ),
+                    context_engine=engine,
+                )
+            finally:
+                await provider.close()
+                await sb.stop()
+        assert run.state == RunState.COMPLETED
+        assert run.verification is not None and run.verification.passed is True
+        return state["cont_bytes"], _estimate_cost(run.total_tokens, "gpt-5.4")
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_adapter_matches_or_beats_chat_completions_on_m0_corpus(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify OpenAI Responses API matches 4/4 M0 smoke fix rate at lower cost & payload."""
+    from agent_forge.eval.corpus import resolve_tasks
+
+    monkeypatch.setattr("agent_forge.agent.persistence.USER_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("agent_forge.agent.core.save_summary", lambda *_a: tmp_path / "s.json")
+
+    tasks = resolve_tasks(suite="smoke")
+    resp_runs = [await _run_single_openai_task(task, "responses") for task in tasks]
+    chat_runs = [await _run_single_openai_task(task, "chat_completions") for task in tasks]
+
+    assert len(resp_runs) == 4
+    assert len(chat_runs) == 4
+    assert sum(b for b, _ in resp_runs) < sum(b for b, _ in chat_runs)
+    assert sum(c for _, c in resp_runs) < sum(c for _, c in chat_runs)

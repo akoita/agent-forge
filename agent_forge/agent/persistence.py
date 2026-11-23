@@ -90,6 +90,10 @@ def save_run(run: AgentRun, *, base_dir: Path | str | None = None) -> Path:
             line["tool_call_id"] = msg.tool_call_id
         if msg.tool_calls:
             line["tool_calls"] = [asdict(tc) for tc in msg.tool_calls]
+        if msg.response_id:
+            line["response_id"] = msg.response_id
+        if msg.reasoning_blocks:
+            line["reasoning_blocks"] = msg.reasoning_blocks
         message_lines.append(json.dumps(line) + "\n")
     _atomic_write_text(run_dir / "messages.jsonl", "".join(message_lines))
 
@@ -161,6 +165,8 @@ def load_run(run_id: str, *, base_dir: Path | str | None = None) -> AgentRun:
                     content=data["content"],
                     tool_call_id=data.get("tool_call_id"),
                     tool_calls=tool_calls,
+                    reasoning_blocks=data.get("reasoning_blocks"),
+                    response_id=data.get("response_id"),
                 )
             )
 

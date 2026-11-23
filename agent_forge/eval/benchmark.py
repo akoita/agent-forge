@@ -488,6 +488,25 @@ def _accepts_kwarg(fn: Any, name: str) -> bool:
     return any(p.name == name or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
 
 
+def _create_benchmark_provider(
+    config: ForgeConfig,
+    profile: ModelProfileSettings,
+    api_key: str,
+    base_url: str | None,
+) -> Any:
+    api_mode = profile.api_mode
+    if api_mode == "auto":
+        provider_cfg = config.providers.get(profile.provider)
+        if provider_cfg is not None:
+            api_mode = provider_cfg.api_mode
+    provider_kwargs: dict[str, Any] = {}
+    if base_url:
+        provider_kwargs["base_url"] = base_url
+    if profile.provider == "openai" and api_mode != "auto":
+        provider_kwargs["api_mode"] = api_mode
+    return create_provider(profile.provider, api_key, **provider_kwargs)
+
+
 async def _run_single_attempt(
     config: ForgeConfig,
     profile_name: str,
@@ -551,11 +570,7 @@ async def _run_single_attempt(
             if traj_path.exists():
                 traj_path.unlink()
             journal = RunJournal(run.id, path=traj_path, fsync=False)
-        raw_llm = (
-            create_provider(profile.provider, api_key, base_url=base_url)
-            if base_url
-            else create_provider(profile.provider, api_key)
-        )
+        raw_llm = _create_benchmark_provider(config, profile, api_key, base_url)
         llm = _RecordingLLM(raw_llm)
         sandbox = create_sandbox(sandbox_config)
         try:

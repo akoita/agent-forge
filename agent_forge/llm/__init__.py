@@ -11,6 +11,12 @@ from agent_forge.llm.base import (
     ToolCall,
     ToolDefinition,
 )
+from agent_forge.llm.capabilities import (
+    CapabilityRequirement,
+    ProviderCapabilities,
+    query_provider_capabilities,
+    resolve_capabilities,
+)
 from agent_forge.llm.errors import (
     AgentForgeError,
     InvalidStateTransitionError,
@@ -31,10 +37,19 @@ from agent_forge.llm.errors import (
 from agent_forge.llm.factory import create_provider
 from agent_forge.llm.gemini import GeminiProvider
 from agent_forge.llm.openai import OpenAIProvider
+from agent_forge.llm.router import (
+    ModelCandidate,
+    RoutingDecision,
+    RoutingLLMProvider,
+    RoutingPolicy,
+    TurnRoutingContext,
+    select_route,
+)
 
 __all__ = [
     "AgentForgeError",
     "AnthropicProvider",
+    "CapabilityRequirement",
     "GeminiProvider",
     "InvalidStateTransitionError",
     "LLMAuthError",
@@ -47,8 +62,13 @@ __all__ = [
     "LLMResponseError",
     "LLMTimeoutError",
     "Message",
+    "ModelCandidate",
     "OpenAIProvider",
+    "ProviderCapabilities",
     "Role",
+    "RoutingDecision",
+    "RoutingLLMProvider",
+    "RoutingPolicy",
     "SandboxError",
     "SandboxStartupError",
     "SandboxTimeoutError",
@@ -59,5 +79,9 @@ __all__ = [
     "ToolExecutionError",
     "ToolNotFoundError",
     "ToolTimeoutError",
+    "TurnRoutingContext",
     "create_provider",
+    "query_provider_capabilities",
+    "resolve_capabilities",
+    "select_route",
 ]

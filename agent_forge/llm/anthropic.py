@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from agent_forge.llm.base import ToolDefinition
+    from agent_forge.llm.capabilities import ProviderCapabilities
 
 import httpx
 
@@ -28,6 +29,7 @@ from agent_forge.llm.base import (
     TokenUsage,
     ToolCall,
 )
+from agent_forge.llm.capabilities import resolve_capabilities
 from agent_forge.llm.errors import (
     LLMAuthError,
     LLMRateLimitError,
@@ -64,6 +66,10 @@ class AnthropicProvider(LLMProvider):
                 "Content-Type": "application/json",
             },
         )
+
+    def capabilities(self, model: str | None = None) -> ProviderCapabilities:
+        """Return declared capabilities for Anthropic Messages API."""
+        return resolve_capabilities("anthropic", model or _DEFAULT_MODEL)
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""
@@ -127,6 +133,24 @@ class AnthropicProvider(LLMProvider):
     # Request Building
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _apply_message_cache_breakpoint(
+        api_messages: list[dict[str, Any]],
+        breakpoint_index: int | None,
+    ) -> None:
+        if breakpoint_index is None or breakpoint_index <= 0:
+            return
+        # breakpoint_index counts the system message at index 0; map to api_messages index
+        msg_idx = breakpoint_index - 1
+        if not (0 <= msg_idx < len(api_messages)):
+            return
+        target = api_messages[msg_idx]
+        content = target.get("content")
+        if isinstance(content, str) and content:
+            target["content"] = [
+                {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+            ]
+
     def _build_request_body(
         self,
         messages: list[Message],
@@ -135,6 +159,8 @@ class AnthropicProvider(LLMProvider):
     ) -> dict[str, Any]:
         """Build the Anthropic Messages API request body."""
         system_text, api_messages = self._messages_to_anthropic(messages)
+        if config.cache_key:
+            self._apply_message_cache_breakpoint(api_messages, config.cache_breakpoint_index)
 
         body: dict[str, Any] = {
             "model": config.model,
@@ -145,10 +171,14 @@ class AnthropicProvider(LLMProvider):
         }
 
         if system_text:
-            body["system"] = system_text
+            body["system"] = (
+                [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}]
+                if config.cache_key
+                else system_text
+            )
 
         if tools:
-            body["tools"] = [
+            api_tools: list[dict[str, Any]] = [
                 {
                     "name": t.name,
                     "description": t.description,
@@ -156,6 +186,14 @@ class AnthropicProvider(LLMProvider):
                 }
                 for t in tools
             ]
+            if config.cache_key and api_tools:
+                api_tools[-1]["cache_control"] = {"type": "ephemeral"}
+            body["tools"] = api_tools
+            if config.parallel_tool_calls is False:
+                body["tool_choice"] = {"type": "auto", "disable_parallel_tool_use": True}
+
+        if config.thinking_budget_tokens is not None and config.thinking_budget_tokens > 0:
+            body["thinking"] = {"type": "enabled", "budget_tokens": config.thinking_budget_tokens}
 
         return body
 
@@ -182,7 +220,9 @@ class AnthropicProvider(LLMProvider):
                     }
                 )
             elif msg.role == Role.ASSISTANT:
-                content: list[dict[str, Any]] = []
+                content: list[dict[str, Any]] = [
+                    dict(block) for block in (msg.reasoning_blocks or ()) if isinstance(block, dict)
+                ]
                 if msg.content:
                     content.append({"type": "text", "text": msg.content})
                 if msg.tool_calls:
@@ -228,10 +268,13 @@ class AnthropicProvider(LLMProvider):
 
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
+        reasoning_blocks: list[dict[str, Any]] = []
 
         for block in content_blocks:
             block_type = block.get("type")
-            if block_type == "text":
+            if block_type in ("thinking", "redacted_thinking"):
+                reasoning_blocks.append(dict(block))
+            elif block_type == "text":
                 text_parts.append(block.get("text", ""))
             elif block_type == "tool_use":
                 tool_calls.append(
@@ -245,10 +288,12 @@ class AnthropicProvider(LLMProvider):
         usage_data = data.get("usage", {})
         input_tokens = usage_data.get("input_tokens", 0)
         output_tokens = usage_data.get("output_tokens", 0)
+        cached_tokens = int(usage_data.get("cache_read_input_tokens", 0))
         usage = TokenUsage(
             prompt_tokens=input_tokens,
             completion_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
+            cached_prompt_tokens=cached_tokens,
         )
 
         mapped_reason = self._map_finish_reason(stop_reason, tool_calls)
@@ -260,6 +305,8 @@ class AnthropicProvider(LLMProvider):
             model=model,
             finish_reason=mapped_reason,
             reported_model=data.get("model"),
+            response_id=data.get("id"),
+            reasoning_blocks=reasoning_blocks,
         )
 
     def _parse_stream_event(self, event: dict[str, Any], model: str) -> LLMResponse | None:

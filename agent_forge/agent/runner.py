@@ -285,9 +285,15 @@ async def run_agent_task(
         sandbox = sandbox_factory(sandbox_config)
 
     if provider_factory is None:
+        from agent_forge.config import RoutingSettings
         from agent_forge.llm.factory import create_provider as default_provider_factory
+        from agent_forge.llm.router import RoutingLLMProvider
 
-        llm = default_provider_factory(provider_name, api_key)
+        routing_cfg = getattr(cfg, "routing", None)
+        if isinstance(routing_cfg, RoutingSettings) and routing_cfg.enabled:
+            llm: LLMProvider = RoutingLLMProvider.from_config(cfg)
+        else:
+            llm = default_provider_factory(provider_name, api_key)
     else:
         llm = provider_factory(provider_name, api_key)
 
