@@ -36,9 +36,11 @@ hidden verifier tests injected only inside the independent verifier checkout:
 - Every `known_good_files` fix must pass both visible and hidden verification tests.
 - `python -m agent_forge.eval --suite smoke --report-dir .eval-artifacts --assert-gates`
   runs scripted `oracle`, `noop`, and `incomplete` profiles through the full
-  `react_loop`, tool registry, `VerificationWorkspace`, and `run-journal-v1` JSONL
-  trajectory capture (replayable via `agent-forge replay <trajectory.jsonl>`),
-  asserting 100% oracle pass and 0% false-positive completions.
+  `react_loop`, tool registry, `VerificationWorkspace`, `CompletionContract`, and
+  `run-journal-v1` JSONL trajectory capture (replayable via
+  `agent-forge replay <trajectory.jsonl>`), asserting 100% oracle pass,
+  `verification_failed` (with structured `unmet_clauses`) on `noop`/`incomplete`,
+  and 0% false-positive completions.
 
 To generate or refresh a full release report and measure live models against
 those pinned tasks, compare against the checked-in
@@ -70,11 +72,14 @@ writable dependency caches disabled. A missing patch, a patch application
 error, or a failed check produces a nonzero exit status. For an independent
 test of correctness, use a check whose assertions remain under your control.
 
-The report includes the base revision, terminal verification reason, and
-check output. When a patch exists, the result points to `change.patch` in the
-run directory. To review and apply the patch, use a clean checkout of the
-reported base revision and run `git apply --check` before `git apply`.
-For an investigation, omit `--verify-command`.
+The report includes the base revision, terminal verification reason,
+`completion_contract` clause results (with `unmet_clauses` on
+`verification_failed`), and check output. When a patch exists, the result
+points to `change.patch` in the run directory. To review and apply the patch,
+use a clean checkout of the reported base revision and run `git apply --check`
+before `git apply`. For a read-only question, omit `--verify-command` or pass
+`--contract qa`; pass `--contract coding-fix` to require edits and checks even
+without `--verify-command`.
 
 ## Resume and replay an interrupted run
 
