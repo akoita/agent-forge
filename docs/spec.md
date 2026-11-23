@@ -877,6 +877,10 @@ class EventType(Enum):
     APPROVAL_DECIDED = "approval.decided"
     BUDGET_EXCEEDED = "budget.exceeded"
     TOKEN_USAGE = "token.usage"
+    WORKTREE_CREATED = "worktree.created"
+    WORKTREE_CLEANED = "worktree.cleaned"
+    WORKTREE_INTEGRATED = "worktree.integrated"
+    WORKTREE_CONFLICT = "worktree.conflict"
 
 @dataclass
 class Event:
@@ -908,6 +912,15 @@ Before executing a tool call, `ApprovalGate` classifies destructive actions (`ap
 - `auto` (default): logs `approval.requested` / `approval.decided` (`approved=True`) and executes.
 - `prompt`: invokes the operator callback (or fails closed when non-interactive).
 - `deny`: rejects destructive calls before execution and returns a structured denial error to the model.
+
+##### Worktree-Isolated Parallel Execution
+
+`Worker` supports bounded concurrency (`max_concurrent_tasks`) with per-run Git worktree isolation via `WorktreeManager` (`agent_forge/orchestration/worktree.py`):
+
+- Each run leases a dedicated worktree and `agent-forge/run/<slug>` branch anchored to `HEAD` (`base_revision`).
+- Unchanged runs and aborted, failed, or cancelled runs automatically remove both the worktree checkout and temporary branch synchronously under a per-repo lock, leaving zero orphan worktrees.
+- Completed runs with diffs commit cleanly to their run branch and can be integrated at merge time via `integrate` / `integrate_all` (`merge` or `rebase`), aborting conflicting integrations without mutating the target branch.
+- Operator CLI: `agent-forge worktrees list|cleanup|integrate`.
 
 ---
 
@@ -1167,6 +1180,11 @@ network_enabled = false
 backend = "memory"               # "memory" or "redis"
 redis_url = "redis://localhost:6379/0"
 max_concurrent_runs = 4
+worktree_isolation = true
+worktree_root = ""
+worktree_branch_prefix = "agent-forge/run"
+auto_remove_unchanged_worktrees = true
+merge_strategy = "merge"
 
 [logging]
 level = "INFO"                   # DEBUG, INFO, WARNING, ERROR
@@ -1268,6 +1286,11 @@ Format: `AGENT_FORGE_{SECTION}_{KEY}` (uppercase, underscored).
 | `AGENT_FORGE_PROVIDERS_OPENAI_COMPATIBLE_API_KEY_REQUIRED` | `providers["openai-compatible"].api_key_required` |
 | `AGENT_FORGE_SANDBOX_MEMORY_LIMIT` | `sandbox.memory_limit` |
 | `AGENT_FORGE_QUEUE_BACKEND`        | `queue.backend`        |
+| `AGENT_FORGE_QUEUE_WORKTREE_ISOLATION` | `queue.worktree_isolation` |
+| `AGENT_FORGE_QUEUE_WORKTREE_ROOT`  | `queue.worktree_root`  |
+| `AGENT_FORGE_QUEUE_WORKTREE_BRANCH_PREFIX` | `queue.worktree_branch_prefix` |
+| `AGENT_FORGE_QUEUE_AUTO_REMOVE_UNCHANGED_WORKTREES` | `queue.auto_remove_unchanged_worktrees` |
+| `AGENT_FORGE_QUEUE_MERGE_STRATEGY` | `queue.merge_strategy` |
 | `AGENT_FORGE_SERVICE_AUTH_ENABLED` | `service.auth_enabled` |
 | `AGENT_FORGE_SERVICE_PORT`         | `service.port`         |
 | `GEMINI_API_KEY`                   | (direct, not prefixed) |

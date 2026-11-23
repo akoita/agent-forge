@@ -117,6 +117,8 @@ The queued CLI uses the queued task ID as the persisted run ID. A model run
 that fails or times out produces the matching queue status and a failing CLI
 exit code. Use `agent-forge status <run-id>` to inspect the saved result.
 
+When running parallel tasks or deterministic eval suites concurrently (`python -m agent_forge.eval --suite smoke --concurrency 4`), each run executes in its own isolated checkout or Git worktree (`WorktreeManager`) so concurrent diffs never cross-contaminate and aborted runs leave no orphan worktrees (`tests/unit/test_worktree_isolation.py`, `tests/eval/test_benchmark_corpus.py`).
+
 ## Running Tests
 
 ```bash

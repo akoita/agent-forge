@@ -42,6 +42,11 @@ writable_cache_mounts = true
 backend = "memory"              # "memory" or "redis"
 redis_url = "redis://localhost:6379/0"
 max_concurrent_runs = 4
+worktree_isolation = true       # isolate parallel queued runs in git worktrees
+worktree_root = ""              # empty defaults to ~/.agent-forge/worktrees/<repo>
+worktree_branch_prefix = "agent-forge/run"
+auto_remove_unchanged_worktrees = true
+merge_strategy = "merge"        # "merge" or "rebase" for merge-time integration
 
 [logging]
 level = "INFO"
@@ -141,6 +146,9 @@ agent-forge run \
 agent-forge status <run-id> --output-format json
 agent-forge resume <run-id> --max-tokens 400000 --max-cost 2.0
 agent-forge cancel <run-id> --reason "Stopped by operator"
+agent-forge worktrees list --repo ./my-project
+agent-forge worktrees integrate <run-id-or-branch> --repo ./my-project --strategy merge
+agent-forge worktrees cleanup --repo ./my-project
 agent-forge list
 agent-forge config        # Show resolved configuration
 ```
