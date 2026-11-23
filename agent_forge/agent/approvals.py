@@ -80,12 +80,12 @@ def _classify_apply_patch(arguments: dict[str, Any]) -> ApprovalRequest | None:
     )
 
 
-def _classify_run_shell(arguments: dict[str, Any]) -> ApprovalRequest | None:
+def _classify_shell_command(tool_name: str, arguments: dict[str, Any]) -> ApprovalRequest | None:
     command = str(arguments.get("command", ""))
     for category, pattern, reason in _SHELL_PATTERNS:
         if pattern.search(command):
             return ApprovalRequest(
-                tool_name="run_shell",
+                tool_name=tool_name,
                 arguments=arguments,
                 category=category,
                 reason=reason,
@@ -100,8 +100,8 @@ def classify_destructive_tool_call(
     """Return an ``ApprovalRequest`` if a tool call is destructive, else ``None``."""
     if tool_name == "apply_patch":
         return _classify_apply_patch(arguments)
-    if tool_name == "run_shell":
-        return _classify_run_shell(arguments)
+    if tool_name in ("run_shell", "shell_start"):
+        return _classify_shell_command(tool_name, arguments)
     return None
 
 

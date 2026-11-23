@@ -39,6 +39,7 @@ from agent_forge.llm.base import (
     ToolDefinition,
 )
 from agent_forge.sandbox.base import ExecResult, Sandbox, SandboxConfig, SandboxState
+from agent_forge.sandbox.sessions import LocalPtySessionManager, SessionLimits, SessionSnapshot
 from agent_forge.tools import create_default_registry
 
 if TYPE_CHECKING:
@@ -60,6 +61,7 @@ class SubprocessEvalSandbox(Sandbox):
         self._state = SandboxState.IDLE
         self._repo_root: Path | None = None
         self._active_processes: set[asyncio.subprocess.Process] = set()
+        self._sessions: LocalPtySessionManager | None = None
 
     @property
     def state(self) -> SandboxState:
@@ -75,6 +77,9 @@ class SubprocessEvalSandbox(Sandbox):
             raise RuntimeError(msg)
         self._config = config or SandboxConfig(backend="subprocess-eval")
         self._repo_root = Path(repo_path).resolve()
+        self._sessions = LocalPtySessionManager(
+            limits=SessionLimits(default_max_duration_seconds=self._config.timeout_seconds)
+        )
         self._state = SandboxState.RUNNING
 
     async def exec(self, command: str, *, timeout_seconds: int = 30) -> ExecResult:
@@ -134,6 +139,7 @@ class SubprocessEvalSandbox(Sandbox):
         target.write_text(content, encoding="utf-8")
 
     async def stop(self) -> None:
+        await self.close_all_sessions()
         for process in list(self._active_processes):
             if process.returncode is None:
                 with contextlib.suppress(ProcessLookupError):
@@ -146,6 +152,87 @@ class SubprocessEvalSandbox(Sandbox):
 
     async def is_alive(self) -> bool:
         return self._state == SandboxState.RUNNING and self._repo_root is not None
+
+    async def start_session(
+        self,
+        command: str,
+        *,
+        pty: bool = True,
+        max_duration_seconds: int | None = None,
+        wait_seconds: float = 0.5,
+        max_bytes: int = 32 * 1024,
+    ) -> SessionSnapshot:
+        if self._state != SandboxState.RUNNING or self._repo_root is None or self._sessions is None:
+            msg = "Sandbox is not running"
+            raise RuntimeError(msg)
+        rewritten = self._rewrite_workspace_command(command)
+        return await self._sessions.start(
+            ["/bin/sh", "-c", rewritten],
+            command_label=command,
+            cwd=str(self._repo_root),
+            env={
+                "PATH": os.environ.get("PATH", os.defpath),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
+            pty_enabled=pty,
+            max_duration_seconds=max_duration_seconds,
+            initial_wait_seconds=wait_seconds,
+            max_bytes=max_bytes,
+        )
+
+    async def poll_session(
+        self,
+        session_id: str,
+        *,
+        wait_seconds: float = 0.5,
+        offset: int | None = None,
+        max_bytes: int = 32 * 1024,
+    ) -> SessionSnapshot:
+        if self._state != SandboxState.RUNNING or self._sessions is None:
+            msg = "Sandbox is not running"
+            raise RuntimeError(msg)
+        return await self._sessions.poll(
+            session_id,
+            wait_seconds=wait_seconds,
+            offset=offset,
+            max_bytes=max_bytes,
+        )
+
+    async def write_session(
+        self,
+        session_id: str,
+        data: str,
+        *,
+        wait_seconds: float = 0.5,
+        max_bytes: int = 32 * 1024,
+    ) -> SessionSnapshot:
+        if self._state != SandboxState.RUNNING or self._sessions is None:
+            msg = "Sandbox is not running"
+            raise RuntimeError(msg)
+        return await self._sessions.write(
+            session_id,
+            data,
+            wait_seconds=wait_seconds,
+            max_bytes=max_bytes,
+        )
+
+    async def cancel_session(self, session_id: str) -> SessionSnapshot:
+        if self._state != SandboxState.RUNNING or self._sessions is None:
+            msg = "Sandbox is not running"
+            raise RuntimeError(msg)
+        return await self._sessions.cancel(session_id)
+
+    async def list_sessions(self) -> list[SessionSnapshot]:
+        if self._sessions is None:
+            return []
+        return await self._sessions.list_sessions()
+
+    async def close_all_sessions(self) -> None:
+        if self._sessions is not None:
+            try:
+                await self._sessions.close_all()
+            finally:
+                self._sessions = None
 
     def _rewrite_workspace_command(self, command: str) -> str:
         ws = self._config.workspace_path.rstrip("/")
