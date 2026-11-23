@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
 import sys
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -330,7 +329,8 @@ class TestACPServerBidirectionalSession:
         assert final_resp["id"] == 2
         assert final_resp["result"]["stopReason"] == "cancelled"
 
-    def test_cli_acp_subprocess_emits_pure_jsonrpc_stdout(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_cli_acp_subprocess_emits_pure_jsonrpc_stdout(self, tmp_path: Path) -> None:
         requests = (
             "\n".join(
                 [
@@ -346,16 +346,19 @@ class TestACPServerBidirectionalSession:
                 ]
             )
             + "\n"
+        ).encode("utf-8")
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "agent_forge.cli",
+            "acp",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        proc = subprocess.run(  # noqa: S603
-            [sys.executable, "-m", "agent_forge.cli", "acp"],
-            input=requests,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=True,
-        )
-        lines = [line for line in proc.stdout.splitlines() if line.strip()]
+        stdout_raw, stderr_raw = await asyncio.wait_for(proc.communicate(requests), timeout=15)
+        assert proc.returncode == 0, stderr_raw.decode("utf-8", errors="replace")
+        lines = [line for line in stdout_raw.decode("utf-8").splitlines() if line.strip()]
         assert len(lines) == 2
         parsed = [json.loads(line) for line in lines]
         assert parsed[0]["result"]["protocolVersion"] == ACP_PROTOCOL_VERSION
