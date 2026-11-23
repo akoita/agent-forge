@@ -262,8 +262,11 @@ class TestPipelineDirect:
 
         assert result.exit_code == 1
         report = json.loads(report_file.read_text(encoding="utf-8"))
-        assert report["state"] == "failed"
+        assert report["state"] == "verification_failed"
         assert report["verification"]["reason"] == "empty_patch"
+        unmet = [c["clause_id"] for c in report["completion_contract"]["unmet_clauses"]]
+        assert "changes_exist" in unmet
+        assert "verification_checks_passed" in unmet
 
     def test_add_type_hints(
         self,

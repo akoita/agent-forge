@@ -132,7 +132,10 @@ def test_cli_reports_verified_outcome(
     assert "Run Summary" in response.stderr
     assert payload["verification"]["base_revision"] == revision
     assert payload["verification"]["reason"] == expected
-    assert payload["state"] == ("completed" if expected == "verified" else "failed")
+    assert payload["state"] == ("completed" if expected == "verified" else "verification_failed")
+    assert payload["completion_contract"]["passed"] is (expected == "verified")
+    if expected != "verified":
+        assert len(payload["completion_contract"]["unmet_clauses"]) >= 1
     assert (repo / "app.txt").read_text() == "user change\n"
     assert (repo / "untracked.txt").read_text() == "keep me\n"
     saved = persistence.load_run(payload["run_id"])
