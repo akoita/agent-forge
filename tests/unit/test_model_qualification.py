@@ -94,33 +94,37 @@ async def test_openai_qualification_consumes_correlated_tool_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "recorded-key")
-    route = respx.post("https://api.openai.com/v1/chat/completions")
+    route = respx.post("https://api.openai.com/v1/responses")
     route.side_effect = [
         httpx.Response(
             200,
             json={
-                "choices": [
+                "id": "resp_1",
+                "status": "completed",
+                "output": [
                     {
-                        "finish_reason": "tool_calls",
-                        "message": {
-                            "tool_calls": [
-                                {
-                                    "id": "call_42",
-                                    "type": "function",
-                                    "function": {"name": "read_probe_value", "arguments": "{}"},
-                                }
-                            ]
-                        },
+                        "type": "function_call",
+                        "call_id": "call_42",
+                        "name": "read_probe_value",
+                        "arguments": "{}",
                     }
-                ]
+                ],
             },
         ),
         httpx.Response(
             200,
             json={
+                "id": "resp_2",
                 "model": "served-version",
-                "choices": [{"finish_reason": "stop", "message": {"content": "forge-probe-7391"}}],
-                "usage": {"prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17},
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "forge-probe-7391"}],
+                    }
+                ],
+                "usage": {"input_tokens": 12, "output_tokens": 5, "total_tokens": 17},
             },
         ),
     ]
@@ -132,8 +136,68 @@ async def test_openai_qualification_consumes_correlated_tool_result(
     assert result.reported_models == ["served-version"]
     payload = json.loads(route.calls.last.request.content)
     assert payload["model"] == "candidate-v1"
-    assert payload["max_tokens"] == 256
-    assert payload["messages"][-1]["tool_call_id"] == "call_42"
+    assert payload["max_output_tokens"] == 256
+    assert payload["previous_response_id"] == "resp_1"
+    assert payload["input"][-1]["call_id"] == "call_42"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_openai_chat_completions_mode_uses_chat_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "recorded-key")
+    route = respx.post("https://api.openai.com/v1/chat/completions")
+    route.side_effect = [
+        httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "call_chat",
+                                    "type": "function",
+                                    "function": {"name": "read_probe_value", "arguments": "{}"},
+                                }
+                            ]
+                        },
+                    }
+                ],
+            },
+        ),
+        httpx.Response(
+            200,
+            json={
+                "choices": [{"finish_reason": "stop", "message": {"content": "forge-probe-7391"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+            },
+        ),
+    ]
+    result = await probe_model(
+        ForgeConfig(),
+        ModelProfileSettings(provider="openai", model="candidate-v1", api_mode="chat_completions"),
+    )
+    assert result.status == "passed"
+    assert route.call_count == 2
+
+
+def test_qualification_report_includes_capabilities() -> None:
+    from agent_forge.llm.qualification import qualification_report
+
+    config = ForgeConfig(
+        model_profiles={
+            "cand": ModelProfileSettings(provider="openai", model="gpt-5.4"),
+        }
+    )
+    report = qualification_report(config, "cand", live=False)
+    caps = report["capabilities"]
+    assert isinstance(caps, dict)
+    assert caps["stateful_response_ids"] is True
+    assert caps["parallel_tool_calls"] is True
+    assert caps["api_protocol"] == "openai_responses"
 
 
 def test_run_uses_named_model_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -155,7 +219,7 @@ def test_run_uses_named_model_profile(tmp_path: Path, monkeypatch: pytest.Monkey
 @pytest.mark.asyncio
 async def test_live_probe_does_not_retry_service_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "recorded-key")
-    route = respx.post("https://api.openai.com/v1/chat/completions").respond(503)
+    route = respx.post("https://api.openai.com/v1/responses").respond(503)
     result = await probe_model(
         ForgeConfig(), ModelProfileSettings(provider="openai", model="candidate-v1")
     )
