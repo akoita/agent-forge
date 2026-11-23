@@ -151,6 +151,7 @@ agent-forge worktrees integrate <run-id-or-branch> --repo ./my-project --strateg
 agent-forge worktrees cleanup --repo ./my-project
 agent-forge mcp list
 agent-forge mcp inspect --output-format json
+agent-forge acp --approval-mode prompt
 agent-forge list
 agent-forge config        # Show resolved configuration
 ```
@@ -236,6 +237,21 @@ url = "https://mcp.example.com/mcp"
 auth_env = "MCP_API_TOKEN"
 allow_tools = ["search_docs", "get_issue"]
 deny_tools = ["delete_issue"]
+```
+
+### Editor Interop (ACP Server)
+
+Point any Agent Client Protocol (ACP) editor (Zed, Neovim, JetBrains ACP clients) to launch `agent-forge acp` over stdio:
+
+```json
+{
+  "agent_servers": {
+    "Agent Forge": {
+      "command": "agent-forge",
+      "args": ["acp", "--approval-mode", "prompt"]
+    }
+  }
+}
 ```
 
 Run directly or probe what a live endpoint supports before benchmarking:

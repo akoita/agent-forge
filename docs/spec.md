@@ -926,6 +926,14 @@ Before executing a tool call, `ApprovalGate` classifies destructive actions (`ap
 - Completed runs with diffs commit cleanly to their run branch and can be integrated at merge time via `integrate` / `integrate_all` (`merge` or `rebase`), aborting conflicting integrations without mutating the target branch.
 - Operator CLI: `agent-forge worktrees list|cleanup|integrate`.
 
+##### Agent Client Protocol (ACP) Server
+
+`ACPServer` (`agent_forge/acp/`) exposes Agent Forge over newline-delimited JSON-RPC 2.0 on `stdin`/`stdout` via `agent-forge acp`:
+
+- Supports `initialize`, `session/new` (including `cwd` validation and ACP `mcpServers` translation), `session/load`, `session/prompt`, and `session/cancel`.
+- Maps typed `StreamEvent` (`run-event-v1`) lifecycle events onto `session/update` notifications (`tool_call`, `tool_call_update`, `agent_thought_chunk`, `agent_message_chunk`).
+- Bridges `ApprovalGate` evaluation requests to bidirectional `session/request_permission` editor prompts (`allow_once`, `allow_always`, `reject_once`).
+
 ---
 
 ### 4.6 Observability
