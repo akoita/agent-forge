@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import statistics
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -19,6 +20,12 @@ from agent_forge.agent.core import react_loop
 from agent_forge.agent.models import AgentConfig, AgentRun, RunState
 from agent_forge.agent.prompts import build_system_prompt
 from agent_forge.agent.verification import VerificationWorkspace
+from agent_forge.eval.corpus import (
+    BUILTIN_TASKS,
+    VERIFY_CMD,
+    BenchmarkTask,
+    resolve_tasks,
+)
 from agent_forge.llm.base import LLMProvider, TokenUsage
 from agent_forge.llm.factory import create_provider
 from agent_forge.llm.qualification import (
@@ -31,265 +38,26 @@ from agent_forge.sandbox.base import SandboxConfig
 from agent_forge.sandbox.factory import create_sandbox
 from agent_forge.tools import create_default_registry
 
+__all__ = [
+    "BUILTIN_TASKS",
+    "VERIFY_CMD",
+    "BenchmarkReport",
+    "BenchmarkTask",
+    "ProfileBenchmarkSummary",
+    "TaskAttemptResult",
+    "materialize_task_repo",
+    "render_markdown_report",
+    "resolve_tasks",
+    "run_benchmark",
+    "save_attempt_trajectory",
+    "summarize_profile",
+]
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from agent_forge.config import ForgeConfig, ModelProfileSettings
     from agent_forge.llm.base import LLMConfig, LLMResponse, Message, ToolDefinition
-
-VERIFY_CMD = "python3 -m unittest discover -s tests -v"
-
-
-@dataclass(frozen=True)
-class BenchmarkTask:
-    """Self-contained coding benchmark task with independent verifier tests."""
-
-    id: str
-    title: str
-    prompt: str
-    verify_command: str
-    files: dict[str, str]
-    tests: dict[str, str]
-    known_good_files: dict[str, str]
-
-
-BUILTIN_TASKS: tuple[BenchmarkTask, ...] = (
-    BenchmarkTask(
-        id="fix-health-status",
-        title="Return healthy HTTP status from /health handler",
-        prompt=(
-            "The health endpoint handler in app.py returns an error payload with status 500. "
-            "Inspect app.py and tests/test_app.py, fix health() so it returns "
-            '({"status": "ok"}, 200), and verify tests pass.'
-        ),
-        verify_command=VERIFY_CMD,
-        files={
-            "app.py": (
-                '"""Application handlers."""\n\n'
-                "def index() -> tuple[str, int]:\n"
-                '    return "Hello, World!", 200\n\n\n'
-                "def health() -> tuple[dict[str, str], int]:\n"
-                '    return {"status": "error"}, 500\n'
-            ),
-        },
-        tests={
-            "tests/__init__.py": "",
-            "tests/test_app.py": (
-                "import unittest\n"
-                "from app import health, index\n\n\n"
-                "class TestApp(unittest.TestCase):\n"
-                "    def test_index(self) -> None:\n"
-                "        body, code = index()\n"
-                "        self.assertEqual(code, 200)\n"
-                '        self.assertIn("Hello", body)\n\n'
-                "    def test_health_ok(self) -> None:\n"
-                "        body, code = health()\n"
-                "        self.assertEqual(code, 200)\n"
-                '        self.assertEqual(body, {"status": "ok"})\n'
-            ),
-        },
-        known_good_files={
-            "app.py": (
-                '"""Application handlers."""\n\n'
-                "def index() -> tuple[str, int]:\n"
-                '    return "Hello, World!", 200\n\n\n'
-                "def health() -> tuple[dict[str, str], int]:\n"
-                '    return {"status": "ok"}, 200\n'
-            ),
-        },
-    ),
-    BenchmarkTask(
-        id="fix-pagination-offset",
-        title="Fix 1-based page slicing and ceiling total_pages",
-        prompt=(
-            "Fix paginate() in pagination.py so 1-based page slicing and total_pages ceiling "
-            "calculation satisfy tests/test_pagination.py, and verify tests pass."
-        ),
-        verify_command=VERIFY_CMD,
-        files={
-            "pagination.py": (
-                '"""List pagination helper."""\n\n'
-                "def paginate(\n"
-                "    items: list[int], page: int = 1, page_size: int = 10\n"
-                ") -> dict[str, object]:\n"
-                "    if page < 1:\n"
-                '        raise ValueError("page must be >= 1")\n'
-                "    if page_size < 1:\n"
-                '        raise ValueError("page_size must be >= 1")\n'
-                "    start = page * page_size\n"
-                "    end = start + page_size\n"
-                "    total_pages = len(items) // page_size\n"
-                "    return {\n"
-                '        "items": items[start:end],\n'
-                '        "page": page,\n'
-                '        "page_size": page_size,\n'
-                '        "total_items": len(items),\n'
-                '        "total_pages": total_pages,\n'
-                "    }\n"
-            ),
-        },
-        tests={
-            "tests/__init__.py": "",
-            "tests/test_pagination.py": (
-                "import unittest\n"
-                "from pagination import paginate\n\n\n"
-                "class TestPagination(unittest.TestCase):\n"
-                "    def test_first_page(self) -> None:\n"
-                "        res = paginate([1, 2, 3, 4, 5], page=1, page_size=2)\n"
-                '        self.assertEqual(res["items"], [1, 2])\n'
-                '        self.assertEqual(res["total_pages"], 3)\n\n'
-                "    def test_last_partial_page(self) -> None:\n"
-                "        res = paginate([1, 2, 3, 4, 5], page=3, page_size=2)\n"
-                '        self.assertEqual(res["items"], [5])\n'
-                '        self.assertEqual(res["total_pages"], 3)\n\n'
-                "    def test_empty_items(self) -> None:\n"
-                "        res = paginate([], page=1, page_size=5)\n"
-                '        self.assertEqual(res["items"], [])\n'
-                '        self.assertEqual(res["total_pages"], 0)\n'
-            ),
-        },
-        known_good_files={
-            "pagination.py": (
-                '"""List pagination helper."""\n\n'
-                "def paginate(\n"
-                "    items: list[int], page: int = 1, page_size: int = 10\n"
-                ") -> dict[str, object]:\n"
-                "    if page < 1:\n"
-                '        raise ValueError("page must be >= 1")\n'
-                "    if page_size < 1:\n"
-                '        raise ValueError("page_size must be >= 1")\n'
-                "    start = (page - 1) * page_size\n"
-                "    end = start + page_size\n"
-                "    total_pages = (len(items) + page_size - 1) // page_size if items else 0\n"
-                "    return {\n"
-                '        "items": items[start:end],\n'
-                '        "page": page,\n'
-                '        "page_size": page_size,\n'
-                '        "total_items": len(items),\n'
-                '        "total_pages": total_pages,\n'
-                "    }\n"
-            ),
-        },
-    ),
-    BenchmarkTask(
-        id="fix-multi-file-summary",
-        title="Fix line-item field mismatch and currency formatting across modules",
-        prompt=(
-            "Inspect models.py, formatter.py, and tests/test_formatter.py. "
-            "Fix summarize_order() in formatter.py so line totals multiply quantity by "
-            "unit_price_cents and format totals to two decimal places, and verify tests pass."
-        ),
-        verify_command=VERIFY_CMD,
-        files={
-            "models.py": (
-                '"""Domain data models for orders."""\n\n'
-                "from dataclasses import dataclass\n\n\n"
-                "@dataclass(frozen=True)\n"
-                "class OrderLine:\n"
-                "    sku: str\n"
-                "    quantity: int\n"
-                "    unit_price_cents: int\n"
-            ),
-            "formatter.py": (
-                '"""Order summary formatter."""\n\n'
-                "from models import OrderLine\n\n\n"
-                "def summarize_order(lines: list[OrderLine]) -> dict[str, object]:\n"
-                "    total_units = sum(line.quantity for line in lines)\n"
-                "    total_cents = sum(line.price_cents for line in lines)\n"
-                '    formatted = f"${round(total_cents / 100, 1)}"\n'
-                "    return {\n"
-                '        "total_units": total_units,\n'
-                '        "total_cents": total_cents,\n'
-                '        "display": formatted,\n'
-                "    }\n"
-            ),
-        },
-        tests={
-            "tests/__init__.py": "",
-            "tests/test_formatter.py": (
-                "import unittest\n"
-                "from formatter import summarize_order\n"
-                "from models import OrderLine\n\n\n"
-                "class TestFormatter(unittest.TestCase):\n"
-                "    def test_summarize_order(self) -> None:\n"
-                "        lines = [\n"
-                '            OrderLine(sku="A1", quantity=2, unit_price_cents=1250),\n'
-                '            OrderLine(sku="B2", quantity=3, unit_price_cents=199),\n'
-                "        ]\n"
-                "        summary = summarize_order(lines)\n"
-                '        self.assertEqual(summary["total_units"], 5)\n'
-                '        self.assertEqual(summary["total_cents"], 3097)\n'
-                '        self.assertEqual(summary["display"], "$30.97")\n\n'
-                "    def test_empty_order(self) -> None:\n"
-                "        summary = summarize_order([])\n"
-                '        self.assertEqual(summary["total_units"], 0)\n'
-                '        self.assertEqual(summary["total_cents"], 0)\n'
-                '        self.assertEqual(summary["display"], "$0.00")\n'
-            ),
-        },
-        known_good_files={
-            "formatter.py": (
-                '"""Order summary formatter."""\n\n'
-                "from models import OrderLine\n\n\n"
-                "def summarize_order(lines: list[OrderLine]) -> dict[str, object]:\n"
-                "    total_units = sum(line.quantity for line in lines)\n"
-                "    total_cents = sum(line.quantity * line.unit_price_cents for line in lines)\n"
-                '    formatted = f"${total_cents / 100:.2f}"\n'
-                "    return {\n"
-                '        "total_units": total_units,\n'
-                '        "total_cents": total_cents,\n'
-                '        "display": formatted,\n'
-                "    }\n"
-            ),
-        },
-    ),
-    BenchmarkTask(
-        id="fix-retry-backoff",
-        title="Fix exponential backoff attempt indexing and max_delay cap",
-        prompt=(
-            "Inspect retry.py and tests/test_retry.py. Fix compute_backoff() so 1-indexed "
-            "attempts return min(base * (2 ** (attempt - 1)), max_delay) and raise ValueError "
-            "for attempt < 1."
-        ),
-        verify_command=VERIFY_CMD,
-        files={
-            "retry.py": (
-                '"""Exponential backoff calculation."""\n\n'
-                "def compute_backoff(\n"
-                "    attempt: int, *, base: float = 1.0, max_delay: float = 30.0\n"
-                ") -> float:\n"
-                "    return base * (2**attempt)\n"
-            ),
-        },
-        tests={
-            "tests/__init__.py": "",
-            "tests/test_retry.py": (
-                "import unittest\n"
-                "from retry import compute_backoff\n\n\n"
-                "class TestRetry(unittest.TestCase):\n"
-                "    def test_progression_and_cap(self) -> None:\n"
-                "        self.assertEqual(compute_backoff(1, base=2.0, max_delay=10.0), 2.0)\n"
-                "        self.assertEqual(compute_backoff(2, base=2.0, max_delay=10.0), 4.0)\n"
-                "        self.assertEqual(compute_backoff(3, base=2.0, max_delay=10.0), 8.0)\n"
-                "        self.assertEqual(compute_backoff(4, base=2.0, max_delay=10.0), 10.0)\n\n"
-                "    def test_invalid_attempt_raises(self) -> None:\n"
-                "        with self.assertRaises(ValueError):\n"
-                "            compute_backoff(0)\n"
-            ),
-        },
-        known_good_files={
-            "retry.py": (
-                '"""Exponential backoff calculation."""\n\n'
-                "def compute_backoff(\n"
-                "    attempt: int, *, base: float = 1.0, max_delay: float = 30.0\n"
-                ") -> float:\n"
-                "    if attempt < 1:\n"
-                '        raise ValueError("attempt must be >= 1")\n'
-                "    return min(base * (2 ** (attempt - 1)), max_delay)\n"
-            ),
-        },
-    ),
-)
 
 
 class TaskAttemptResult(BaseModel):
@@ -309,6 +77,8 @@ class TaskAttemptResult(BaseModel):
     estimated_cost_usd: float = Field(ge=0.0)
     tool_calls: int = Field(ge=0)
     tool_errors: int = Field(ge=0)
+    patch_applied: bool = False
+    trajectory_path: str | None = None
     run_id: str | None = None
     reported_model: str | None = None
     reason: str = ""
@@ -337,6 +107,7 @@ class ProfileBenchmarkSummary(BaseModel):
     total_cost_usd: float = Field(ge=0.0)
     cost_per_verified_fix_usd: float | None = None
     tool_error_rate: float = Field(ge=0.0)
+    false_positive_rate: float = Field(default=0.0, ge=0.0)
     results: list[TaskAttemptResult]
 
 
@@ -428,18 +199,12 @@ def _harness_revision() -> str:
     return "unknown"
 
 
-def _resolve_tasks(task_ids: list[str] | None) -> list[BenchmarkTask]:
-    by_id = {task.id: task for task in BUILTIN_TASKS}
-    if not task_ids:
-        return list(BUILTIN_TASKS)
-    selected: list[BenchmarkTask] = []
-    for task_id in task_ids:
-        if task_id not in by_id:
-            available = ", ".join(sorted(by_id))
-            msg = f"Unknown benchmark task '{task_id}'. Available: {available}"
-            raise ValueError(msg)
-        selected.append(by_id[task_id])
-    return selected
+def _resolve_tasks(
+    task_ids: list[str] | None,
+    *,
+    suite: Literal["smoke", "full"] | None = None,
+) -> list[BenchmarkTask]:
+    return resolve_tasks(task_ids, suite=suite)
 
 
 def _estimate_attempt_cost(usage: TokenUsage, model: str, base_url: str | None) -> float:
@@ -471,6 +236,9 @@ def summarize_profile(
     latencies = [item.latency_seconds for item in results]
     total_calls = sum(item.tool_calls for item in results)
     total_errors = sum(item.tool_errors for item in results)
+    false_positives = sum(
+        1 for item in results if item.status == "failed" and item.reason == "unverified_completion"
+    )
     reported_models = list(
         dict.fromkeys(item.reported_model for item in results if item.reported_model)
     )
@@ -495,12 +263,113 @@ def summarize_profile(
             round(total_cost / verified_fixes, 6) if verified_fixes > 0 else None
         ),
         tool_error_rate=round(total_errors / total_calls, 4) if total_calls else 0.0,
+        false_positive_rate=round(false_positives / attempts, 4) if attempts else 0.0,
         results=results,
     )
 
 
+def save_attempt_trajectory(
+    trajectory_path: Path,
+    *,
+    profile: str,
+    task_id: str,
+    attempt: int,
+    run: AgentRun,
+    result: TaskAttemptResult,
+) -> Path:
+    """Persist the full message, tool, and verification trajectory as JSONL."""
+    trajectory_path.parent.mkdir(parents=True, exist_ok=True)
+    records: list[dict[str, Any]] = [
+        {
+            "kind": "run_header",
+            "profile": profile,
+            "task_id": task_id,
+            "attempt": attempt,
+            "run_id": run.id,
+            "model": run.config.model,
+            "state": run.state.value,
+            "iterations": run.iterations,
+            "total_tokens": {
+                "prompt_tokens": run.total_tokens.prompt_tokens,
+                "completion_tokens": run.total_tokens.completion_tokens,
+                "total_tokens": run.total_tokens.total_tokens,
+            },
+        }
+    ]
+    for index, msg in enumerate(run.messages):
+        msg_rec: dict[str, Any] = {
+            "kind": "message",
+            "index": index,
+            "role": msg.role.value,
+            "content": msg.content,
+        }
+        if msg.tool_call_id:
+            msg_rec["tool_call_id"] = msg.tool_call_id
+        if msg.tool_calls:
+            msg_rec["tool_calls"] = [asdict(tc) for tc in msg.tool_calls]
+        records.append(msg_rec)
+    for inv in run.tool_invocations:
+        records.append(
+            {
+                "kind": "tool_invocation",
+                "iteration": inv.iteration,
+                "tool_name": inv.tool_name,
+                "arguments": inv.arguments,
+                "exit_code": inv.result.exit_code,
+                "error": inv.result.error,
+                "output": inv.result.output,
+                "duration_ms": inv.duration_ms,
+            }
+        )
+    if run.verification is not None:
+        records.append(
+            {
+                "kind": "verification",
+                "base_revision": run.verification.base_revision,
+                "reason": run.verification.reason,
+                "passed": run.verification.passed,
+                "exit_code": run.verification.exit_code,
+                "patch": run.verification.patch,
+                "stdout": run.verification.stdout,
+                "stderr": run.verification.stderr,
+            }
+        )
+    records.append({"kind": "attempt_result", **result.model_dump(mode="json")})
+    trajectory_path.write_text(
+        "\n".join(json.dumps(item, default=str) for item in records) + "\n",
+        encoding="utf-8",
+    )
+    return trajectory_path
+
+
+def maybe_save_trajectory(
+    trajectory_dir: Path | None,
+    *,
+    profile_name: str,
+    task_id: str,
+    attempt: int,
+    run: AgentRun,
+    result: TaskAttemptResult,
+) -> TaskAttemptResult:
+    """Persist attempt trajectory JSONL when ``trajectory_dir`` is provided."""
+    if trajectory_dir is None:
+        return result
+    path = trajectory_dir / f"{profile_name}__{task_id}__attempt-{attempt}.jsonl"
+    updated = result.model_copy(update={"trajectory_path": str(path)})
+    save_attempt_trajectory(
+        path,
+        profile=profile_name,
+        task_id=task_id,
+        attempt=attempt,
+        run=run,
+        result=updated,
+    )
+    return updated
+
+
 async def _run_single_attempt(
     config: ForgeConfig,
+    profile_name: str,
     profile: ModelProfileSettings,
     api_key: str,
     base_url: str | None,
@@ -511,6 +380,7 @@ async def _run_single_attempt(
     max_iterations: int,
     max_tokens_per_run: int,
     timeout_seconds: int,
+    trajectory_dir: Path | None = None,
 ) -> TaskAttemptResult:
     temperature = (
         profile.temperature if profile.temperature is not None else config.agent.temperature
@@ -543,7 +413,11 @@ async def _run_single_attempt(
         llm = _RecordingLLM(raw_llm)
         sandbox = create_sandbox(sandbox_config)
         try:
-            with VerificationWorkspace(str(repo_path), task.verify_command) as workspace:
+            with VerificationWorkspace(
+                str(repo_path),
+                task.verify_command,
+                extra_verifier_files=task.hidden_tests,
+            ) as workspace:
                 await sandbox.start(repo_path=str(workspace.workspace), config=sandbox_config)
 
                 async def _verify() -> Any:
@@ -552,7 +426,7 @@ async def _run_single_attempt(
                 async with asyncio.timeout(timeout_seconds):
                     await react_loop(run, llm, tools, sandbox, verify=_verify)
         except TimeoutError:
-            return _error_attempt_result(
+            res = _error_attempt_result(
                 task.id,
                 attempt,
                 run,
@@ -562,8 +436,16 @@ async def _run_single_attempt(
                 time.monotonic() - started,
                 reason=f"Timed out after {timeout_seconds}s",
             )
+            return maybe_save_trajectory(
+                trajectory_dir,
+                profile_name=profile_name,
+                task_id=task.id,
+                attempt=attempt,
+                run=run,
+                result=res,
+            )
         except Exception as exc:  # noqa: BLE001 — isolate failed candidate runs
-            return _error_attempt_result(
+            res = _error_attempt_result(
                 task.id,
                 attempt,
                 run,
@@ -573,13 +455,21 @@ async def _run_single_attempt(
                 time.monotonic() - started,
                 reason=f"{type(exc).__name__}: {exc}",
             )
+            return maybe_save_trajectory(
+                trajectory_dir,
+                profile_name=profile_name,
+                task_id=task.id,
+                attempt=attempt,
+                run=run,
+                result=res,
+            )
         finally:
             try:
                 await sandbox.stop()
             finally:
                 await llm.close()
 
-    return _build_completed_result(
+    res = build_completed_result(
         task.id,
         attempt,
         run,
@@ -587,6 +477,14 @@ async def _run_single_attempt(
         base_url,
         llm.reported_models,
         time.monotonic() - started,
+    )
+    return maybe_save_trajectory(
+        trajectory_dir,
+        profile_name=profile_name,
+        task_id=task.id,
+        attempt=attempt,
+        run=run,
+        result=res,
     )
 
 
@@ -626,7 +524,7 @@ def _error_attempt_result(
     )
 
 
-def _build_completed_result(
+def build_completed_result(
     task_id: str,
     attempt: int,
     run: AgentRun,
@@ -635,8 +533,13 @@ def _build_completed_result(
     reported_models: list[str],
     latency_seconds: float,
 ) -> TaskAttemptResult:
+    """Build a scored :class:`TaskAttemptResult` from a completed agent run."""
     verification = run.verification
     verified = verification is not None and verification.passed and run.state == RunState.COMPLETED
+    patch_applied = verification is not None and verification.reason in (
+        "verified",
+        "check_failed",
+    )
     tool_calls = len(run.tool_invocations)
     tool_errors = sum(
         1
@@ -657,6 +560,7 @@ def _build_completed_result(
         estimated_cost_usd=round(_estimate_attempt_cost(run.total_tokens, model, base_url), 6),
         tool_calls=tool_calls,
         tool_errors=tool_errors,
+        patch_applied=patch_applied,
         run_id=run.id,
         reported_model=reported_models[0] if reported_models else None,
         reason=reason,
@@ -668,18 +572,20 @@ async def run_benchmark(
     *,
     profile_names: list[str] | None = None,
     task_ids: list[str] | None = None,
+    suite: Literal["smoke", "full"] | None = None,
     attempts: int = 1,
     sandbox_backend: str | None = None,
     max_iterations: int = 8,
     max_tokens_per_run: int = 40_000,
     timeout_seconds: int = 180,
+    trajectory_dir: Path | None = None,
 ) -> BenchmarkReport:
     """Run pinned coding benchmark tasks across selected model profiles."""
     if attempts < 1:
         msg = "attempts must be >= 1"
         raise ValueError(msg)
 
-    tasks = _resolve_tasks(task_ids)
+    tasks = _resolve_tasks(task_ids, suite=suite)
     names = list(profile_names) if profile_names else list(config.model_profiles)
     if not names:
         msg = "No model profiles configured to benchmark."
@@ -725,6 +631,7 @@ async def run_benchmark(
                 results.append(
                     await _run_single_attempt(
                         config,
+                        name,
                         profile,
                         api_key,
                         base_url,
@@ -734,6 +641,7 @@ async def run_benchmark(
                         max_iterations=max_iterations,
                         max_tokens_per_run=max_tokens_per_run,
                         timeout_seconds=timeout_seconds,
+                        trajectory_dir=trajectory_dir,
                     )
                 )
         summaries.append(

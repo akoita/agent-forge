@@ -25,13 +25,31 @@ make eval
 The grader applies each curated patch to a fresh copy of the sample app and
 runs the original tests from a separate directory. The base, empty patch, and
 incorrect patch must fail the health check. The known-good patch must pass the
-health check and the two existing regression tests. `tests/eval/test_benchmark_corpus.py`
-likewise verifies that every task in `agent_forge.eval.BUILTIN_TASKS` fails on
-the buggy base and empty diff, and passes on its known-good fix. CI runs both
-deterministically on Python 3.13 without a provider key.
+health check and the two existing regression tests.
 
-To measure live models against those pinned tasks, run `agent-forge models benchmark`
-and compare against the checked-in [v0.4.0 baseline report](eval/baseline-v0.4.0.md).
+`tests/eval/test_benchmark_corpus.py` exercises the 12-task corpus in
+`agent_forge.eval.corpus.BUILTIN_TASKS` across two tiers (`smoke` with 4 tasks
+for CI and `full` with all 12 tasks). Each task includes visible unit tests and
+hidden verifier tests injected only inside the independent verifier checkout:
+
+- Every base checkout, empty patch, and partial `incomplete_files` edit must fail verification.
+- Every `known_good_files` fix must pass both visible and hidden verification tests.
+- `python -m agent_forge.eval --suite smoke --report-dir .eval-artifacts --assert-gates`
+  runs scripted `oracle`, `noop`, and `incomplete` profiles through the full
+  `react_loop`, tool registry, `VerificationWorkspace`, and JSONL trajectory
+  capture, asserting 100% oracle pass and 0% false-positive completions.
+
+To generate or refresh a full release report and measure live models against
+those pinned tasks, compare against the checked-in
+[v0.6.0 deterministic baseline](eval/baseline-v0.6.0.md) and
+[v0.4.0 live model baseline](eval/baseline-v0.4.0.md):
+
+```sh
+python -m agent_forge.eval --suite full \
+  --output-json docs/eval/baseline-v0.6.0.json \
+  --output-md docs/eval/baseline-v0.6.0.md \
+  --assert-gates
+```
 
 ## Verify a coding run
 

@@ -27,8 +27,9 @@ test-integration:          ## Run integration tests (requires Docker)
 test-e2e:                  ## Run e2e tests (requires GEMINI_API_KEY + Docker)
 	pytest tests/e2e -v -m e2e
 
-eval:                      ## Run the deterministic fix evaluation
+eval:                      ## Run the deterministic fix evaluation and scored smoke gate
 	pytest tests/eval -v
+	python -m agent_forge.eval --suite smoke --report-dir .eval-artifacts --assert-gates
 
 lint:                      ## Run linters
 	ruff check agent_forge tests

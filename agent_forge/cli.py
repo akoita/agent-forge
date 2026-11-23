@@ -21,6 +21,8 @@ from agent_forge.config import USER_CONFIG_DIR, ForgeConfig, load_config
 from agent_forge.llm.factory import create_provider, provider_names
 
 if TYPE_CHECKING:
+    from typing import Literal
+
     from agent_forge.orchestration.event_stream import RunEventStream, StreamEvent
     from agent_forge.sandbox.base import SandboxConfig
 
@@ -156,6 +158,12 @@ def _grade_model_fix(
     multiple=True,
     help="Benchmark task ID to run (defaults to all built-in tasks).",
 )
+@click.option(
+    "--suite",
+    type=click.Choice(["smoke", "full"]),
+    default=None,
+    help="Select built-in task suite tier (smoke or full).",
+)
 @click.option("--attempts", default=1, type=int, help="Attempts per task for each profile.")
 @click.option("--sandbox-backend", default=None, help="Override sandbox backend (docker, bwrap).")
 @click.option("--max-iterations", default=8, type=int, help="Max iterations per task attempt.")
@@ -172,15 +180,23 @@ def _grade_model_fix(
     default=None,
     help="Write a Markdown summary report to this file.",
 )
+@click.option(
+    "--trajectory-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory to write per-attempt JSONL trajectories.",
+)
 def benchmark_models(
     profiles: tuple[str, ...],
     tasks: tuple[str, ...],
+    suite: Literal["smoke", "full"] | None,
     attempts: int,
     sandbox_backend: str | None,
     max_iterations: int,
     max_tokens: int,
     output_json: Path | None,
     output_md: Path | None,
+    trajectory_dir: Path | None,
 ) -> None:
     """Benchmark configured model profiles on pinned coding tasks."""
     from agent_forge.eval import render_markdown_report, run_benchmark
@@ -194,10 +210,12 @@ def benchmark_models(
                     config,
                     profile_names=list(profiles) if profiles else None,
                     task_ids=list(tasks) if tasks else None,
+                    suite=suite,
                     attempts=attempts,
                     sandbox_backend=sandbox_backend,
                     max_iterations=max_iterations,
                     max_tokens_per_run=max_tokens,
+                    trajectory_dir=trajectory_dir,
                 )
             )
         except ValueError as exc:

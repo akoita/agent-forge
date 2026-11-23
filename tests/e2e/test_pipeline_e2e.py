@@ -10,6 +10,8 @@ making them suitable for CI.
 from __future__ import annotations
 
 import asyncio
+import json
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,6 +21,7 @@ import respx
 from click.testing import CliRunner
 
 from agent_forge.cli import main
+from agent_forge.eval.deterministic import SubprocessEvalSandbox
 from agent_forge.orchestration.events import EventType
 
 # ---------------------------------------------------------------------------
@@ -155,26 +158,112 @@ class TestPipelineDirect:
         self,
         runner: CliRunner,
         workspace: Path,
+        tmp_path: Path,
     ) -> None:
-        """Agent reads app.py, sees the 500 bug, and produces a fix."""
+        """Agent edits app.py, produces a real Git diff, and passes independent verification."""
+        for cmd in (
+            ["git", "init"],
+            ["git", "config", "user.name", "E2E Test"],
+            ["git", "config", "user.email", "e2e@example.com"],
+            ["git", "add", "."],
+            ["git", "commit", "-m", "base"],
+        ):
+            subprocess.run(cmd, cwd=workspace, check=True, capture_output=True)  # noqa: S603
+
+        responses = _gemini_tool_then_stop(
+            tool_name="edit_file",
+            tool_args={
+                "path": "app.py",
+                "old_text": '    return jsonify({"status": "error"}), 500',
+                "new_text": '    return jsonify({"status": "ok"}), 200',
+            },
+            final_text="Updated /health handler in app.py to return status ok with HTTP 200.",
+        )
+        report_file = tmp_path / "e2e-fix-report.json"
+        verify_cmd = (
+            'python3 -c "import ast, pathlib; '
+            "src = pathlib.Path('app.py').read_text(); "
+            "ast.parse(src); "
+            "assert 'ok' in src and '200' in src and 'error' not in src\""
+        )
+        with (
+            patch(
+                "agent_forge.sandbox.factory.create_sandbox",
+                side_effect=lambda _cfg: SubprocessEvalSandbox(),
+            ),
+            patch(
+                "agent_forge.agent.verification.create_sandbox",
+                side_effect=lambda _cfg: SubprocessEvalSandbox(),
+            ),
+        ):
+            result = _run_with_recorded_responses(
+                runner,
+                workspace,
+                "Fix the health endpoint bug in app.py — it should return 200",
+                responses,
+                extra_args=[
+                    "--verify-command",
+                    verify_cmd,
+                    "--report-file",
+                    str(report_file),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Verification failed: {result.output}"
+        report = json.loads(report_file.read_text(encoding="utf-8"))
+        assert report["state"] == "completed"
+        assert report["verification"]["reason"] == "verified"
+        assert '+    return jsonify({"status": "ok"}), 200' in report["verification"]["patch"]
+
+    def test_fix_health_endpoint_rejects_read_only_completion(
+        self,
+        runner: CliRunner,
+        workspace: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Agent stopping after read_file without producing a patch fails verification."""
+        for cmd in (
+            ["git", "init"],
+            ["git", "config", "user.name", "E2E Test"],
+            ["git", "config", "user.email", "e2e@example.com"],
+            ["git", "add", "."],
+            ["git", "commit", "-m", "base"],
+        ):
+            subprocess.run(cmd, cwd=workspace, check=True, capture_output=True)  # noqa: S603
+
         responses = _gemini_tool_then_stop(
             tool_name="read_file",
             tool_args={"path": "app.py"},
-            final_text=(
-                "I found the bug: the /health endpoint returns 500 "
-                "instead of 200. The fix is to change the status code."
+            final_text="I found the bug in /health; changing 500 to 200 would fix it.",
+        )
+        report_file = tmp_path / "e2e-noop-report.json"
+        with (
+            patch(
+                "agent_forge.sandbox.factory.create_sandbox",
+                side_effect=lambda _cfg: SubprocessEvalSandbox(),
             ),
-        )
+            patch(
+                "agent_forge.agent.verification.create_sandbox",
+                side_effect=lambda _cfg: SubprocessEvalSandbox(),
+            ),
+        ):
+            result = _run_with_recorded_responses(
+                runner,
+                workspace,
+                "Fix the health endpoint bug in app.py — it should return 200",
+                responses,
+                extra_args=[
+                    "--verify-command",
+                    "python3 -c 'import sys; sys.exit(0)'",
+                    "--report-file",
+                    str(report_file),
+                ],
+            )
 
-        result = _run_with_recorded_responses(
-            runner,
-            workspace,
-            "Fix the health endpoint bug in app.py — it should return 200",
-            responses,
-        )
-
-        # Agent ran and completed (either 0=success or 1=task summary shown)
-        assert result.exit_code in (0, 1), f"Crash: {result.output}"
+        assert result.exit_code == 1
+        report = json.loads(report_file.read_text(encoding="utf-8"))
+        assert report["state"] == "failed"
+        assert report["verification"]["reason"] == "empty_patch"
 
     def test_add_type_hints(
         self,

@@ -13,6 +13,7 @@ from agent_forge.llm.errors import SandboxError
 from agent_forge.sandbox.factory import create_sandbox
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import TracebackType
 
     from agent_forge.sandbox.base import Sandbox, SandboxConfig
@@ -68,12 +69,14 @@ class VerificationWorkspace:
         *,
         base_revision: str | None = None,
         initial_patch: str = "",
+        extra_verifier_files: dict[str, str] | None = None,
     ) -> None:
         """Select the repository and caller-supplied verification command."""
         self._repository = Path(repository).resolve()
         self._command = command
         self._requested_base_revision = base_revision
         self._initial_patch = initial_patch
+        self._extra_verifier_files = dict(extra_verifier_files or {})
         self._temporary: tempfile.TemporaryDirectory[str] | None = None
         self.workspace: Path
         self.base_revision: str
@@ -162,7 +165,26 @@ class VerificationWorkspace:
         """Capture the candidate workspace diff against the pinned base revision."""
         return self._capture_patch().decode(errors="surrogateescape")
 
-    async def verify(self, config: SandboxConfig, candidate: Sandbox) -> VerificationResult:
+    def _write_extra_verifier_files(self) -> None:
+        verifier_root = self._verifier.resolve()
+        for rel_path, content in self._extra_verifier_files.items():
+            if Path(rel_path).is_absolute():
+                msg = f"Verifier file path must be relative: {rel_path}"
+                raise ValueError(msg)
+            target = (verifier_root / rel_path).resolve()
+            if not target.is_relative_to(verifier_root) or target == verifier_root:
+                msg = f"Verifier file path escapes verifier checkout: {rel_path}"
+                raise ValueError(msg)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+
+    async def verify(
+        self,
+        config: SandboxConfig,
+        candidate: Sandbox,
+        *,
+        sandbox_factory: Callable[[SandboxConfig], Sandbox] | None = None,
+    ) -> VerificationResult:
         """Apply the candidate patch in the verifier checkout and run the check."""
         result = VerificationResult(self.base_revision, "", "verification_error", self._command)
         try:
@@ -173,10 +195,11 @@ class VerificationWorkspace:
                 return replace(result, reason="empty_patch")
             result.patch = patch.decode(errors="surrogateescape")
             _git(self._verifier, "apply", "-", patch=patch)
+            self._write_extra_verifier_files()
             verification_config = replace(
                 config, network_enabled=False, writable_cache_mounts=False
             )
-            sandbox = create_sandbox(verification_config)
+            sandbox = (sandbox_factory or create_sandbox)(verification_config)
             try:
                 await sandbox.start(str(self._verifier), verification_config)
                 check = await sandbox.exec(self._command, timeout_seconds=config.timeout_seconds)
