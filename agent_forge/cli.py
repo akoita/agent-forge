@@ -846,12 +846,23 @@ async def _run_agent_queued(
     Enqueues a :class:`Task`, starts a :class:`Worker`, and waits for
     the task to complete or fail.
     """
+    from agent_forge.config import QueueSettings
     from agent_forge.orchestration.event_stream import JournalEventSink
     from agent_forge.orchestration.events import EventBus
     from agent_forge.orchestration.queue import InMemoryQueue, Task, TaskQueue, TaskStatus
     from agent_forge.orchestration.worker import Worker
+    from agent_forge.orchestration.worktree import DEFAULT_BRANCH_PREFIX, is_git_repo
 
     agent_config = _build_agent_config(cfg, provider_name)
+    raw_queue_cfg = getattr(cfg, "queue", None)
+    queue_cfg = raw_queue_cfg if isinstance(raw_queue_cfg, QueueSettings) else None
+    effective_concurrency = max(
+        1,
+        max_concurrent_runs or (queue_cfg.max_concurrent_runs if queue_cfg is not None else 1),
+    )
+    use_worktrees = bool(
+        queue_cfg is not None and queue_cfg.worktree_isolation and is_git_repo(repo)
+    )
 
     event_bus = EventBus()
     sink = JournalEventSink()
@@ -871,7 +882,20 @@ async def _run_agent_queued(
     # Build the task runner — this is what the Worker calls for each task
     task_runner = _make_task_runner(cfg, provider_name, api_key, event_bus)
 
-    worker = Worker(queue=queue, event_bus=event_bus, task_runner=task_runner)
+    worker = Worker(
+        queue=queue,
+        event_bus=event_bus,
+        task_runner=task_runner,
+        max_concurrent_tasks=effective_concurrency,
+        worktree_isolation=use_worktrees,
+        worktree_root=(queue_cfg.worktree_root or None) if queue_cfg is not None else None,
+        worktree_branch_prefix=(
+            queue_cfg.worktree_branch_prefix if queue_cfg is not None else DEFAULT_BRANCH_PREFIX
+        ),
+        auto_remove_unchanged_worktrees=(
+            queue_cfg.auto_remove_unchanged_worktrees if queue_cfg is not None else True
+        ),
+    )
 
     # Enqueue and run
     queue_task = Task(
@@ -1874,6 +1898,124 @@ def init_extension(name: str, target_dir: Path | None) -> None:
     console.print("  pip install -e '.[dev]'")
     console.print("  pytest")
     console.print("  agent-forge extensions list")
+
+
+# ---------------------------------------------------------------------------
+# worktrees
+# ---------------------------------------------------------------------------
+
+
+def _build_cli_worktree_manager(repo: str) -> tuple[Any, Any]:
+    from agent_forge.orchestration.worktree import WorktreeError, WorktreeManager
+
+    cfg = load_config()
+    try:
+        manager = WorktreeManager(
+            repo,
+            worktrees_root=cfg.queue.worktree_root or None,
+            branch_prefix=cfg.queue.worktree_branch_prefix,
+        )
+    except WorktreeError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+    return manager, cfg
+
+
+@main.group()
+def worktrees() -> None:
+    """Inspect, clean up, and integrate isolated run worktrees."""
+
+
+@worktrees.command("list")
+@click.option("--repo", default=".", show_default=True, help="Path to Git repository.")
+def worktrees_list(repo: str) -> None:
+    """List Git worktrees associated with this repository."""
+    manager, _cfg = _build_cli_worktree_manager(repo)
+    items = asyncio.run(manager.list_worktrees())
+    table = Table(title="Git Worktrees")
+    table.add_column("Path", style="cyan")
+    table.add_column("Branch", style="green")
+    table.add_column("HEAD")
+    table.add_column("Managed", justify="center")
+    table.add_column("Run ID")
+    for item in items:
+        table.add_row(
+            str(item.path),
+            item.branch or "(detached)",
+            item.head[:10] if item.head else "-",
+            "yes" if item.managed else "no",
+            item.run_id or "-",
+        )
+    console.print(table)
+
+
+@worktrees.command("cleanup")
+@click.option("--repo", default=".", show_default=True, help="Path to Git repository.")
+@click.option("--keep-branches", is_flag=True, help="Preserve unmerged run branches.")
+def worktrees_cleanup(repo: str, keep_branches: bool) -> None:
+    """Remove orphan worktrees and stale run branches."""
+    manager, _cfg = _build_cli_worktree_manager(repo)
+    cleaned = asyncio.run(manager.cleanup_orphans(remove_branches=not keep_branches))
+    if not cleaned:
+        console.print("[dim]No orphan worktrees found.[/dim]")
+        return
+    for entry in cleaned:
+        console.print(f"[green]Removed:[/green] {entry}")
+
+
+@worktrees.command("integrate")
+@click.argument("target_ref")
+@click.option("--repo", default=".", show_default=True, help="Path to Git repository.")
+@click.option("--target", default=None, help="Destination branch (defaults to current HEAD).")
+@click.option(
+    "--strategy",
+    type=click.Choice(["merge", "rebase"], case_sensitive=False),
+    default=None,
+    help="Git integration strategy (merge or rebase).",
+)
+@click.option("--keep-branch", is_flag=True, help="Keep the run branch after integration.")
+def worktrees_integrate(
+    target_ref: str,
+    repo: str,
+    target: str | None,
+    strategy: str | None,
+    keep_branch: bool,
+) -> None:
+    """Integrate a completed run branch or run ID into the target branch."""
+    manager, cfg = _build_cli_worktree_manager(repo)
+    chosen_strategy = (strategy or cfg.queue.merge_strategy).lower()
+    branch = (
+        target_ref
+        if "/" in target_ref or manager._branch_exists_sync(target_ref)
+        else f"{manager.branch_prefix}/{target_ref}"
+    )
+    run_id = target_ref.removeprefix(f"{manager.branch_prefix}/")
+    result = asyncio.run(
+        manager.integrate_branch(
+            branch,
+            run_id=run_id,
+            target_branch=target,
+            strategy=chosen_strategy,
+            delete_branch_on_success=not keep_branch,
+        )
+    )
+    if result.status == "merged":
+        console.print(
+            f"[green]Integrated[/green] {result.branch} -> {result.target_branch} "
+            f"({result.merged_revision})"
+        )
+        return
+    if result.status == "no_changes":
+        console.print(f"[yellow]No changes[/yellow] on {result.branch} to integrate.")
+        return
+    if result.status == "conflict":
+        err_console.print(
+            f"[red]Conflict[/red] integrating {result.branch} into {result.target_branch}: "
+            f"{', '.join(result.conflicted_files) or result.detail}"
+        )
+        sys.exit(1)
+    err_console.print(f"[red]Integration failed:[/red] {result.detail}")
+    sys.exit(1)
 
 
 if __name__ == "__main__":
