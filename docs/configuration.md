@@ -151,6 +151,9 @@ agent-forge worktrees integrate <run-id-or-branch> --repo ./my-project --strateg
 agent-forge worktrees cleanup --repo ./my-project
 agent-forge mcp list
 agent-forge mcp inspect --output-format json
+agent-forge auth status --output-format json
+agent-forge auth login github
+agent-forge auth import-gh
 agent-forge acp --approval-mode prompt
 agent-forge list
 agent-forge config        # Show resolved configuration
@@ -371,3 +374,23 @@ agent-forge config
 ```
 
 This displays the fully resolved configuration as syntax-highlighted JSON, showing which values came from defaults vs overrides.
+
+## Service Credentials (`agent-forge auth`)
+
+Store service credentials (such as GitHub PATs or MCP bearer tokens) on the host in `~/.agent-forge/credentials.json` (`0600`). Sandboxes never receive these credentials.
+
+```bash
+# Authenticate interactively or pipe a token on stdin
+agent-forge auth login github
+printf '%s\n' "$GITHUB_TOKEN" | agent-forge auth login github --token-stdin
+
+# Import an existing GitHub CLI session explicitly
+agent-forge auth import-gh
+
+# Inspect or remove stored host credentials
+agent-forge auth status
+agent-forge auth status --output-format json
+agent-forge auth logout github
+```
+
+`git_push`, `create_pr`, and HTTP MCP transports (`auth_env`) resolve environment variables first and fall back to the host credential store when absent.
