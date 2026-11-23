@@ -149,6 +149,8 @@ agent-forge cancel <run-id> --reason "Stopped by operator"
 agent-forge worktrees list --repo ./my-project
 agent-forge worktrees integrate <run-id-or-branch> --repo ./my-project --strategy merge
 agent-forge worktrees cleanup --repo ./my-project
+agent-forge mcp list
+agent-forge mcp inspect --output-format json
 agent-forge list
 agent-forge config        # Show resolved configuration
 ```
@@ -215,6 +217,25 @@ provider = "openai-compatible"
 model = "deepseek/deepseek-chat"
 base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
+
+[mcp]
+enabled = true
+
+[mcp.servers.filesystem]
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+approval_mode = "prompt"
+allow_read_only_without_approval = true
+timeout_seconds = 30.0
+failure_threshold = 3
+
+[mcp.servers.remote-api]
+transport = "http"
+url = "https://mcp.example.com/mcp"
+auth_env = "MCP_API_TOKEN"
+allow_tools = ["search_docs", "get_issue"]
+deny_tools = ["delete_issue"]
 ```
 
 Run directly or probe what a live endpoint supports before benchmarking:
