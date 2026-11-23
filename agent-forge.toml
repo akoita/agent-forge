@@ -73,6 +73,13 @@ default_model = "gpt-4o"
 api_key_env = "ANTHROPIC_API_KEY"
 default_model = "claude-sonnet-4-20250514"
 
+[providers.openai-compatible]
+base_url = ""                    # e.g. "http://localhost:11434/v1" (Ollama), ":8000/v1" (vLLM)
+api_key_env = ""                 # Optional for localhost servers; set env var for remote gateways
+default_model = ""
+api_mode = "chat_completions"
+api_key_required = false
+
 [model_profiles.gemini-flash-lite]
 provider = "gemini"
 model = "gemini-3.1-flash-lite-preview"
@@ -98,3 +105,21 @@ provider = "openai"
 model = "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
 base_url = "https://api.together.xyz/v1"
 api_key_env = "TOGETHER_API_KEY"
+
+# Example self-hosted OpenAI-compatible profiles (#46):
+# [model_profiles.local-ollama]
+# provider = "openai-compatible"
+# model = "gemma3:12b"
+# base_url = "http://localhost:11434/v1"
+#
+# [model_profiles.local-vllm]
+# provider = "openai-compatible"
+# model = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+# base_url = "http://localhost:8000/v1"
+# capabilities = { parallel_tool_calls = true, structured_output = true }
+#
+# [model_profiles.local-llamacpp]
+# provider = "openai-compatible"
+# model = "local-model"
+# base_url = "http://localhost:8080/v1"
+# capabilities = { parallel_tool_calls = false }

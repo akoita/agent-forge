@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -13,6 +12,10 @@ from agent_forge.llm.capabilities import (
     resolve_capabilities,
 )
 from agent_forge.llm.factory import create_provider
+from agent_forge.llm.qualification import (
+    resolve_profile_capabilities,
+    resolve_profile_credentials,
+)
 from agent_forge.observability.cost import COST_TABLE
 
 if TYPE_CHECKING:
@@ -35,6 +38,11 @@ class ModelCandidate:
     output_cost_per_token: float = 0.0
     base_url: str | None = None
     api_mode: str = "auto"
+    capability_overrides: dict[str, Any] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.capability_overrides is None:
+            object.__setattr__(self, "capability_overrides", {})
 
     @property
     def blended_cost_per_token(self) -> float:
@@ -236,12 +244,13 @@ def _build_candidate(
     api_mode = profile.api_mode
     if api_mode == "auto" and provider_cfg is not None and provider_cfg.api_mode != "auto":
         api_mode = provider_cfg.api_mode
+    merged_caps = resolve_profile_capabilities(config, profile)
     caps = resolve_capabilities(
         profile.provider,
         profile.model,
         api_mode=api_mode,
         base_url=base_url,
-        overrides=profile.capabilities,
+        overrides=merged_caps,
     )
     in_cost, out_cost = _lookup_model_pricing(profile.model)
     return ModelCandidate(
@@ -253,33 +262,26 @@ def _build_candidate(
         output_cost_per_token=out_cost,
         base_url=base_url,
         api_mode=api_mode,
+        capability_overrides=merged_caps,
     )
-
-
-def _resolve_profile_key(
-    config: ForgeConfig,
-    profile: ModelProfileSettings,
-) -> tuple[str, str]:
-    provider_cfg = config.providers.get(profile.provider)
-    default_env = provider_cfg.api_key_env if provider_cfg is not None else ""
-    key_env = profile.api_key_env or default_env
-    api_key = os.environ.get(key_env, "") if key_env else ""
-    return key_env, api_key
 
 
 def _instantiate_candidate_provider(
     cand: ModelCandidate,
     api_key: str,
-    shared_clients: dict[tuple[str, str, str | None, str], LLMProvider],
+    shared_clients: dict[tuple[Any, ...], LLMProvider],
     provider_factory: Callable[..., LLMProvider],
 ) -> LLMProvider:
-    client_key = (cand.provider_name, api_key, cand.base_url, cand.api_mode)
+    caps_key = tuple(sorted((cand.capability_overrides or {}).items()))
+    client_key = (cand.provider_name, api_key, cand.base_url, cand.api_mode, caps_key)
     if client_key not in shared_clients:
         kwargs: dict[str, Any] = {}
         if cand.base_url:
             kwargs["base_url"] = cand.base_url
-        if cand.provider_name == "openai":
+        if cand.provider_name in ("openai", "openai-compatible"):
             kwargs["api_mode"] = cand.api_mode
+            if cand.capability_overrides:
+                kwargs["capability_overrides"] = dict(cand.capability_overrides)
         shared_clients[client_key] = provider_factory(cand.provider_name, api_key, **kwargs)
     return shared_clients[client_key]
 
@@ -317,7 +319,7 @@ class RoutingLLMProvider(LLMProvider):
 
         candidates: list[ModelCandidate] = []
         providers: dict[str, LLMProvider] = {}
-        shared_clients: dict[tuple[str, str, str | None, str], LLMProvider] = {}
+        shared_clients: dict[tuple[Any, ...], LLMProvider] = {}
 
         for name in profile_names:
             profile = config.model_profiles.get(name)
@@ -326,8 +328,8 @@ class RoutingLLMProvider(LLMProvider):
                     msg = f"Unknown routing candidate model profile '{name}'."
                     raise ValueError(msg)
                 continue
-            key_env, api_key = _resolve_profile_key(config, profile)
-            if not api_key:
+            key_env, api_key, key_required = resolve_profile_credentials(config, profile)
+            if key_required and not api_key:
                 if explicit_names and provider_factory is create_provider:
                     msg = f"Missing credential variable {key_env} for routing candidate '{name}'."
                     raise ValueError(msg)

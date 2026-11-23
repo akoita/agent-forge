@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
+import uuid
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -49,6 +51,7 @@ _MAX_RETRIES = 5
 _BACKOFF_BASE = 2.0  # seconds
 _BACKOFF_MAX = 30.0  # cap delay at 30s
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
+_EMULATED_TOOL_CALL_RE = re.compile(r"```tool_call\s*\n(.*?)\n```", re.DOTALL)
 
 
 def _resolve_api_mode(
@@ -70,23 +73,35 @@ class OpenAIProvider(LLMProvider):
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str = "",
         *,
         base_url: str | None = None,
         api_mode: Literal["auto", "responses", "chat_completions"] = "auto",
+        capability_overrides: dict[str, Any] | None = None,
+        provider_name: str = "openai",
     ) -> None:
         self._api_key = api_key
-        self._base_url = base_url or _OPENAI_BASE_URL
+        normalized_url = (base_url or "").strip().rstrip("/")
+        self._base_url = normalized_url or _OPENAI_BASE_URL
+        self._provider_name = provider_name
+        self._capability_overrides = dict(capability_overrides) if capability_overrides else None
+        effective_mode: Literal["auto", "responses", "chat_completions"] = api_mode
+        if provider_name == "openai-compatible" and api_mode == "auto":
+            effective_mode = (
+                "responses"
+                if self._base_url.startswith("https://api.openai.com")
+                else "chat_completions"
+            )
         self._api_mode: Literal["responses", "chat_completions"] = _resolve_api_mode(
-            api_mode, base_url
+            effective_mode, self._base_url if normalized_url else None
         )
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if api_key.strip():
+            headers["Authorization"] = f"Bearer {api_key}"
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=httpx.Timeout(120.0),
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
         )
 
     @property
@@ -97,11 +112,29 @@ class OpenAIProvider(LLMProvider):
     def capabilities(self, model: str | None = None) -> ProviderCapabilities:
         """Return declared capabilities for this OpenAI provider and *model*."""
         return resolve_capabilities(
-            "openai",
+            self._provider_name,
             model or _DEFAULT_MODEL,
             api_mode=self._api_mode,
             base_url=self._base_url,
+            overrides=self._capability_overrides,
         )
+
+    async def list_models(self, *, timeout_seconds: float = 10.0) -> list[str]:
+        """Query ``GET /models`` on an OpenAI-compatible endpoint and return model IDs."""
+        try:
+            resp = await self._client.get(
+                "/models",
+                timeout=httpx.Timeout(timeout_seconds),
+            )
+            if resp.status_code >= 400:
+                return []
+            payload = resp.json()
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError):
+            return []
+        raw_data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(raw_data, list):
+            return []
+        return [str(item["id"]) for item in raw_data if isinstance(item, dict) and item.get("id")]
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""
@@ -172,6 +205,10 @@ class OpenAIProvider(LLMProvider):
         except httpx.TimeoutException as exc:
             raise LLMTimeoutError(
                 f"OpenAI streaming request timed out after {cfg.timeout_seconds}s"
+            ) from exc
+        except httpx.ConnectError as exc:
+            raise LLMResponseError(
+                f"Could not connect to OpenAI-compatible endpoint {self._base_url}: {exc}"
             ) from exc
 
     # ------------------------------------------------------------------
@@ -402,14 +439,119 @@ class OpenAIProvider(LLMProvider):
     # Chat Completions Request Building & Parsing (OpenAI-compatible mode)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _format_tool_emulation_instructions(
+        tools: list[ToolDefinition],
+        schema_note: str | None = None,
+    ) -> str:
+        tool_specs = [
+            {"name": t.name, "description": t.description, "parameters": t.parameters}
+            for t in tools
+        ]
+        blocks = [
+            "## Tool Invocation Format",
+            "Invoke tools by replying with one or more fenced `tool_call` JSON blocks:",
+            '```tool_call\n{"name": "<tool_name>", "arguments": {<arguments>}}\n```',
+            "Available tools JSON schema:",
+            json.dumps(tool_specs, sort_keys=True),
+        ]
+        if schema_note:
+            blocks.append(schema_note)
+        return "\n\n".join(blocks)
+
+    @staticmethod
+    def _append_system_guidance(
+        oai_messages: list[dict[str, Any]],
+        note: str,
+    ) -> list[dict[str, Any]]:
+        updated = [dict(m) for m in oai_messages]
+        for msg in updated:
+            if msg.get("role") == "system":
+                existing = str(msg.get("content") or "")
+                msg["content"] = f"{existing}\n\n{note}" if existing else note
+                return updated
+        return [{"role": "system", "content": note}, *updated]
+
+    @classmethod
+    def _messages_to_prompt_emulated_openai(
+        cls,
+        messages: list[Message],
+        tools: list[ToolDefinition],
+        *,
+        schema_note: str | None = None,
+    ) -> list[dict[str, Any]]:
+        oai_messages: list[dict[str, Any]] = []
+        for msg in messages:
+            if msg.role in (Role.SYSTEM, Role.USER):
+                oai_messages.append({"role": msg.role.value, "content": msg.content})
+            elif msg.role == Role.ASSISTANT:
+                parts: list[str] = [msg.content] if msg.content else []
+                for tc in msg.tool_calls or ():
+                    payload = json.dumps({"name": tc.name, "arguments": tc.arguments})
+                    parts.append(f"```tool_call\n{payload}\n```")
+                oai_messages.append({"role": "assistant", "content": "\n\n".join(parts)})
+            elif msg.role == Role.TOOL:
+                call_tag = f" {msg.tool_call_id}" if msg.tool_call_id else ""
+                oai_messages.append(
+                    {"role": "user", "content": f"[Tool Result{call_tag}]\n{msg.content}"}
+                )
+        instructions = cls._format_tool_emulation_instructions(tools, schema_note)
+        return cls._append_system_guidance(oai_messages, instructions)
+
+    @staticmethod
+    def _extract_emulated_tool_calls(content: str) -> tuple[str | None, list[ToolCall]]:
+        tool_calls: list[ToolCall] = []
+        matches = list(_EMULATED_TOOL_CALL_RE.finditer(content))
+        if not matches:
+            return content, []
+        for match in matches:
+            raw = match.group(1).strip()
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict) or not parsed.get("name"):
+                continue
+            raw_args = parsed.get("arguments")
+            args = dict(raw_args) if isinstance(raw_args, dict) else {}
+            tool_calls.append(
+                ToolCall(
+                    id=f"emulated_call_{uuid.uuid4().hex[:12]}",
+                    name=str(parsed["name"]),
+                    arguments=args,
+                )
+            )
+        if not tool_calls:
+            return content, []
+        stripped = _EMULATED_TOOL_CALL_RE.sub("", content).strip()
+        return stripped or None, tool_calls
+
     def _build_request_body(
         self,
         messages: list[Message],
         tools: list[ToolDefinition] | None,
         config: LLMConfig,
     ) -> dict[str, Any]:
-        """Build the OpenAI Chat Completions request body."""
-        oai_messages = self._messages_to_openai(messages)
+        """Build the OpenAI Chat Completions request body with capability fallbacks."""
+        caps = self.capabilities(config.model)
+        use_prompt_tools = bool(tools) and not caps.tool_calling
+        schema_note: str | None = None
+        if config.response_schema and not caps.structured_output:
+            schema_json = json.dumps(config.response_schema, sort_keys=True)
+            schema_note = (
+                "Respond with a single valid JSON object conforming strictly to this schema:\n"
+                f"{schema_json}"
+            )
+
+        if use_prompt_tools and tools is not None:
+            oai_messages = self._messages_to_prompt_emulated_openai(
+                messages, tools, schema_note=schema_note
+            )
+        else:
+            oai_messages = self._messages_to_openai(messages)
+            if schema_note:
+                oai_messages = self._append_system_guidance(oai_messages, schema_note)
+
         body: dict[str, Any] = {
             "model": config.model,
             "messages": oai_messages,
@@ -418,7 +560,17 @@ class OpenAIProvider(LLMProvider):
             "top_p": config.top_p,
         }
 
-        if tools:
+        if config.response_schema and caps.structured_output:
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "schema": config.response_schema,
+                    "strict": True,
+                },
+            }
+
+        if tools and not use_prompt_tools:
             body["tools"] = [
                 {
                     "type": "function",
@@ -431,7 +583,7 @@ class OpenAIProvider(LLMProvider):
                 for t in tools
             ]
             body["tool_choice"] = "auto"
-            if config.parallel_tool_calls is not None:
+            if caps.parallel_tool_calls and config.parallel_tool_calls is not None:
                 body["parallel_tool_calls"] = config.parallel_tool_calls
 
         return body
@@ -484,8 +636,18 @@ class OpenAIProvider(LLMProvider):
 
         content = message.get("content")
         tool_calls = self._parse_tool_calls(message.get("tool_calls"))
+        caps = self.capabilities(model)
+        if not tool_calls and not caps.tool_calling and isinstance(content, str) and content:
+            content, tool_calls = self._extract_emulated_tool_calls(content)
 
-        usage_data = data.get("usage", {})
+        raw_reasoning = message.get("reasoning_content") or message.get("reasoning")
+        reasoning_blocks = (
+            [{"type": "reasoning_content", "text": raw_reasoning}]
+            if isinstance(raw_reasoning, str) and raw_reasoning.strip()
+            else []
+        )
+
+        usage_data = data.get("usage") or {}
         cached = int((usage_data.get("prompt_tokens_details") or {}).get("cached_tokens", 0))
         reasoning_toks = int(
             (usage_data.get("completion_tokens_details") or {}).get("reasoning_tokens", 0)
@@ -507,6 +669,7 @@ class OpenAIProvider(LLMProvider):
             finish_reason=mapped_reason,
             reported_model=data.get("model"),
             response_id=data.get("id"),
+            reasoning_blocks=reasoning_blocks,
         )
 
     def _parse_stream_chunk(self, data: dict[str, Any], model: str) -> LLMResponse:
@@ -537,16 +700,16 @@ class OpenAIProvider(LLMProvider):
         result: list[ToolCall] = []
         for tc in raw_calls:
             fn = tc.get("function", {})
-            args_str = fn.get("arguments", "{}")
+            args_str = fn.get("arguments") or "{}"
             try:
                 args = json.loads(args_str) if isinstance(args_str, str) else args_str
             except json.JSONDecodeError:
                 args = {}
             result.append(
                 ToolCall(
-                    id=tc.get("id", ""),
+                    id=tc.get("id") or f"call_{uuid.uuid4().hex[:12]}",
                     name=fn.get("name", ""),
-                    arguments=args,
+                    arguments=args if isinstance(args, dict) else {},
                 )
             )
         return result
@@ -635,6 +798,10 @@ class OpenAIProvider(LLMProvider):
                         continue
                     raise LLMResponseError("Malformed JSON response from OpenAI API") from exc
 
+            except httpx.ConnectError as exc:
+                raise LLMResponseError(
+                    f"Could not connect to OpenAI-compatible endpoint {self._base_url}: {exc}"
+                ) from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if attempt < max_retries:
@@ -659,7 +826,7 @@ class OpenAIProvider(LLMProvider):
         status_code = resp.status_code
         if status_code == 401 or status_code == 403:
             raise LLMAuthError(
-                f"OpenAI authentication failed (HTTP {status_code}). Check your OPENAI_API_KEY."
+                f"OpenAI authentication failed (HTTP {status_code}). Check your API key."
             )
         if status_code >= 400:
             try:

@@ -220,6 +220,26 @@ async def execute_agent_run(
             await llm.close()
 
 
+def _create_provider_from_config(
+    cfg: ForgeConfig,
+    provider_name: str,
+    api_key: str,
+) -> LLMProvider:
+    from agent_forge.llm.factory import create_provider as default_provider_factory
+
+    providers = getattr(cfg, "providers", None)
+    provider_cfg = providers.get(provider_name) if isinstance(providers, dict) else None
+    kwargs: dict[str, Any] = {}
+    if provider_cfg is not None:
+        if provider_cfg.base_url:
+            kwargs["base_url"] = provider_cfg.base_url
+        if provider_name in ("openai", "openai-compatible") and provider_cfg.api_mode != "auto":
+            kwargs["api_mode"] = provider_cfg.api_mode
+        if provider_cfg.capabilities and provider_name in ("openai", "openai-compatible"):
+            kwargs["capability_overrides"] = dict(provider_cfg.capabilities)
+    return default_provider_factory(provider_name, api_key, **kwargs)
+
+
 async def run_agent_task(
     task: str,
     repo_path: str,
@@ -286,14 +306,13 @@ async def run_agent_task(
 
     if provider_factory is None:
         from agent_forge.config import RoutingSettings
-        from agent_forge.llm.factory import create_provider as default_provider_factory
         from agent_forge.llm.router import RoutingLLMProvider
 
         routing_cfg = getattr(cfg, "routing", None)
         if isinstance(routing_cfg, RoutingSettings) and routing_cfg.enabled:
             llm: LLMProvider = RoutingLLMProvider.from_config(cfg)
         else:
-            llm = default_provider_factory(provider_name, api_key)
+            llm = _create_provider_from_config(cfg, provider_name, api_key)
     else:
         llm = provider_factory(provider_name, api_key)
 

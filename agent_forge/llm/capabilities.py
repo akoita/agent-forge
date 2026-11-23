@@ -5,8 +5,10 @@ from __future__ import annotations
 import inspect
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Any
+from urllib.parse import urlparse
 
 _CAPABILITY_BOOL_FIELDS: tuple[str, ...] = (
+    "tool_calling",
     "reasoning_continuity",
     "parallel_tool_calls",
     "prompt_caching",
@@ -16,12 +18,16 @@ _CAPABILITY_BOOL_FIELDS: tuple[str, ...] = (
     "native_tools",
 )
 _LONG_CONTEXT_PREFIXES: tuple[str, ...] = ("gpt-5", "o3", "o4", "gpt-4.1")
+_LOCAL_ENDPOINT_HOSTS: frozenset[str] = frozenset(
+    {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"}  # noqa: S104
+)
 
 
 @dataclass(frozen=True)
 class ProviderCapabilities:
     """Declared runtime capabilities for an LLM adapter/model combination."""
 
+    tool_calling: bool = True
     reasoning_continuity: bool = False
     parallel_tool_calls: bool = False
     prompt_caching: bool = False
@@ -56,6 +62,18 @@ class CapabilityRequirement:
     min_context_tokens: int = 0
 
 
+def is_local_endpoint(base_url: str | None) -> bool:
+    """Return whether *base_url* targets a local loopback or container host."""
+    raw = (base_url or "").strip()
+    if not raw:
+        return False
+    parsed = urlparse(raw if "://" in raw else f"http://{raw}")
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return False
+    return host in _LOCAL_ENDPOINT_HOSTS or host.endswith(".localhost")
+
+
 def _is_native_openai_url(base_url: str | None) -> bool:
     normalized = (base_url or "").strip().rstrip("/")
     return not normalized or normalized.startswith("https://api.openai.com")
@@ -66,8 +84,9 @@ def _openai_capabilities(
     *,
     api_mode: str | None,
     base_url: str | None,
+    force_non_native: bool = False,
 ) -> ProviderCapabilities:
-    is_native = _is_native_openai_url(base_url)
+    is_native = False if force_non_native else _is_native_openai_url(base_url)
     if api_mode in ("responses", "chat_completions"):
         effective_mode = api_mode
     else:
@@ -76,6 +95,7 @@ def _openai_capabilities(
     max_ctx = 200_000 if model.lower().startswith(_LONG_CONTEXT_PREFIXES) else 128_000
     if effective_mode == "responses":
         return ProviderCapabilities(
+            tool_calling=True,
             reasoning_continuity=True,
             parallel_tool_calls=True,
             prompt_caching=True,
@@ -87,6 +107,7 @@ def _openai_capabilities(
             api_protocol="openai_responses",
         )
     return ProviderCapabilities(
+        tool_calling=True,
         reasoning_continuity=False,
         parallel_tool_calls=is_native,
         prompt_caching=is_native,
@@ -131,6 +152,13 @@ def resolve_capabilities(
     normalized = provider.strip().lower()
     if normalized == "openai":
         base = _openai_capabilities(model, api_mode=api_mode, base_url=base_url)
+    elif normalized in ("openai-compatible", "openai_compatible"):
+        base = _openai_capabilities(
+            model,
+            api_mode=api_mode or "chat_completions",
+            base_url=base_url,
+            force_non_native=True,
+        )
     elif normalized == "anthropic":
         base = ProviderCapabilities(
             reasoning_continuity=True,

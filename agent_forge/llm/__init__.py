@@ -14,6 +14,7 @@ from agent_forge.llm.base import (
 from agent_forge.llm.capabilities import (
     CapabilityRequirement,
     ProviderCapabilities,
+    is_local_endpoint,
     query_provider_capabilities,
     resolve_capabilities,
 )
@@ -81,6 +82,7 @@ __all__ = [
     "ToolTimeoutError",
     "TurnRoutingContext",
     "create_provider",
+    "is_local_endpoint",
     "query_provider_capabilities",
     "resolve_capabilities",
     "select_route",
