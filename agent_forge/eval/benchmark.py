@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import statistics
 import subprocess
@@ -15,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_forge.agent.context import ContextEngine, ContextPolicy
 from agent_forge.agent.core import react_loop
 from agent_forge.agent.journal import (
     RunJournal,
@@ -476,6 +478,16 @@ def maybe_save_trajectory(
     return updated
 
 
+def _accepts_kwarg(fn: Any, name: str) -> bool:
+    target = getattr(fn, "side_effect", None)
+    target_fn = target if callable(target) else fn
+    try:
+        params = inspect.signature(target_fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == name or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
+
+
 async def _run_single_attempt(
     config: ForgeConfig,
     profile_name: str,
@@ -498,12 +510,28 @@ async def _run_single_attempt(
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix=f"bench-{task.id}-") as tmp_dir:
         repo_path = materialize_task_repo(task, Path(tmp_dir) / "repo")
+        policy = ContextPolicy.from_settings(config.context)
+        context_engine = (
+            ContextEngine(repo_path=repo_path, task=task.prompt, policy=policy)
+            if policy.enabled
+            else None
+        )
+        if context_engine is not None:
+            instructions, repo_map = context_engine.prepare_initial_context()
+            repo_instructions = instructions.rendered or None
+            repo_map_text = repo_map.rendered or None
+            scoped_instructions = context_engine.task_scoped_instructions_rendered or None
+        else:
+            repo_instructions = None
+            repo_map_text = None
+            scoped_instructions = None
         agent_cfg = AgentConfig(
             model=profile.model,
             provider=profile.provider,
             max_iterations=max_iterations,
             max_tokens_per_run=max_tokens_per_run,
             temperature=temperature,
+            context_enabled=policy.enabled,
             system_prompt=build_system_prompt(
                 task.prompt,
                 tools.list_definitions(),
@@ -511,6 +539,9 @@ async def _run_single_attempt(
                 sandbox_image=sandbox_config.image,
                 network_enabled=False,
                 command_timeout_seconds=sandbox_config.timeout_seconds,
+                repo_instructions=repo_instructions,
+                repo_map=repo_map_text,
+                scoped_instructions=scoped_instructions,
             ),
         )
         run = AgentRun(task=task.prompt, repo_path=str(repo_path), config=agent_cfg)
@@ -539,6 +570,11 @@ async def _run_single_attempt(
                     return await workspace.verify(sandbox_config, sandbox)
 
                 async with asyncio.timeout(timeout_seconds):
+                    extra: dict[str, Any] = (
+                        {"context_engine": context_engine}
+                        if _accepts_kwarg(react_loop, "context_engine")
+                        else {}
+                    )
                     if journal is not None:
                         await react_loop(
                             run,
@@ -549,9 +585,10 @@ async def _run_single_attempt(
                             journal=journal,
                             base_revision=workspace.base_revision,
                             verify_command=task.verify_command,
+                            **extra,
                         )
                     else:
-                        await react_loop(run, llm, tools, sandbox, verify=_verify)
+                        await react_loop(run, llm, tools, sandbox, verify=_verify, **extra)
         except TimeoutError:
             res = _error_attempt_result(
                 task.id,

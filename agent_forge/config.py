@@ -43,6 +43,23 @@ class AgentSettings(BaseModel):
     budget_action: Literal["timeout", "pause"] = "timeout"
 
 
+class ContextSettings(BaseModel):
+    """Settings for the context engine (instructions, repo map, working set, compaction)."""
+
+    enabled: bool = True
+    discover_instructions: bool = True
+    max_instruction_tokens: int = 4_000
+    repo_map_enabled: bool = True
+    max_repo_map_tokens: int = 1_500
+    max_repo_files: int = 500
+    max_working_set_files: int = 12
+    context_window_tokens: int = 100_000
+    compaction_trigger_ratio: float = 0.75
+    compaction_target_ratio: float = 0.45
+    keep_recent_turns: int = 4
+    stale_tool_result_max_chars: int = 600
+
+
 class SandboxSettings(BaseModel):
     """Settings for the sandbox runtime."""
 
@@ -111,6 +128,7 @@ class ForgeConfig(BaseModel):
     """Top-level configuration composing all sections."""
 
     agent: AgentSettings = Field(default_factory=AgentSettings)
+    context: ContextSettings = Field(default_factory=ContextSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     queue: QueueSettings = Field(default_factory=QueueSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
@@ -179,6 +197,7 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 _SECTION_MODELS: dict[str, type[BaseModel]] = {
     "agent": AgentSettings,
+    "context": ContextSettings,
     "sandbox": SandboxSettings,
     "queue": QueueSettings,
     "logging": LoggingSettings,

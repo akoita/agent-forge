@@ -29,7 +29,7 @@ precondition-checked edits; do not rewrite entire files unnecessarily.
 - Backend: {sandbox_backend}
 - Runtime image: {sandbox_image}
 - Network: {network_status}
-- Max shell command timeout: {command_timeout_seconds}s
+- Max shell command timeout: {command_timeout_seconds}s{repo_context}
 
 ## Task
 {task_description}"""
@@ -59,6 +59,16 @@ def _format_network_rule(network_enabled: bool) -> tuple[str, str]:
     )
 
 
+def _format_repo_context(
+    repo_instructions: str | None,
+    repo_map: str | None,
+) -> str:
+    blocks = [block.strip() for block in (repo_instructions, repo_map) if block and block.strip()]
+    if not blocks:
+        return ""
+    return "\n\n" + "\n\n".join(blocks)
+
+
 def render_system_prompt(
     template: str,
     task: str,
@@ -68,6 +78,9 @@ def render_system_prompt(
     sandbox_image: str = "agent-forge-sandbox:latest",
     network_enabled: bool = False,
     command_timeout_seconds: int = 300,
+    repo_instructions: str | None = None,
+    repo_map: str | None = None,
+    scoped_instructions: str | None = None,
     prompt_scope: str | None = None,
     extension_prompts: list[str] | None = None,
     **template_vars: object,
@@ -82,9 +95,13 @@ def render_system_prompt(
         network_rule=network_rule,
         network_status=network_status,
         command_timeout_seconds=command_timeout_seconds,
+        repo_context=_format_repo_context(repo_instructions, repo_map),
         task_description=task,
         **template_vars,
     )
+
+    if scoped_instructions and scoped_instructions.strip():
+        prompt += f"\n\n{scoped_instructions.strip()}"
 
     if prompt_scope:
         prompt += f"\n\n## Profile Scope\n{prompt_scope}"
@@ -105,6 +122,9 @@ def build_system_prompt(
     sandbox_image: str = "agent-forge-sandbox:latest",
     network_enabled: bool = False,
     command_timeout_seconds: int = 300,
+    repo_instructions: str | None = None,
+    repo_map: str | None = None,
+    scoped_instructions: str | None = None,
     prompt_scope: str | None = None,
     extension_prompts: list[str] | None = None,
 ) -> str:
@@ -117,6 +137,9 @@ def build_system_prompt(
         sandbox_image=sandbox_image,
         network_enabled=network_enabled,
         command_timeout_seconds=command_timeout_seconds,
+        repo_instructions=repo_instructions,
+        repo_map=repo_map,
+        scoped_instructions=scoped_instructions,
         prompt_scope=prompt_scope,
         extension_prompts=extension_prompts,
     )
@@ -156,7 +179,7 @@ extension instructions below.
 - Backend: {sandbox_backend}
 - Runtime image: {sandbox_image}
 - Network: {network_status}
-- Max shell command timeout: {command_timeout_seconds}s
+- Max shell command timeout: {command_timeout_seconds}s{repo_context}
 
 ## Task
 {task_description}"""
@@ -171,6 +194,9 @@ def build_hosted_system_prompt(
     sandbox_image: str = "agent-forge-sandbox:latest",
     network_enabled: bool = False,
     command_timeout_seconds: int = 300,
+    repo_instructions: str | None = None,
+    repo_map: str | None = None,
+    scoped_instructions: str | None = None,
     prompt_scope: str | None = None,
     extension_prompts: list[str] | None = None,
 ) -> str:
@@ -183,6 +209,9 @@ def build_hosted_system_prompt(
         sandbox_image=sandbox_image,
         network_enabled=network_enabled,
         command_timeout_seconds=command_timeout_seconds,
+        repo_instructions=repo_instructions,
+        repo_map=repo_map,
+        scoped_instructions=scoped_instructions,
         prompt_scope=prompt_scope,
         extension_prompts=extension_prompts,
         report_schema=report_schema,

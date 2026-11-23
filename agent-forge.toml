@@ -8,6 +8,20 @@ system_prompt_path = ""          # Optional custom system prompt file
 approval_mode = "auto"           # "auto", "prompt", or "deny"
 budget_action = "timeout"        # "timeout" or "pause"
 
+[context]
+enabled = true
+discover_instructions = true
+max_instruction_tokens = 4000
+repo_map_enabled = true
+max_repo_map_tokens = 1500
+max_repo_files = 500
+max_working_set_files = 12
+context_window_tokens = 100000
+compaction_trigger_ratio = 0.75
+compaction_target_ratio = 0.45
+keep_recent_turns = 4
+stale_tool_result_max_chars = 600
+
 [sandbox]
 backend = "docker"
 image = "agent-forge-sandbox:latest"

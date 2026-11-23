@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from agent_forge.agent.approvals import ApprovalGate
 from agent_forge.agent.budget import BudgetPolicy, CancellationToken
+from agent_forge.agent.context import ContextEngine
 from agent_forge.agent.contracts import (
     CompletionContract,
     ContractContext,
@@ -132,6 +133,7 @@ async def react_loop(
     base_revision: str = "",
     verify_command: str | None = None,
     completion_contract: CompletionContract | None = None,
+    context_engine: ContextEngine | None = None,
 ) -> AgentRun:
     """Execute the ReAct loop: Observe → Reason (LLM) → Act (Tool) → Repeat.
 
@@ -143,6 +145,9 @@ async def react_loop(
     - Cooperative or task cancellation/interruption requested (→ CANCELLED or PAUSED)
     - Unrecoverable error (→ FAILED)
     """
+    active_context = context_engine
+    if active_context is None and run.config.context_enabled:
+        active_context = ContextEngine(repo_path=run.repo_path, task=run.task)
     active_journal = journal if journal is not None else RunJournal(run.id)
     completed_call_ids, completed_results_by_key = _prepare_run_start(
         run,
@@ -150,6 +155,7 @@ async def react_loop(
         active_journal,
         base_revision=base_revision,
         verify_command=verify_command,
+        context_engine=active_context,
     )
     set_trace_context(run.id)
     tracker = CostTracker(run_id=run.id)
@@ -204,6 +210,7 @@ async def react_loop(
                 on_checkpoint=on_checkpoint,
                 cancellation_token=cancellation_token,
                 completion_contract=completion_contract,
+                context_engine=active_context,
             )
 
     except asyncio.CancelledError:
@@ -249,6 +256,31 @@ async def react_loop(
     return run
 
 
+def _prepare_turn_context(
+    run: AgentRun,
+    tool_definitions: list[Any],
+    llm_config: LLMConfig,
+    context_engine: ContextEngine | None,
+    journal: RunJournal,
+) -> list[Message]:
+    if context_engine is None:
+        return run.messages
+    scoped_msg = context_engine.pop_scoped_instruction_message(run)
+    if scoped_msg is not None:
+        _record_message(run, scoped_msg, journal)
+    assembly = context_engine.assemble(run, tool_definitions=tool_definitions)
+    llm_config.cache_key = assembly.stable_prefix_hash[:32]
+    llm_config.cache_breakpoint_index = assembly.cache_breakpoint_index
+    if assembly.compaction_event is not None:
+        journal.append(
+            "context_compacted",
+            assembly.compaction_event.to_dict(),
+            iteration=run.iterations,
+        )
+    run.context_stats = context_engine.stats_dict(assembly)
+    return assembly.messages
+
+
 async def _run_loop_iterations(
     run: AgentRun,
     llm: LLMProvider,
@@ -269,6 +301,7 @@ async def _run_loop_iterations(
     on_checkpoint: Callable[[AgentRun], Awaitable[None]] | None,
     cancellation_token: CancellationToken | None,
     completion_contract: CompletionContract | None = None,
+    context_engine: ContextEngine | None = None,
 ) -> None:
     remediation_attempts = 0
     while run.iterations < run.config.max_iterations:
@@ -295,8 +328,15 @@ async def _run_loop_iterations(
         )
 
         # 1. REASON — ask the LLM what to do next
+        prompt_messages = _prepare_turn_context(
+            run,
+            tool_definitions,
+            llm_config,
+            context_engine,
+            journal,
+        )
         response = await llm.complete(
-            messages=run.messages,
+            messages=prompt_messages,
             tools=tool_definitions,
             config=llm_config,
         )
@@ -486,6 +526,26 @@ async def _finish_run(
     return True
 
 
+def _build_initial_system_prompt(
+    run: AgentRun,
+    tools: ToolRegistry,
+    context_engine: ContextEngine | None,
+) -> str:
+    if run.config.system_prompt:
+        return run.config.system_prompt
+    tool_defs = tools.list_definitions()
+    if context_engine is None:
+        return build_system_prompt(run.task, tool_defs)
+    instructions, repo_map = context_engine.prepare_initial_context()
+    return build_system_prompt(
+        run.task,
+        tool_defs,
+        repo_instructions=instructions.rendered or None,
+        repo_map=repo_map.rendered or None,
+        scoped_instructions=context_engine.task_scoped_instructions_rendered or None,
+    )
+
+
 def _prepare_run_start(
     run: AgentRun,
     tools: ToolRegistry,
@@ -493,6 +553,7 @@ def _prepare_run_start(
     *,
     base_revision: str = "",
     verify_command: str | None = None,
+    context_engine: ContextEngine | None = None,
 ) -> tuple[set[str], dict[str, ToolResult]]:
     initial_state = run.state
     if initial_state == RunState.PENDING:
@@ -549,9 +610,7 @@ def _prepare_run_start(
 
     run.error = None
     if not run.messages:
-        system_content = run.config.system_prompt or build_system_prompt(
-            run.task, tools.list_definitions()
-        )
+        system_content = _build_initial_system_prompt(run, tools, context_engine)
         _record_message(run, Message(role=Role.SYSTEM, content=system_content), journal)
         _record_message(run, Message(role=Role.USER, content=run.task), journal)
     elif not prior_entries:

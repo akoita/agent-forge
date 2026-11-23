@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from agent_forge.agent.context import ContextEngine
 from agent_forge.agent.core import react_loop
 from agent_forge.agent.journal import RunJournal
 from agent_forge.agent.models import AgentConfig, AgentRun
@@ -383,6 +384,8 @@ async def _run_deterministic_attempt(
     with tempfile.TemporaryDirectory(prefix=f"det-eval-{task.id}-") as tmp_dir:
         repo_path = materialize_task_repo(task, Path(tmp_dir) / "repo")
         model_id = f"scripted-{mode}"
+        context_engine = ContextEngine(repo_path=repo_path, task=task.prompt)
+        instructions, repo_map = context_engine.prepare_initial_context()
         agent_cfg = AgentConfig(
             model=model_id,
             provider="deterministic",
@@ -396,6 +399,9 @@ async def _run_deterministic_attempt(
                 sandbox_image=sandbox_cfg.image,
                 network_enabled=False,
                 command_timeout_seconds=sandbox_cfg.timeout_seconds,
+                repo_instructions=instructions.rendered or None,
+                repo_map=repo_map.rendered or None,
+                scoped_instructions=context_engine.task_scoped_instructions_rendered or None,
             ),
         )
         run = AgentRun(task=task.prompt, repo_path=str(repo_path), config=agent_cfg)
@@ -432,9 +438,17 @@ async def _run_deterministic_attempt(
                         journal=journal,
                         base_revision=workspace.base_revision,
                         verify_command=task.verify_command,
+                        context_engine=context_engine,
                     )
                 else:
-                    await react_loop(run, llm, tools, sandbox, verify=_verify)
+                    await react_loop(
+                        run,
+                        llm,
+                        tools,
+                        sandbox,
+                        verify=_verify,
+                        context_engine=context_engine,
+                    )
         finally:
             try:
                 await sandbox.stop()

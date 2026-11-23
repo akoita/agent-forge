@@ -526,7 +526,10 @@ async def _run_agent(
     """
     from agent_forge.agent.contracts import resolve_completion_contract
     from agent_forge.agent.models import AgentRun
-    from agent_forge.agent.runner import render_task_system_prompt
+    from agent_forge.agent.runner import (
+        _resolve_context_engine_for_config,
+        render_task_system_prompt,
+    )
     from agent_forge.orchestration.events import EventBus
     from agent_forge.tools import create_default_registry
 
@@ -538,6 +541,7 @@ async def _run_agent(
         contract_mode=contract_mode,
         has_verifier=verify_command is not None,
     )
+    context_engine = _resolve_context_engine_for_config(repo, task, cfg, agent_config)
 
     event_bus = EventBus()
     tools = create_default_registry()
@@ -545,6 +549,8 @@ async def _run_agent(
         task,
         tools,
         sandbox_config,
+        repo_path=repo,
+        context_engine=context_engine,
         prompt_scope=prompt_scope,
         discover_extensions=True,
     )
@@ -552,6 +558,8 @@ async def _run_agent(
     ws_kwargs: dict[str, Any] = {"verify_command": verify_command}
     if completion_contract is not None:
         ws_kwargs["completion_contract"] = completion_contract
+    if context_engine is not None:
+        ws_kwargs["context_engine"] = context_engine
     return await _execute_with_workspace(
         agent_run,
         cfg,
@@ -629,6 +637,7 @@ async def _execute_with_workspace(
     base_revision: str | None = None,
     initial_patch: str = "",
     completion_contract: Any | None = None,
+    context_engine: Any | None = None,
 ) -> Any:
     from functools import partial
 
@@ -688,6 +697,7 @@ async def _execute_with_workspace(
                             base_revision=run_base_revision,
                             verify_command=verify_command,
                             completion_contract=completion_contract,
+                            context_engine=context_engine,
                         ),
                         cancellation_token,
                     )
@@ -994,6 +1004,9 @@ def _run_output_payload(run: Any, *, profile: Any | None = None) -> dict[str, ob
     contract_eval = getattr(run, "contract_evaluation", None)
     if isinstance(contract_eval, ContractEvaluation):
         payload["completion_contract"] = contract_eval.model_dump(mode="json")
+    context_stats = getattr(run, "context_stats", None)
+    if isinstance(context_stats, dict) and context_stats:
+        payload["context"] = context_stats
     if profile is not None:
         payload["profile"] = {
             "id": profile.id,
