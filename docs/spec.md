@@ -282,15 +282,17 @@ class LLMProvider(ABC):
 | ------------- | --------------------------- | --------------------------- | ------------------------------------------------- |
 | **Gemini**    | `agent_forge.llm.gemini`    | `GEMINI_API_KEY` env var    | `generateContent`, `gemini-3.1-flash-lite-preview` |
 | **OpenAI**    | `agent_forge.llm.openai`    | `OPENAI_API_KEY` env var    | `/v1/responses` (auto fallback to `/v1/chat/completions`), `gpt-4o` / `gpt-5.4` |
+| **OpenAI-Compatible** | `agent_forge.llm.openai` (`openai-compatible`) | Optional (`api_key_required`) | `/v1/chat/completions` on `base_url` (Ollama, vLLM, `llama.cpp`, gateways) |
 | **Anthropic** | `agent_forge.llm.anthropic` | `ANTHROPIC_API_KEY` env var | `/v1/messages`, `claude-sonnet-4-20250514`        |
 | **Router**    | `agent_forge.llm.router`    | Profile credentials         | Data-driven per-turn selection across configured profiles |
 
 #### Provider-Specific Mapping Rules
 
 - **OpenAI:** Native OpenAI endpoints (`api_mode="auto"` or `"responses"`) call `POST /v1/responses` with `instructions`, `input` items, delta slicing after matching `previous_response_id`, `prompt_cache_key`, `reasoning.effort`, and `text.format` JSON schemas. Custom `base_url` endpoints or explicit `api_mode="chat_completions"` automatically use `POST /v1/chat/completions`.
+- **OpenAI-Compatible (`openai-compatible`):** Defaults to `chat_completions` on the configured `base_url`, omits `Authorization` when `api_key` is blank (keyless localhost servers via `is_local_endpoint`), omits `parallel_tool_calls` unless supported, degrades `structured_output=False` to system-prompt JSON schema instructions, and degrades `tool_calling=False` to fenced ```` ```tool_call``` ```` prompt emulation.
 - **Anthropic:** Emits ephemeral `cache_control` breakpoints on `system` and final tools when `cache_key` is set, maps `parallel_tool_calls=False` to `disable_parallel_tool_use`, passes `thinking` budgets, roundtrips `thinking`/`redacted_thinking` blocks, and records `cache_read_input_tokens`.
 - **Gemini:** Translates schemas to `functionDeclarations`, sets `responseMimeType`/`responseSchema` and `thinkingConfig.thinkingBudget`, extracts `thought: True` parts into `reasoning_blocks`, and reads `cachedContentTokenCount` / `thoughtsTokenCount`.
-- **Inspecting capabilities:** Run `agent-forge models capabilities [PROFILE] [--output-format text|json]`.
+- **Inspecting and probing capabilities:** Run `agent-forge models capabilities [PROFILE] [--probe] [--output-format text|json]`.
 
 #### Error Handling
 
@@ -1197,10 +1199,18 @@ api_mode = "auto"                # "auto", "responses", or "chat_completions"
 api_key_env = "ANTHROPIC_API_KEY"
 default_model = "claude-sonnet-4-20250514"
 
+[providers.openai-compatible]
+base_url = ""
+api_key_env = ""
+default_model = ""
+api_mode = "chat_completions"
+api_key_required = false
+# Optional: capabilities = { tool_calling = true, parallel_tool_calls = false, structured_output = true }
+
 [model_profiles.openai-gpt54]
 provider = "openai"
 model = "gpt-5.4"
-# Optional: api_mode = "auto", base_url = "", capabilities = { parallel_tool_calls = true }
+# Optional: api_mode = "auto", base_url = "", api_key_required = true, capabilities = { parallel_tool_calls = true }
 ```
 
 ### 5.2 Run Persistence
@@ -1253,6 +1263,9 @@ Format: `AGENT_FORGE_{SECTION}_{KEY}` (uppercase, underscored).
 | `AGENT_FORGE_ROUTING_CANDIDATES` | `routing.candidates` (comma-separated) |
 | `AGENT_FORGE_ROUTING_DOWNGRADE_BUDGET_FRACTION` | `routing.downgrade_budget_fraction` |
 | `AGENT_FORGE_ROUTING_ESCALATE_ON_FAILURES` | `routing.escalate_on_failures` |
+| `AGENT_FORGE_PROVIDERS_OPENAI_COMPATIBLE_BASE_URL` | `providers["openai-compatible"].base_url` |
+| `AGENT_FORGE_PROVIDERS_OPENAI_COMPATIBLE_DEFAULT_MODEL` | `providers["openai-compatible"].default_model` |
+| `AGENT_FORGE_PROVIDERS_OPENAI_COMPATIBLE_API_KEY_REQUIRED` | `providers["openai-compatible"].api_key_required` |
 | `AGENT_FORGE_SANDBOX_MEMORY_LIMIT` | `sandbox.memory_limit` |
 | `AGENT_FORGE_QUEUE_BACKEND`        | `queue.backend`        |
 | `AGENT_FORGE_SERVICE_AUTH_ENABLED` | `service.auth_enabled` |
