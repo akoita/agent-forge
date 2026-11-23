@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 import sys
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -18,9 +18,6 @@ from agent_forge.eval import (
     materialize_task_repo,
     run_deterministic_eval,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _run_unittest(repo: Path) -> subprocess.CompletedProcess[str]:
@@ -136,7 +133,10 @@ async def test_deterministic_eval_smoke_gates_and_trajectories(tmp_path: Path) -
     assert by_profile["deterministic-incomplete"].verified_fixes == 0
 
     for summary in report.profiles:
-        expected_final = "completed" if summary.profile == "deterministic-oracle" else "failed"
+        expected_final = (
+            "completed" if summary.profile == "deterministic-oracle" else "verification_failed"
+        )
+        assert summary.false_positive_rate == 0.0
         for attempt in summary.results:
             assert attempt.trajectory_path is not None
             traj_file = (
@@ -154,11 +154,118 @@ async def test_deterministic_eval_smoke_gates_and_trajectories(tmp_path: Path) -
             assert "action_requested" in kinds
             assert "action_result" in kinds
             assert "verification_recorded" in kinds
+            assert "contract_evaluated" in kinds
             assert kinds[-1] == "attempt_result"
 
             replayed = replay_journal(traj_file)
             assert replayed.valid is True
             assert replayed.duplicate_side_effects == []
             assert replayed.state_sequence == ["pending", "running", expected_final]
+            assert replayed.contract_evaluation is not None
             assert replayed.attempt_result is not None
             assert replayed.attempt_result["task_id"] == attempt.task_id
+
+
+@pytest.mark.asyncio
+async def test_completion_contract_eliminates_false_positive_completions() -> None:
+    """Measure that uncontracted stops produce false positives while contracts block all."""
+    import tempfile
+
+    from agent_forge.agent.core import react_loop
+    from agent_forge.agent.models import AgentConfig, AgentRun
+    from agent_forge.agent.verification import VerificationWorkspace
+    from agent_forge.config import ModelProfileSettings
+    from agent_forge.eval.benchmark import (
+        build_completed_result,
+        materialize_task_repo,
+        summarize_profile,
+    )
+    from agent_forge.eval.corpus import resolve_tasks
+    from agent_forge.eval.deterministic import SubprocessEvalSandbox, _ScriptedEvalLLM
+    from agent_forge.sandbox.base import SandboxConfig
+    from agent_forge.tools import create_default_registry
+
+    smoke_tasks = resolve_tasks(suite="smoke")
+    tools = create_default_registry(load_plugins=False)
+    sandbox_cfg = SandboxConfig(
+        backend="subprocess-eval",
+        network_enabled=False,
+        writable_cache_mounts=False,
+        timeout_seconds=20,
+    )
+
+    uncontracted_results = []
+    contracted_results = []
+
+    for mode in ("noop", "incomplete"):
+        for task in smoke_tasks:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                repo_path = materialize_task_repo(task, Path(tmp_dir) / "repo")
+                cfg = AgentConfig(
+                    model=f"scripted-{mode}", provider="deterministic", max_iterations=10
+                )
+
+                # Without verifier/contract: react_loop stops cleanly -> false-positive COMPLETED.
+                run_no_contract = AgentRun(task=task.prompt, repo_path=str(repo_path), config=cfg)
+                sb1 = SubprocessEvalSandbox()
+                await sb1.start(repo_path=str(repo_path), config=sandbox_cfg)
+                try:
+                    await react_loop(run_no_contract, _ScriptedEvalLLM(task, mode), tools, sb1)
+                finally:
+                    await sb1.stop()
+                uncontracted_results.append(
+                    build_completed_result(
+                        task.id, 1, run_no_contract, cfg.model, None, [cfg.model], 0.1
+                    )
+                )
+
+                # With harness completion contract + independent verifier: 0 false positives.
+                run_contracted = AgentRun(task=task.prompt, repo_path=str(repo_path), config=cfg)
+                sb2 = SubprocessEvalSandbox()
+                with VerificationWorkspace(
+                    str(repo_path), task.verify_command, extra_verifier_files=task.hidden_tests
+                ) as ws:
+                    await sb2.start(repo_path=str(ws.workspace), config=sandbox_cfg)
+                    try:
+                        await react_loop(
+                            run_contracted,
+                            _ScriptedEvalLLM(task, mode),
+                            tools,
+                            sb2,
+                            verify=lambda ws=ws, sb=sb2: ws.verify(
+                                sandbox_cfg,
+                                sb,
+                                sandbox_factory=lambda _c: SubprocessEvalSandbox(),
+                            ),
+                        )
+                    finally:
+                        await sb2.stop()
+                contracted_results.append(
+                    build_completed_result(
+                        task.id, 1, run_contracted, cfg.model, None, [cfg.model], 0.1
+                    )
+                )
+
+    profile = ModelProfileSettings(
+        provider="deterministic", model="scripted-wrong", temperature=0.0
+    )
+    before = summarize_profile(
+        "uncontracted",
+        profile,
+        uncontracted_results,
+        temperature=0.0,
+        max_iterations=10,
+        max_tokens_per_run=40_000,
+    )
+    after = summarize_profile(
+        "contracted",
+        profile,
+        contracted_results,
+        temperature=0.0,
+        max_iterations=10,
+        max_tokens_per_run=40_000,
+    )
+
+    assert before.false_positive_rate == 1.0
+    assert after.false_positive_rate == 0.0
+    assert all(r.run_state == "verification_failed" and r.unmet_clauses for r in contracted_results)

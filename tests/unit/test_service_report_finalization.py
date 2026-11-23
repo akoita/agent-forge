@@ -157,15 +157,60 @@ class TestValidateReportArtifact:
 
 
 class TestReportRecoveryIntegration:
-    """Tests verifying the recovery pass is triggered when report is missing."""
+    """Tests verifying contract-driven single-loop remediation for hosted report emission."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_user_config_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        cfg_dir = tmp_path / "user-cfg"
+        monkeypatch.setattr("agent_forge.agent.persistence.USER_CONFIG_DIR", cfg_dir)
+        monkeypatch.setattr(
+            "agent_forge.agent.core.save_summary",
+            lambda *_a: cfg_dir / "summary.json",
+        )
+
+    @staticmethod
+    def _local_sandbox(repo: Path):
+        from agent_forge.sandbox.base import ExecResult, Sandbox, SandboxConfig
+
+        class _LocalRepoSandbox(Sandbox):
+            async def start(self, repo_path: str, config: SandboxConfig | None = None) -> None:
+                del repo_path, config
+
+            async def stop(self) -> None:
+                return None
+
+            async def is_alive(self) -> bool:
+                return True
+
+            def _resolve(self, path: str) -> Path:
+                rel = path.removeprefix("/workspace").lstrip("/")
+                return repo / rel
+
+            async def read_file(self, path: str) -> str:
+                return self._resolve(path).read_text(encoding="utf-8")
+
+            async def write_file(self, path: str, content: str) -> None:
+                target = self._resolve(path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
+
+            async def exec(self, command: str, *, timeout_seconds: int = 30) -> ExecResult:
+                del timeout_seconds
+                if command.startswith("mkdir -p "):
+                    self._resolve(command.removeprefix("mkdir -p ").strip()).mkdir(
+                        parents=True, exist_ok=True
+                    )
+                return ExecResult(exit_code=0, stdout="", stderr="")
+
+        return _LocalRepoSandbox()
 
     @pytest.mark.asyncio
     async def test_recovery_writes_report_succeeds(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When recovery writes the report file, the run should succeed."""
+        """Single-loop contract remediation writes report.json and completes without 2nd run."""
         from agent_forge.agent.models import AgentConfig
-        from agent_forge.llm.anthropic import AnthropicProvider
+        from agent_forge.llm.base import LLMResponse, TokenUsage, ToolCall
         from agent_forge.orchestration.queue import Task
 
         service = _make_service(tmp_path)
@@ -173,13 +218,13 @@ class TestReportRecoveryIntegration:
         repo.mkdir()
         (repo / "Vault.sol").write_text("contract Vault {}\n", encoding="utf-8")
 
-        service._config.agent.default_provider = "anthropic"
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        service._config.agent.default_provider = "gemini"
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
 
         task_config = AgentConfig(model="test-model", max_iterations=5)
         task = Task(
             id="run_recovery_ok",
-            task_description="Audit this contract",
+            task_description="Inspect this contract",
             repo_path=str(repo),
             config=task_config,
         )
@@ -192,43 +237,46 @@ class TestReportRecoveryIntegration:
         )
         service._records[task.id] = record
 
-        call_count = 0
-
-        async def fake_react_loop(
-            run,
-            llm,
-            tools,
-            sandbox,
-            *,
-            event_bus=None,
-            cancellation_token=None,
-        ):
-            nonlocal call_count
-            assert isinstance(llm, AnthropicProvider)
-            call_count += 1
-            if call_count == 2:
-                # Recovery pass writes the report
-                record.report_path.parent.mkdir(parents=True, exist_ok=True)
-                record.report_path.write_text(
-                    json.dumps(_valid_report_payload(run_id=task.id)),
-                    encoding="utf-8",
-                )
-            return run
-
-        mock_sandbox = AsyncMock()
-        mock_sandbox.start = AsyncMock()
-        mock_sandbox.stop = AsyncMock()
-        mock_sandbox.is_alive = AsyncMock(return_value=True)
+        llm = AsyncMock()
+        llm.complete.side_effect = [
+            LLMResponse(
+                content="Done inspecting.",
+                tool_calls=[],
+                usage=TokenUsage(10, 5, 15),
+                finish_reason="stop",
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="c-report",
+                        name="write_file",
+                        arguments={
+                            "path": "/workspace/.agent-forge/report.json",
+                            "content": json.dumps(_valid_report_payload(run_id=task.id)),
+                        },
+                    )
+                ],
+                usage=TokenUsage(10, 10, 20),
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(
+                content="Wrote report.",
+                tool_calls=[],
+                usage=TokenUsage(5, 5, 10),
+                finish_reason="stop",
+            ),
+        ]
+        llm.close = AsyncMock()
 
         with (
-            patch("agent_forge.service.app.react_loop", side_effect=fake_react_loop),
-            patch("agent_forge.service.app.create_sandbox", return_value=mock_sandbox),
-            patch("agent_forge.service.app.create_default_registry"),
+            patch("agent_forge.service.app.create_sandbox", return_value=self._local_sandbox(repo)),
+            patch("agent_forge.service.app.create_provider", return_value=llm),
         ):
             runner = service._make_task_runner()
             await runner(task)
 
-        assert call_count == 2, "recovery pass should have been triggered"
+        assert llm.complete.await_count == 3
         assert record.error is None
         assert record.completed_at is not None
 
@@ -236,8 +284,9 @@ class TestReportRecoveryIntegration:
     async def test_recovery_fails_still_missing_report(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When recovery also fails to write the report, error is raised."""
+        """When remediation stops again without report.json, run fails with report error."""
         from agent_forge.agent.models import AgentConfig
+        from agent_forge.llm.base import LLMResponse, TokenUsage
         from agent_forge.orchestration.queue import Task
 
         service = _make_service(tmp_path)
@@ -250,7 +299,7 @@ class TestReportRecoveryIntegration:
         task_config = AgentConfig(model="test-model", max_iterations=5)
         task = Task(
             id="run_recovery_fail",
-            task_description="Audit this contract",
+            task_description="Inspect this contract",
             repo_path=str(repo),
             config=task_config,
         )
@@ -263,36 +312,26 @@ class TestReportRecoveryIntegration:
         )
         service._records[task.id] = record
 
-        async def fake_react_loop(
-            run,
-            llm,
-            tools,
-            sandbox,
-            *,
-            event_bus=None,
-            cancellation_token=None,
-        ):
-            # Never writes the report
-            return run
-
-        mock_sandbox = AsyncMock()
-        mock_sandbox.start = AsyncMock()
-        mock_sandbox.stop = AsyncMock()
-        mock_sandbox.is_alive = AsyncMock(return_value=True)
-
-        mock_llm = AsyncMock()
-        mock_llm.close = AsyncMock()
+        llm = AsyncMock()
+        llm.complete.side_effect = [
+            LLMResponse(
+                content="Stop 1.", tool_calls=[], usage=TokenUsage(5, 5, 10), finish_reason="stop"
+            ),
+            LLMResponse(
+                content="Stop 2.", tool_calls=[], usage=TokenUsage(5, 5, 10), finish_reason="stop"
+            ),
+        ]
+        llm.close = AsyncMock()
 
         with (
-            patch("agent_forge.service.app.react_loop", side_effect=fake_react_loop),
-            patch("agent_forge.service.app.create_provider", return_value=mock_llm),
-            patch("agent_forge.service.app.create_sandbox", return_value=mock_sandbox),
-            patch("agent_forge.service.app.create_default_registry"),
+            patch("agent_forge.service.app.create_provider", return_value=llm),
+            patch("agent_forge.service.app.create_sandbox", return_value=self._local_sandbox(repo)),
         ):
             runner = service._make_task_runner()
             with pytest.raises(RuntimeError, match="run completed without writing"):
                 await runner(task)
 
+        assert llm.complete.await_count == 2
         assert record.error is not None
         assert record.error.code == "report_generation_failed"
 
@@ -300,8 +339,9 @@ class TestReportRecoveryIntegration:
     async def test_no_recovery_when_report_present(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When the primary run writes the report, no recovery is attempted."""
+        """When the primary run writes the report on turn 1, no remediation occurs."""
         from agent_forge.agent.models import AgentConfig
+        from agent_forge.llm.base import LLMResponse, TokenUsage, ToolCall
         from agent_forge.orchestration.queue import Task
 
         service = _make_service(tmp_path)
@@ -314,7 +354,7 @@ class TestReportRecoveryIntegration:
         task_config = AgentConfig(model="test-model", max_iterations=5)
         task = Task(
             id="run_no_recovery",
-            task_description="Audit this contract",
+            task_description="Inspect this contract",
             repo_path=str(repo),
             config=task_config,
         )
@@ -327,44 +367,36 @@ class TestReportRecoveryIntegration:
         )
         service._records[task.id] = record
 
-        call_count = 0
-
-        async def fake_react_loop(
-            run,
-            llm,
-            tools,
-            sandbox,
-            *,
-            event_bus=None,
-            cancellation_token=None,
-        ):
-            nonlocal call_count
-            call_count += 1
-            # Primary run writes the report
-            record.report_path.parent.mkdir(parents=True, exist_ok=True)
-            record.report_path.write_text(
-                json.dumps(_valid_report_payload(run_id=task.id)),
-                encoding="utf-8",
-            )
-            return run
-
-        mock_sandbox = AsyncMock()
-        mock_sandbox.start = AsyncMock()
-        mock_sandbox.stop = AsyncMock()
-        mock_sandbox.is_alive = AsyncMock(return_value=True)
-
-        mock_llm = AsyncMock()
-        mock_llm.close = AsyncMock()
+        llm = AsyncMock()
+        llm.complete.side_effect = [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="c-write",
+                        name="write_file",
+                        arguments={
+                            "path": "/workspace/.agent-forge/report.json",
+                            "content": json.dumps(_valid_report_payload(run_id=task.id)),
+                        },
+                    )
+                ],
+                usage=TokenUsage(10, 10, 20),
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(
+                content="Done.", tool_calls=[], usage=TokenUsage(5, 5, 10), finish_reason="stop"
+            ),
+        ]
+        llm.close = AsyncMock()
 
         with (
-            patch("agent_forge.service.app.react_loop", side_effect=fake_react_loop),
-            patch("agent_forge.service.app.create_provider", return_value=mock_llm),
-            patch("agent_forge.service.app.create_sandbox", return_value=mock_sandbox),
-            patch("agent_forge.service.app.create_default_registry"),
+            patch("agent_forge.service.app.create_provider", return_value=llm),
+            patch("agent_forge.service.app.create_sandbox", return_value=self._local_sandbox(repo)),
         ):
             runner = service._make_task_runner()
             await runner(task)
 
-        assert call_count == 1, "recovery should NOT have been triggered"
+        assert llm.complete.await_count == 2
         assert record.error is None
         assert record.completed_at is not None

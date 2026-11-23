@@ -155,6 +155,7 @@ def _estimate_cost(usage: TokenUsage, model: str) -> float:
 _STATUS_ICONS: dict[str, str] = {
     "completed": "✅ COMPLETED",
     "failed": "❌ FAILED",
+    "verification_failed": "❌ VERIFICATION FAILED",
     "timeout": "⏱️  TIMEOUT",
     "cancelled": "🚫 CANCELLED",
     "running": "🔄 RUNNING",

@@ -783,13 +783,18 @@ Valid state transitions for an `AgentRun`:
 PENDING ──▶ RUNNING ──▶ PAUSED ──▶ RUNNING
                     │          ──▶ CANCELLED
                     │          ──▶ FAILED
-                    ──▶ COMPLETED
-                    ──▶ FAILED
-                    ──▶ TIMEOUT
-                    ──▶ CANCELLED
+                    ├──▶ COMPLETED
+                    ├──▶ VERIFICATION_FAILED
+                    ├──▶ FAILED
+                    ├──▶ TIMEOUT
+                    └──▶ CANCELLED
 ```
 
-Invalid transitions (e.g., `COMPLETED → RUNNING`) must raise `InvalidStateTransitionError`.
+Invalid transitions (e.g., `COMPLETED → RUNNING` or `VERIFICATION_FAILED → RUNNING`) must raise `InvalidStateTransitionError`.
+
+##### Completion Contracts
+
+Before transitioning to `COMPLETED`, `react_loop` evaluates any configured `CompletionContract` (`agent_forge/agent/contracts.py`) against harness-controlled evidence (workspace diff, verifier check exit codes, tool invocation history, or required output JSON artifacts). Unmet clauses trigger bounded remediation if enabled or transition the run to `RunState.VERIFICATION_FAILED` with structured `unmet_clauses`. Contracts can be selected per task via `--contract [auto|qa|coding-fix]`, configured per profile (`completion_contract` in profile YAML), or registered by extensions via the `agent_forge.contracts` entry-point group.
 
 ##### Event Bus
 

@@ -24,6 +24,7 @@ EXTENSION_PLUGIN_GROUP = "agent_forge.extensions"
 PROFILE_PLUGIN_GROUP = "agent_forge.profiles"
 PROMPT_PLUGIN_GROUP = "agent_forge.prompts"
 WORKFLOW_PLUGIN_GROUP = "agent_forge.workflows"
+CONTRACT_PLUGIN_GROUP = "agent_forge.contracts"
 
 
 # ---------------------------------------------------------------------------
@@ -321,3 +322,49 @@ def discover_extension_workflow_dirs(
             )
 
     return dirs
+
+
+# ---------------------------------------------------------------------------
+# Completion contract discovery
+# ---------------------------------------------------------------------------
+
+
+def discover_extension_contracts(
+    *,
+    entry_points_factory: EntryPointsFactory | None = None,
+) -> dict[str, Any]:
+    """Discover completion contracts from installed extensions.
+
+    Scans the ``agent_forge.contracts`` entry-point group. Each entry point may
+    resolve to a :class:`~agent_forge.agent.contracts.CompletionContract`
+    instance or a zero-argument callable returning one.
+    """
+    factory = entry_points_factory or _default_entry_points
+    eps = sorted(factory(CONTRACT_PLUGIN_GROUP), key=lambda ep: ep.name)
+
+    contracts: dict[str, Any] = {}
+    for ep in eps:
+        try:
+            loaded: Any = ep.load()
+        except (ImportError, AttributeError, ModuleNotFoundError):
+            logger.warning(
+                "Failed to load contract entry point '%s'",
+                ep.name,
+                exc_info=True,
+            )
+            continue
+
+        resolved = loaded
+        if callable(loaded):
+            try:
+                resolved = loaded()
+            except (TypeError, ValueError, RuntimeError):
+                logger.warning("Contract factory '%s' raised an error", ep.name, exc_info=True)
+                continue
+
+        contracts[ep.name] = resolved
+        contract_id = getattr(resolved, "id", None)
+        if isinstance(contract_id, str) and contract_id:
+            contracts[contract_id] = resolved
+
+    return contracts

@@ -62,6 +62,12 @@ class TestValidTransitions:
         transition(run, RunState.FAILED)
         assert run.state == RunState.FAILED
 
+    def test_running_to_verification_failed(self) -> None:
+        run = _make_run()
+        transition(run, RunState.RUNNING)
+        transition(run, RunState.VERIFICATION_FAILED)
+        assert run.state == RunState.VERIFICATION_FAILED
+
     def test_running_to_timeout(self) -> None:
         run = _make_run()
         transition(run, RunState.RUNNING)
@@ -125,7 +131,13 @@ class TestTransitionMap:
             assert state in VALID_TRANSITIONS
 
     def test_terminal_states_have_no_transitions(self) -> None:
-        for state in [RunState.COMPLETED, RunState.FAILED, RunState.TIMEOUT, RunState.CANCELLED]:
+        for state in [
+            RunState.COMPLETED,
+            RunState.FAILED,
+            RunState.VERIFICATION_FAILED,
+            RunState.TIMEOUT,
+            RunState.CANCELLED,
+        ]:
             assert VALID_TRANSITIONS[state] == set()
 
 

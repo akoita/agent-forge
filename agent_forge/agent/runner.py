@@ -88,6 +88,7 @@ def _build_react_loop_kwargs(
     raise_on_cancel: bool,
     base_revision: str,
     verify_command: str | None,
+    completion_contract: Any = None,
 ) -> dict[str, Any]:
     optional = {
         "verify": verify,
@@ -96,6 +97,7 @@ def _build_react_loop_kwargs(
         "cancellation_token": cancellation_token,
         "journal": journal,
         "verify_command": verify_command,
+        "completion_contract": completion_contract,
     }
     loop_kwargs: dict[str, Any] = {
         "event_bus": event_bus,
@@ -128,6 +130,7 @@ async def execute_agent_run(
     raise_on_cancel: bool = True,
     base_revision: str = "",
     verify_command: str | None = None,
+    completion_contract: Any = None,
     on_sandbox_started: Callable[[Sandbox], None] | None = None,
     post_run_hook: PostRunHook | None = None,
     react_loop_fn: Any = None,
@@ -151,6 +154,7 @@ async def execute_agent_run(
         raise_on_cancel=raise_on_cancel,
         base_revision=base_revision,
         verify_command=verify_command,
+        completion_contract=completion_contract,
     )
 
     try:
@@ -183,6 +187,7 @@ async def run_agent_task(
     event_bus: EventBus | None = None,
     emit_lifecycle: bool = True,
     cancellation_token: Any = None,
+    completion_contract: Any = None,
     on_sandbox_started: Callable[[Sandbox], None] | None = None,
     post_run_hook: PostRunHook | None = None,
     tools_factory: Callable[[], ToolRegistry] | None = None,
@@ -239,6 +244,7 @@ async def run_agent_task(
         event_bus=event_bus,
         emit_lifecycle=emit_lifecycle,
         cancellation_token=cancellation_token,
+        completion_contract=completion_contract,
         on_sandbox_started=on_sandbox_started,
         post_run_hook=post_run_hook,
         react_loop_fn=react_loop_fn,

@@ -9,6 +9,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agent_forge.agent.contracts import ContractEvaluation
     from agent_forge.agent.verification import VerificationResult
     from agent_forge.llm.base import Message, TokenUsage
     from agent_forge.tools.base import ToolResult
@@ -22,6 +23,7 @@ class RunState(Enum):
     PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
+    VERIFICATION_FAILED = "verification_failed"
     CANCELLED = "cancelled"
     TIMEOUT = "timeout"
 
@@ -76,6 +78,7 @@ class AgentRun:
     completed_at: datetime | None = None
     error: str | None = None
     verification: VerificationResult | None = None
+    contract_evaluation: ContractEvaluation | None = None
 
 
 def _zero_usage() -> TokenUsage:

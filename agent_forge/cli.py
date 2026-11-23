@@ -327,6 +327,12 @@ def benchmark_models(
     default=None,
     help="Additional directory containing agent profile YAML files.",
 )
+@click.option(
+    "--contract",
+    default="auto",
+    type=click.Choice(["auto", "qa", "coding-fix"], case_sensitive=False),
+    help="Completion contract mode enforced before marking the run completed.",
+)
 def run(
     task: str,
     repo: str,
@@ -350,6 +356,7 @@ def run(
     profiles_dir: Path | None,
     verify_command: str | None,
     model_profile: str | None,
+    contract: str,
 ) -> None:
     """Run an agent task on a repository."""
     # --- Resolve profile early so it can override provider/model ---
@@ -443,6 +450,7 @@ def run(
                         api_key,
                         profile=resolved_profile,
                         verify_command=verify_command,
+                        contract_mode=contract,
                     ),
                 )
             finally:
@@ -496,7 +504,7 @@ def _validate_verification_mode(command: str | None, queue_backend: str | None) 
 
 
 def _exit_on_verification_failure(command: str | None, state: str) -> None:
-    if command is not None and state != "completed":
+    if state == "verification_failed" or (command is not None and state != "completed"):
         raise click.exceptions.Exit(1)
 
 
@@ -509,12 +517,14 @@ async def _run_agent(
     *,
     profile: Any | None = None,
     verify_command: str | None = None,
+    contract_mode: str = "auto",
 ) -> Any:
     """Execute the full agent pipeline (direct mode).
 
     Creates an ``EventBus`` so lifecycle events are emitted even in
     direct mode — this enables observability subscribers.
     """
+    from agent_forge.agent.contracts import resolve_completion_contract
     from agent_forge.agent.models import AgentRun
     from agent_forge.agent.runner import render_task_system_prompt
     from agent_forge.orchestration.events import EventBus
@@ -523,6 +533,11 @@ async def _run_agent(
     sandbox_config = _build_sandbox_config(cfg)
     agent_config = _build_agent_config(cfg, provider_name, profile=profile)
     prompt_scope = profile.prompt_scope if profile else None
+    completion_contract = resolve_completion_contract(
+        profile=profile,
+        contract_mode=contract_mode,
+        has_verifier=verify_command is not None,
+    )
 
     event_bus = EventBus()
     tools = create_default_registry()
@@ -534,6 +549,9 @@ async def _run_agent(
         discover_extensions=True,
     )
     agent_run = AgentRun(task=task, repo_path=repo, config=agent_config)
+    ws_kwargs: dict[str, Any] = {"verify_command": verify_command}
+    if completion_contract is not None:
+        ws_kwargs["completion_contract"] = completion_contract
     return await _execute_with_workspace(
         agent_run,
         cfg,
@@ -541,7 +559,7 @@ async def _run_agent(
         api_key,
         tools,
         event_bus,
-        verify_command=verify_command,
+        **ws_kwargs,
     )
 
 
@@ -610,6 +628,7 @@ async def _execute_with_workspace(
     verify_command: str | None = None,
     base_revision: str | None = None,
     initial_patch: str = "",
+    completion_contract: Any | None = None,
 ) -> Any:
     from functools import partial
 
@@ -668,6 +687,7 @@ async def _execute_with_workspace(
                             cancellation_token=cancellation_token,
                             base_revision=run_base_revision,
                             verify_command=verify_command,
+                            completion_contract=completion_contract,
                         ),
                         cancellation_token,
                     )
@@ -887,6 +907,7 @@ def _display_run_summary(run: Any) -> None:
     state_color = {
         "completed": "green",
         "failed": "red",
+        "verification_failed": "red",
         "timeout": "yellow",
         "cancelled": "dim",
         "paused": "cyan",
@@ -910,6 +931,19 @@ def _display_run_summary(run: Any) -> None:
         table.add_row("Base revision", run.verification.base_revision)
         if run.verification.patch:
             table.add_row("Patch", str(USER_CONFIG_DIR / "runs" / run.id / "change.patch"))
+    from agent_forge.agent.contracts import ContractEvaluation
+
+    contract_eval = getattr(run, "contract_evaluation", None)
+    if isinstance(contract_eval, ContractEvaluation):
+        table.add_row(
+            "Completion Contract",
+            f"{contract_eval.contract_id} ({'passed' if contract_eval.passed else 'unmet'})",
+        )
+        if contract_eval.unmet_clauses:
+            table.add_row(
+                "Unmet Clauses",
+                ", ".join(clause.clause_id for clause in contract_eval.unmet_clauses),
+            )
 
     console.print(Panel(table, title="[bold]Agent Run Complete", border_style=state_color))
 
@@ -955,6 +989,11 @@ def _run_output_payload(run: Any, *, profile: Any | None = None) -> dict[str, ob
             artifacts = payload["artifacts"]
             if isinstance(artifacts, dict):
                 artifacts["patch"] = str(run_dir / "change.patch")
+    from agent_forge.agent.contracts import ContractEvaluation
+
+    contract_eval = getattr(run, "contract_evaluation", None)
+    if isinstance(contract_eval, ContractEvaluation):
+        payload["completion_contract"] = contract_eval.model_dump(mode="json")
     if profile is not None:
         payload["profile"] = {
             "id": profile.id,
@@ -1454,6 +1493,7 @@ def list_runs() -> None:
         state_color = {
             "completed": "green",
             "failed": "red",
+            "verification_failed": "red",
             "timeout": "yellow",
             "cancelled": "dim",
             "paused": "cyan",

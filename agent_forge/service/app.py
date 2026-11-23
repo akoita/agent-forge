@@ -33,6 +33,14 @@ except ImportError as exc:
 
 from agent_forge import __version__
 from agent_forge.agent.budget import CancellationToken
+from agent_forge.agent.contracts import (
+    CompletionContract,
+    ContractEvaluation,
+    JsonArtifactClause,
+    artifact_report_contract,
+    evaluate_json_artifact_raw,
+    resolve_completion_contract,
+)
 from agent_forge.agent.core import react_loop
 from agent_forge.agent.models import AgentConfig, AgentRun
 from agent_forge.agent.runner import run_agent_task
@@ -49,6 +57,7 @@ from agent_forge.orchestration.worker import Worker
 from agent_forge.profiles import AgentProfile, load_profiles
 from agent_forge.sandbox.factory import create_sandbox
 from agent_forge.service.models import (
+    ErrorCode,
     ErrorResponse,
     HealthResponse,
     LogsResponse,
@@ -80,14 +89,6 @@ _logger = logging.getLogger(__name__)
 _REPORT_RELATIVE_PATH = Path(".agent-forge/report.json")
 
 _REPORT_REQUIRED_FIELDS = {"schema_version", "run_id", "summary"}
-
-_REPORT_RECOVERY_PROMPT = (
-    "The task is complete but you did not write the required report file. "
-    "You MUST now write a valid JSON report to .agent-forge/report.json using the "
-    "write_file tool. The report must include the required schema_version, run_id, "
-    "and summary fields along with any profile-required fields. Write the file NOW — "
-    "this is your only chance."
-)
 
 
 @dataclass
@@ -1115,32 +1116,65 @@ class HostedRunService:
             "and summary along with any schema-required fields."
         )
 
-    def _validate_report_artifact(self, record: HostedRunRecord) -> None:
-        """Validate that the report file exists, is valid JSON, and has required fields."""
-        if not record.report_path.exists():
-            record.error = RunError(
-                code="report_generation_failed",
-                message="run completed without writing .agent-forge/report.json",
-                retryable=False,
-            )
-            raise RuntimeError(record.error.message)
+    def _build_run_completion_contract(
+        self,
+        record: HostedRunRecord,
+        resolved_profile: AgentProfile | None,
+    ) -> CompletionContract:
+        contract = resolve_completion_contract(
+            profile=resolved_profile,
+            report_schema=record.request.profile.report_schema,
+        )
+        if contract is not None:
+            return contract
+        return artifact_report_contract(
+            relative_path=str(_REPORT_RELATIVE_PATH),
+            required_fields=sorted(_REPORT_REQUIRED_FIELDS),
+            expected_schema_version=record.request.profile.report_schema,
+            max_remediation_attempts=1,
+        )
 
-        raw = record.report_path.read_text(encoding="utf-8")
-        try:
-            payload = json.loads(raw)
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            record.error = RunError(
-                code="report_invalid_json",
-                message=f"report.json exists but is not valid JSON: {exc}",
-                retryable=False,
+    def _validate_report_artifact(
+        self,
+        record: HostedRunRecord,
+        *,
+        contract: CompletionContract | None = None,
+    ) -> None:
+        """Validate the report file via the active JSON artifact contract clause."""
+        clause: JsonArtifactClause | None = None
+        if contract is not None:
+            clause = next(
+                (item for item in contract.clauses if isinstance(item, JsonArtifactClause)),
+                None,
             )
-            raise RuntimeError(record.error.message) from exc
 
-        missing = _REPORT_REQUIRED_FIELDS - set(payload.keys())
-        if missing:
+        raw = (
+            record.report_path.read_text(encoding="utf-8") if record.report_path.exists() else None
+        )
+        result = evaluate_json_artifact_raw(
+            raw,
+            relative_path=clause.relative_path
+            if clause is not None
+            else str(_REPORT_RELATIVE_PATH),
+            required_fields=(
+                clause.required_fields if clause is not None else tuple(_REPORT_REQUIRED_FIELDS)
+            ),
+            expected_schema_version=clause.expected_schema_version if clause is not None else None,
+            validator=clause.validator if clause is not None else None,
+            missing_error_code=(
+                clause.missing_error_code if clause is not None else "report_generation_failed"
+            ),
+            invalid_json_error_code=(
+                clause.invalid_json_error_code if clause is not None else "report_invalid_json"
+            ),
+            schema_error_code=(
+                clause.schema_error_code if clause is not None else "report_schema_invalid"
+            ),
+        )
+        if not result.passed:
             record.error = RunError(
-                code="report_schema_invalid",
-                message=f"report.json missing required fields: {sorted(missing)}",
+                code=cast("ErrorCode", result.error_code or "report_generation_failed"),
+                message=result.detail,
                 retryable=False,
             )
             raise RuntimeError(record.error.message)
@@ -1222,23 +1256,18 @@ class HostedRunService:
             profile_id=resolved_profile.id if resolved_profile else None,
         )
 
+        completion_contract = self._build_run_completion_contract(record, resolved_profile)
+
         async def _post_run_hook(
             agent_run: AgentRun,
             llm: Any,
             tools: Any,
             sandbox: Any,
         ) -> None:
+            del llm, tools, sandbox
             if cancel_token.is_cancelled or self._is_run_cancelled(task.id):
                 return
-            await self._finalize_run_report(
-                record,
-                task,
-                agent_run,
-                agent_config,
-                llm,
-                tools,
-                sandbox,
-            )
+            self._verify_run_contract(record, agent_run, completion_contract)
 
         def _on_sandbox_started(sandbox: Sandbox) -> None:
             self._active_sandboxes[task.id] = sandbox
@@ -1258,6 +1287,7 @@ class HostedRunService:
             discover_extensions=True,
             event_bus=self._event_bus,
             cancellation_token=cancel_token,
+            completion_contract=completion_contract,
             on_sandbox_started=_on_sandbox_started,
             post_run_hook=_post_run_hook,
             tools_factory=create_default_registry,
@@ -1541,50 +1571,23 @@ class HostedRunService:
             raise RuntimeError(record.error.message)
         return provider_name, api_key
 
-    async def _finalize_run_report(
+    def _verify_run_contract(
         self,
         record: HostedRunRecord,
-        task: Task,
         agent_run: AgentRun,
-        agent_config: AgentConfig,
-        llm: Any,
-        tools: Any,
-        sandbox: Any,
+        completion_contract: CompletionContract,
     ) -> None:
-        if not record.report_path.exists():
-            self._append_access_event(
-                event="run.report_recovery_started",
-                client_service_id=record.owner_service_id or record.request.client.service_id,
-                run_id=record.run_id,
-                request_id=record.request.client.request_id,
-                profile_id=record.request.profile.id,
-                submitted_at=record.created_at,
-                final_status="running",
-                reason="report missing after primary run; attempting recovery",
-                request_origin=record.request_origin,
-                user_agent=record.user_agent,
+        """Enforce the run's evaluated completion contract and report artifact rules."""
+        evaluation = getattr(agent_run, "contract_evaluation", None)
+        if isinstance(evaluation, ContractEvaluation) and not evaluation.passed:
+            unmet = evaluation.unmet_clauses[0]
+            record.error = RunError(
+                code=cast("ErrorCode", unmet.error_code or "report_generation_failed"),
+                message=unmet.detail or evaluation.summary_reason,
+                retryable=False,
             )
-            recovery_config = AgentConfig(
-                model=agent_config.model,
-                max_iterations=1,
-                max_tokens_per_run=agent_config.max_tokens_per_run,
-                temperature=agent_config.temperature,
-            )
-            recovery_run = AgentRun(
-                task=_REPORT_RECOVERY_PROMPT,
-                repo_path=task.repo_path,
-                config=recovery_config,
-                id=f"{task.id}_recovery",
-            )
-            recovery_run.messages = list(agent_run.messages)
-            await react_loop(
-                recovery_run,
-                llm,
-                tools,
-                sandbox,
-                event_bus=self._event_bus,
-            )
-        self._validate_report_artifact(record)
+            raise RuntimeError(record.error.message)
+        self._validate_report_artifact(record, contract=completion_contract)
 
     def _handle_stale_lease(self, record: HostedRunRecord) -> None:
         self._sync_record_from_store(record.run_id)

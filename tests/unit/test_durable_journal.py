@@ -995,3 +995,93 @@ def test_sigterm_pauses_cleanly_with_resume_hint(tmp_path: Path) -> None:
     assert replayed.state_sequence == ["pending", "running", "paused"]
     assert len(replayed.interruptions) == 1
     assert replayed.interruptions[0]["recoverable"] is True
+
+
+@pytest.mark.asyncio
+async def test_fresh_pending_run_reusing_id_resets_stale_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A brand-new PENDING run reusing a run ID clears any stale journal and executes fresh."""
+    runs_dir = tmp_path / "runs"
+    monkeypatch.setattr("agent_forge.agent.persistence.USER_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(
+        "agent_forge.agent.core.save_summary",
+        lambda *_a: tmp_path / "summary.json",
+    )
+
+    same_id = "fixed-reused-run-id"
+    registry = ToolRegistry()
+    registry.register(WriteFileTool())
+
+    repo1 = tmp_path / "repo1"
+    repo1.mkdir()
+    sb1 = _LocalWorkspaceSandbox()
+    await sb1.start(str(repo1))
+
+    llm1 = AsyncMock()
+    llm1.complete.side_effect = [
+        LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCall(
+                    id="c-write",
+                    name="write_file",
+                    arguments={"path": "out.txt", "content": "first\n"},
+                )
+            ],
+            usage=TokenUsage(10, 10, 20),
+            finish_reason="tool_calls",
+        ),
+        LLMResponse(
+            content="Done 1.", tool_calls=[], usage=TokenUsage(5, 5, 10), finish_reason="stop"
+        ),
+    ]
+    run1 = AgentRun(
+        id=same_id,
+        task="Write file 1",
+        repo_path=str(repo1),
+        config=AgentConfig(max_iterations=3),
+    )
+    res1 = await react_loop(run1, llm1, registry, sb1)
+    assert res1.state == RunState.COMPLETED
+    assert (repo1 / "out.txt").read_text(encoding="utf-8") == "first\n"
+
+    # Second brand-new PENDING run with identical id on a clean repo must not reuse run1's journal.
+    repo2 = tmp_path / "repo2"
+    repo2.mkdir()
+    sb2 = _LocalWorkspaceSandbox()
+    await sb2.start(str(repo2))
+
+    llm2 = AsyncMock()
+    llm2.complete.side_effect = [
+        LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCall(
+                    id="c-write",
+                    name="write_file",
+                    arguments={"path": "out.txt", "content": "first\n"},
+                )
+            ],
+            usage=TokenUsage(10, 10, 20),
+            finish_reason="tool_calls",
+        ),
+        LLMResponse(
+            content="Done 2.", tool_calls=[], usage=TokenUsage(5, 5, 10), finish_reason="stop"
+        ),
+    ]
+    run2 = AgentRun(
+        id=same_id,
+        task="Write file 2",
+        repo_path=str(repo2),
+        config=AgentConfig(max_iterations=3),
+    )
+    res2 = await react_loop(run2, llm2, registry, sb2)
+    assert res2.state == RunState.COMPLETED
+    assert (repo2 / "out.txt").read_text(encoding="utf-8") == "first\n"
+
+    replayed = replay_journal(same_id, base_dir=runs_dir)
+    assert replayed.valid is True
+    assert replayed.reused_actions == 0
+    assert replayed.state_sequence == ["pending", "running", "completed"]

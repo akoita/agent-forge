@@ -500,9 +500,9 @@ Hosted mode writes useful state to disk:
 - `quota_exceeded`: active-run or daily-run limit reached
 - `source_fetch_failed`: the submitted source URI could not be resolved, downloaded, or extracted
 - `sandbox_execution_failed`: run reached the sandbox but failed during execution
-- `report_generation_failed`: agent completed (including recovery pass) without ever writing the report file
-- `report_invalid_json`: report.json exists but contains malformed JSON
-- `report_schema_invalid`: report.json is valid JSON but is missing required schema fields (e.g., `schema_version`, `summary`, `findings`, `stats`)
+- `report_generation_failed`: run ended `VERIFICATION_FAILED` after contract evaluation and bounded remediation without writing `.agent-forge/report.json`
+- `report_invalid_json`: `report.json` exists but contains malformed JSON
+- `report_schema_invalid`: `report.json` fails required fields or extension schema validation (e.g. Proof-of-Audit `ProofOfAuditReport`)
 
 ### Extension Deployment Troubleshooting
 
@@ -518,20 +518,13 @@ Hosted mode writes useful state to disk:
   package's exported `Path` entry points and verify they resolve relative to the
   installed package, not the source checkout.
 
-#### Report Recovery Pass
+#### Completion Contract & Report Validation
 
-When the primary agent loop completes without writing `.agent-forge/report.json`,
-the hosted service automatically attempts a **single-turn recovery pass** — one
-additional LLM call that explicitly instructs the model to write the report
-using its existing audit context. This costs one extra LLM round-trip but
-avoids failing runs where the model simply forgot to call `write_file`.
+Hosted runs resolve their `CompletionContract` from the active profile/extension (`plugins.proof_of_audit.contracts:build_poa_completion_contract` for Proof-of-Audit profiles) or fall back to the generic `artifact_report_contract`. When the agent attempts to stop without a valid `.agent-forge/report.json`, `react_loop` evaluates the `JsonArtifactClause` and injects a bounded single-loop remediation prompt (`max_remediation_attempts = 1`) instead of spawning a second post-run LLM loop. If `.agent-forge/report.json` is still missing or invalid after evaluation:
 
-After the recovery pass (or if the primary run already wrote the file), the
-service validates the report:
-
-1. File must exist → otherwise `report_generation_failed`
-2. File must parse as valid JSON → otherwise `report_invalid_json`
-3. JSON must contain all required top-level fields → otherwise `report_schema_invalid`
+1. File missing → `VERIFICATION_FAILED` / `report_generation_failed`
+2. File malformed JSON → `VERIFICATION_FAILED` / `report_invalid_json`
+3. JSON fails required fields or extension schema validator → `VERIFICATION_FAILED` / `report_schema_invalid`
 
 ### Rollout Guidance
 
