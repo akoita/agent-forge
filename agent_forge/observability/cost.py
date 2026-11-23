@@ -139,12 +139,19 @@ def _estimate_cost(usage: TokenUsage, model: str) -> float:
     """Compute estimated USD cost for a single LLM call.
 
     Pricing is **per token** (sourced from LiteLLM's community database).
+    Cached prompt tokens use ``cache_read_input_token_cost`` when present or
+    a 50% discount on ``input_cost_per_token``.
     """
     pricing = COST_TABLE.get(model)
     if pricing is None:
         return 0.0
-    prompt_cost = usage.prompt_tokens * pricing["input_cost_per_token"]
-    completion_cost = usage.completion_tokens * pricing["output_cost_per_token"]
+    input_rate = pricing["input_cost_per_token"]
+    output_rate = pricing["output_cost_per_token"]
+    cached_tokens = min(usage.prompt_tokens, max(0, getattr(usage, "cached_prompt_tokens", 0)))
+    uncached_prompt = max(0, usage.prompt_tokens - cached_tokens)
+    cached_rate = pricing.get("cache_read_input_token_cost", input_rate * 0.5)
+    prompt_cost = uncached_prompt * input_rate + cached_tokens * cached_rate
+    completion_cost = usage.completion_tokens * output_rate
     return prompt_cost + completion_cost
 
 

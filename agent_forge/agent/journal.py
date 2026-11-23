@@ -37,6 +37,7 @@ JournalEntryKind = Literal[
     "state_transition",
     "message_recorded",
     "llm_response",
+    "route_selected",
     "action_requested",
     "action_result",
     "checkpoint_saved",
@@ -233,11 +234,14 @@ def _message_from_payload(data: dict[str, Any]) -> Message:
         if isinstance(raw_calls, list)
         else None
     )
+    raw_reasoning = data.get("reasoning_blocks")
     return Message(
         role=Role(str(data["role"])),
         content=str(data.get("content", "")),
         tool_call_id=(str(data["tool_call_id"]) if data.get("tool_call_id") is not None else None),
         tool_calls=tool_calls,
+        reasoning_blocks=list(raw_reasoning) if isinstance(raw_reasoning, list) else None,
+        response_id=(str(data["response_id"]) if data.get("response_id") is not None else None),
     )
 
 

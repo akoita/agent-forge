@@ -8,7 +8,8 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from agent_forge.llm.base import LLMConfig, Message, Role, TokenUsage, ToolDefinition
+from agent_forge.llm.base import LLMConfig, LLMProvider, Message, Role, TokenUsage, ToolDefinition
+from agent_forge.llm.capabilities import resolve_capabilities
 from agent_forge.llm.errors import LLMError
 from agent_forge.llm.factory import create_provider, provider_names
 
@@ -47,6 +48,14 @@ def resolve_profile_base_url(config: ForgeConfig, profile: ModelProfileSettings)
     return base_url or None
 
 
+def resolve_profile_api_mode(config: ForgeConfig, profile: ModelProfileSettings) -> str:
+    """Return the effective API mode configured for *profile*."""
+    if profile.api_mode != "auto":
+        return profile.api_mode
+    provider_cfg = config.providers.get(profile.provider)
+    return provider_cfg.api_mode if provider_cfg is not None else "auto"
+
+
 def resolve_model_profile(config: ForgeConfig, name: str) -> ModelProfileSettings:
     """Resolve an alias and check that its adapter and credentials setting exist."""
     profile = config.model_profiles.get(name)
@@ -59,6 +68,21 @@ def resolve_model_profile(config: ForgeConfig, name: str) -> ModelProfileSetting
     return profile
 
 
+def _create_profile_provider(
+    config: ForgeConfig,
+    profile: ModelProfileSettings,
+    api_key: str,
+) -> LLMProvider:
+    base_url = resolve_profile_base_url(config, profile)
+    api_mode = resolve_profile_api_mode(config, profile)
+    provider_kwargs: dict[str, object] = {}
+    if base_url:
+        provider_kwargs["base_url"] = base_url
+    if profile.provider == "openai" and api_mode != "auto":
+        provider_kwargs["api_mode"] = api_mode
+    return create_provider(profile.provider, api_key, **provider_kwargs)
+
+
 async def probe_model(config: ForgeConfig, profile: ModelProfileSettings) -> ProbeResult:
     """Ask for one tool call and check whether the next turn consumes its result."""
     key_env = resolve_profile_api_key_env(config, profile)
@@ -68,12 +92,7 @@ async def probe_model(config: ForgeConfig, profile: ModelProfileSettings) -> Pro
         result.reason = f"Missing credential variable {key_env}."
         return result
 
-    base_url = resolve_profile_base_url(config, profile)
-    provider = (
-        create_provider(profile.provider, api_key, base_url=base_url)
-        if base_url
-        else create_provider(profile.provider, api_key)
-    )
+    provider = _create_profile_provider(config, profile, api_key)
     options = LLMConfig(
         model=profile.model,
         temperature=profile.temperature if profile.temperature is not None else 0.0,
@@ -105,10 +124,18 @@ async def probe_model(config: ForgeConfig, profile: ModelProfileSettings) -> Pro
                 return result
             history.extend(
                 [
-                    Message(Role.ASSISTANT, first.content or "", tool_calls=[call]),
+                    Message(
+                        Role.ASSISTANT,
+                        first.content or "",
+                        tool_calls=[call],
+                        reasoning_blocks=first.reasoning_blocks or None,
+                        response_id=first.response_id,
+                    ),
                     Message(Role.TOOL, _PROBE_VALUE, tool_call_id=call.id),
                 ]
             )
+            if provider.capabilities(profile.model).stateful_response_ids and first.response_id:
+                options.previous_response_id = first.response_id
             result.requests += 1
             second = await provider.complete(history, [_TOOL], options)
             result.usage += second.usage
@@ -134,10 +161,18 @@ async def probe_model(config: ForgeConfig, profile: ModelProfileSettings) -> Pro
 def qualification_report(config: ForgeConfig, name: str, *, live: bool) -> dict[str, object]:
     """Return separately labelled configuration and live qualification results."""
     profile = resolve_model_profile(config, name)
+    caps = resolve_capabilities(
+        profile.provider,
+        profile.model,
+        api_mode=resolve_profile_api_mode(config, profile),
+        base_url=resolve_profile_base_url(config, profile),
+        overrides=profile.capabilities,
+    )
     return {
         "profile": name,
         "provider": profile.provider,
         "requested_model": profile.model,
+        "capabilities": caps.to_dict(),
         "checked_at": datetime.now(UTC).isoformat(),
         "configuration": {"status": "passed"},
         "live_tool_exchange": (

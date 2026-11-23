@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -11,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from agent_forge.agent.approvals import ApprovalGate
 from agent_forge.agent.budget import BudgetPolicy, CancellationToken
-from agent_forge.agent.context import ContextEngine
+from agent_forge.agent.context import ContextEngine, estimate_messages_tokens
 from agent_forge.agent.contracts import (
     CompletionContract,
     ContractContext,
@@ -28,7 +29,9 @@ from agent_forge.agent.persistence import save_run
 from agent_forge.agent.prompts import build_system_prompt
 from agent_forge.agent.state import transition
 from agent_forge.llm.base import LLMConfig, LLMResponse, Message, Role, ToolCall
+from agent_forge.llm.capabilities import ProviderCapabilities, query_provider_capabilities
 from agent_forge.llm.errors import ToolExecutionError
+from agent_forge.llm.router import RoutingDecision, TurnRoutingContext
 from agent_forge.observability import (
     CostTracker,
     get_logger,
@@ -84,6 +87,10 @@ def _serialize_message_payload(message: Message, *, index: int) -> dict[str, Any
         payload["tool_call_id"] = message.tool_call_id
     if message.tool_calls:
         payload["tool_calls"] = [asdict(tc) for tc in message.tool_calls]
+    if message.response_id:
+        payload["response_id"] = message.response_id
+    if message.reasoning_blocks:
+        payload["reasoning_blocks"] = message.reasoning_blocks
     return payload
 
 
@@ -262,9 +269,9 @@ def _prepare_turn_context(
     llm_config: LLMConfig,
     context_engine: ContextEngine | None,
     journal: RunJournal,
-) -> list[Message]:
+) -> tuple[list[Message], bool, int]:
     if context_engine is None:
-        return run.messages
+        return run.messages, False, estimate_messages_tokens(run.messages)
     scoped_msg = context_engine.pop_scoped_instruction_message(run)
     if scoped_msg is not None:
         _record_message(run, scoped_msg, journal)
@@ -278,7 +285,58 @@ def _prepare_turn_context(
             iteration=run.iterations,
         )
     run.context_stats = context_engine.stats_dict(assembly)
-    return assembly.messages
+    return assembly.messages, assembly.compacted_this_turn, assembly.assembled_prompt_tokens
+
+
+def _select_turn_route(
+    run: AgentRun,
+    llm: LLMProvider,
+    llm_config: LLMConfig,
+    tracker: CostTracker,
+    journal: RunJournal,
+    *,
+    estimated_tokens: int,
+    consecutive_failures: int,
+    remediation_attempts: int,
+    last_response_id: str | None,
+    active_route: str | None,
+) -> tuple[ProviderCapabilities, str | None, str | None]:
+    if inspect.getattr_static(llm, "select_for_turn", None) is not None:
+        selector = getattr(llm, "select_for_turn", None)
+        if callable(selector) and not inspect.iscoroutinefunction(selector):
+            routing_ctx = TurnRoutingContext(
+                task=run.task,
+                iteration=run.iterations,
+                estimated_prompt_tokens=estimated_tokens,
+                consecutive_failures=consecutive_failures,
+                is_remediation=remediation_attempts > 0,
+                spent_cost_usd=tracker.total_cost(),
+                max_cost_usd=run.config.max_cost_usd,
+                spent_tokens=run.total_tokens.total_tokens,
+                max_tokens_per_run=run.config.max_tokens_per_run,
+            )
+            decision = selector(routing_ctx)
+            if isinstance(decision, RoutingDecision):
+                llm_config.model = decision.candidate.model
+                if active_route is not None and active_route != decision.candidate.profile_name:
+                    last_response_id = None
+                active_route = decision.candidate.profile_name
+                journal.append("route_selected", decision.to_dict(), iteration=run.iterations)
+                return decision.candidate.capabilities, last_response_id, active_route
+    return query_provider_capabilities(llm, llm_config.model), last_response_id, active_route
+
+
+def _update_consecutive_failures(
+    run: AgentRun,
+    call_count: int,
+    previous_failures: int,
+) -> int:
+    if call_count <= 0:
+        return previous_failures
+    recent = run.tool_invocations[-call_count:]
+    if any(inv.result.exit_code != 0 for inv in recent):
+        return previous_failures + 1
+    return 0
 
 
 async def _run_loop_iterations(
@@ -304,6 +362,9 @@ async def _run_loop_iterations(
     context_engine: ContextEngine | None = None,
 ) -> None:
     remediation_attempts = 0
+    consecutive_failures = 0
+    last_response_id: str | None = None
+    active_route: str | None = None
     while run.iterations < run.config.max_iterations:
         if await _check_cooperative_cancel(
             run,
@@ -327,13 +388,31 @@ async def _run_loop_iterations(
             {"iteration": run.iterations},
         )
 
-        # 1. REASON — ask the LLM what to do next
-        prompt_messages = _prepare_turn_context(
+        # 1. REASON — prepare context, negotiate capabilities/routing, call LLM
+        prompt_messages, compacted_now, est_tokens = _prepare_turn_context(
             run,
             tool_definitions,
             llm_config,
             context_engine,
             journal,
+        )
+        provider_caps, last_response_id, active_route = _select_turn_route(
+            run,
+            llm,
+            llm_config,
+            tracker,
+            journal,
+            estimated_tokens=est_tokens,
+            consecutive_failures=consecutive_failures,
+            remediation_attempts=remediation_attempts,
+            last_response_id=last_response_id,
+            active_route=active_route,
+        )
+        if compacted_now or not provider_caps.stateful_response_ids:
+            last_response_id = None
+        llm_config.parallel_tool_calls = provider_caps.parallel_tool_calls
+        llm_config.previous_response_id = (
+            last_response_id if provider_caps.stateful_response_ids else None
         )
         response = await llm.complete(
             messages=prompt_messages,
@@ -341,8 +420,13 @@ async def _run_loop_iterations(
             config=llm_config,
         )
         run.total_tokens = run.total_tokens + response.usage
-        tracker.record(response.usage, response.model)
+        tracker.record(response.usage, response.model or llm_config.model)
         _record_llm_response(response, journal, run.iterations)
+        last_response_id = (
+            response.response_id
+            if provider_caps.stateful_response_ids and response.response_id
+            else None
+        )
 
         await _emit(
             event_bus,
@@ -379,7 +463,14 @@ async def _run_loop_iterations(
         # 3. CHECK COMPLETION
         if response.finish_reason == "stop" and not response.tool_calls:
             _record_message(
-                run, Message(role=Role.ASSISTANT, content=response.content or ""), journal
+                run,
+                Message(
+                    role=Role.ASSISTANT,
+                    content=response.content or "",
+                    reasoning_blocks=response.reasoning_blocks or None,
+                    response_id=response.response_id,
+                ),
+                journal,
             )
             terminal = await _finish_run(
                 run,
@@ -395,13 +486,15 @@ async def _run_loop_iterations(
             remediation_attempts += 1
             continue
 
-        # 4. ACT — record message then execute each tool call with per-step journaling
+        # 4. ACT — record message then execute tool calls with per-step journaling
         _record_message(
             run,
             Message(
                 role=Role.ASSISTANT,
                 content=response.content or "",
                 tool_calls=response.tool_calls,
+                reasoning_blocks=response.reasoning_blocks or None,
+                response_id=response.response_id,
             ),
             journal,
         )
@@ -419,9 +512,15 @@ async def _run_loop_iterations(
             approval_gate=approval_gate,
             on_checkpoint=on_checkpoint,
             cancellation_token=cancellation_token,
+            allow_parallel_tools=provider_caps.parallel_tool_calls,
         )
         if stopped:
             return
+        consecutive_failures = _update_consecutive_failures(
+            run,
+            len(response.tool_calls),
+            consecutive_failures,
+        )
 
         await _emit(
             event_bus,
@@ -631,6 +730,111 @@ def _prepare_run_start(
     return completed_call_ids, by_key
 
 
+def _pending_uncached_calls(
+    indexed_calls: list[tuple[int, ToolCall]],
+    run_id: str,
+    iteration: int,
+    completed_call_ids: set[str],
+    completed_results_by_key: dict[str, ToolResult],
+) -> list[tuple[int, ToolCall, str]]:
+    pending: list[tuple[int, ToolCall, str]] = []
+    for call_index, tool_call in indexed_calls:
+        if tool_call.id and tool_call.id in completed_call_ids:
+            continue
+        key = compute_tool_idempotency_key(
+            run_id,
+            iteration,
+            tool_call.id,
+            tool_call.name,
+            dict(tool_call.arguments),
+            call_index=call_index,
+        )
+        if key not in completed_results_by_key:
+            pending.append((call_index, tool_call, key))
+    return pending
+
+
+def _can_execute_batch_in_parallel(
+    indexed_calls: list[tuple[int, ToolCall]],
+    pending: list[tuple[int, ToolCall, str]],
+    tools: ToolRegistry,
+    *,
+    allow_parallel_tools: bool,
+    approval_gate: ApprovalGate | None,
+) -> bool:
+    if not allow_parallel_tools or len(pending) < 2 or len(pending) != len(indexed_calls):
+        return False
+    if approval_gate is not None and approval_gate.mode != "auto":
+        return False
+    for _, tool_call, _ in pending:
+        try:
+            tool_obj = tools.get(tool_call.name)
+        except KeyError:
+            return False
+        if is_side_effecting_tool(tool_call.name, tool_obj):
+            return False
+    return True
+
+
+async def _execute_parallel_read_only_batch(
+    run: AgentRun,
+    tools: ToolRegistry,
+    sandbox: Sandbox,
+    pending: list[tuple[int, ToolCall, str]],
+    completed_call_ids: set[str],
+    completed_results_by_key: dict[str, ToolResult],
+    *,
+    journal: RunJournal,
+    event_bus: EventBus | None,
+    on_checkpoint: Callable[[AgentRun], Awaitable[None]] | None,
+) -> None:
+    coros: list[Awaitable[ToolResult]] = []
+    start_time = datetime.now(UTC)
+    for _, tool_call, idempotency_key in pending:
+        await _emit(
+            event_bus,
+            EventType.TOOL_CALLED,
+            run.id,
+            {
+                "tool_name": tool_call.name,
+                "arguments": dict(tool_call.arguments),
+                "iteration": run.iterations,
+            },
+        )
+        journal.append(
+            "action_requested",
+            {
+                "tool_call_id": tool_call.id,
+                "idempotency_key": idempotency_key,
+                "tool_name": tool_call.name,
+                "arguments": dict(tool_call.arguments),
+                "side_effecting": False,
+            },
+            iteration=run.iterations,
+        )
+        coros.append(
+            _execute_with_retry(tools.get(tool_call.name), tool_call, sandbox, run, event_bus)
+        )
+
+    results = await asyncio.gather(*coros)
+    for (_, tool_call, idempotency_key), result in zip(pending, results, strict=True):
+        await _record_tool_outcome(
+            run,
+            tool_call,
+            result,
+            idempotency_key=idempotency_key,
+            side_effecting=False,
+            reused=False,
+            timestamp=start_time,
+            journal=journal,
+            event_bus=event_bus,
+        )
+        completed_results_by_key[idempotency_key] = result
+        if tool_call.id:
+            completed_call_ids.add(tool_call.id)
+        await _emit_checkpoint(run, on_checkpoint, event_bus, journal=journal)
+
+
 async def _execute_tool_batch(
     run: AgentRun,
     tools: ToolRegistry,
@@ -645,7 +849,43 @@ async def _execute_tool_batch(
     approval_gate: ApprovalGate | None,
     on_checkpoint: Callable[[AgentRun], Awaitable[None]] | None,
     cancellation_token: CancellationToken | None,
+    allow_parallel_tools: bool = False,
 ) -> bool:
+    if await _check_cooperative_cancel(
+        run,
+        cancellation_token,
+        on_checkpoint,
+        lifecycle_bus,
+        journal=journal,
+    ):
+        return True
+    pending = _pending_uncached_calls(
+        indexed_calls,
+        run.id,
+        run.iterations,
+        completed_call_ids,
+        completed_results_by_key,
+    )
+    if _can_execute_batch_in_parallel(
+        indexed_calls,
+        pending,
+        tools,
+        allow_parallel_tools=allow_parallel_tools,
+        approval_gate=approval_gate,
+    ):
+        await _execute_parallel_read_only_batch(
+            run,
+            tools,
+            sandbox,
+            pending,
+            completed_call_ids,
+            completed_results_by_key,
+            journal=journal,
+            event_bus=event_bus,
+            on_checkpoint=on_checkpoint,
+        )
+        return False
+
     for call_index, tool_call in indexed_calls:
         if await _check_cooperative_cancel(
             run,
