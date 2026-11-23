@@ -1,6 +1,6 @@
 # RFC 001 — Qualify models through shared provider adapters
 
-**Status:** Proposed · 2026-11-21
+**Status:** Accepted · 2026-11-23 (adopted via [ADR-009](../adr/009-provider-api-v2.md))
 
 A contributor should be able to add a model on a supported protocol using configuration and one qualification command. The [strategy](../strategy.md#keep-model-qualification-repeatable) requires reproducible evidence before promoting a default. Track delivery in [#42](https://github.com/akoita/agent-forge/issues/42) and [#135](https://github.com/akoita/agent-forge/issues/135).
 
