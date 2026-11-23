@@ -1113,7 +1113,7 @@ default_model = "claude-sonnet-4-20250514"
 
 ### 5.2 Run Persistence
 
-Agent runs are persisted as JSON files under `~/.agent-forge/runs/<run_id>/`:
+Agent runs are persisted under `~/.agent-forge/runs/<run_id>/`:
 
 ```
 ~/.agent-forge/runs/<run_id>/
@@ -1121,8 +1121,13 @@ Agent runs are persisted as JSON files under `~/.agent-forge/runs/<run_id>/`:
 ├── messages.jsonl     # Full conversation history (line-delimited JSON)
 ├── events.jsonl       # Tool invocations persisted with the run snapshot
 ├── stream.jsonl       # Append-only typed run-event journal (run-event-v1)
+├── journal.jsonl      # Append-only fsynced step journal (run-journal-v1)
+├── checkpoint.json    # Latest step checkpoint manifest and idempotency keys
+├── checkpoint.patch   # Captured workspace diff at the latest checkpoint
 └── summary.json       # Final cost/token summary
 ```
+
+`RunJournal` writes immutable `run-journal-v1` records before each action (`action_requested`), immediately after each tool result (`action_result` with a SHA-256 `idempotency_key`), and on every state transition and checkpoint. `agent-forge resume <run_id>` reconciles completed actions from `journal.jsonl` and skips repeating committed side effects. `agent-forge replay <run_id|path>` deterministically validates state transitions and detects incomplete actions or duplicate side effects.
 
 ---
 

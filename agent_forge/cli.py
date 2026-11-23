@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
+import signal
 import sys
 from contextlib import nullcontext, redirect_stdout
 from dataclasses import asdict
@@ -548,18 +550,53 @@ def _make_checkpoint_callback(
     verify_command: str | None,
     save_fn: Any,
 ) -> Any:
-    if workspace is None:
-        return None
-
     async def _checkpoint(run: Any) -> None:
+        base_revision = workspace.base_revision if workspace is not None else ""
+        partial_patch = workspace.capture_patch() if workspace is not None else ""
         save_fn(
             run,
-            base_revision=workspace.base_revision,
-            partial_patch=workspace.capture_patch(),
+            base_revision=base_revision,
+            partial_patch=partial_patch,
             verify_command=verify_command,
         )
 
     return _checkpoint
+
+
+def _install_interrupt_handlers(
+    loop: asyncio.AbstractEventLoop,
+    token: Any,
+    task: asyncio.Task[Any],
+) -> list[signal.Signals]:
+    installed: list[signal.Signals] = []
+    for sig in (signal.SIGINT, signal.SIGTERM):
+
+        def _on_signal(signum: int = int(sig)) -> None:
+            if not token.is_stop_requested:
+                sig_name = signal.Signals(signum).name
+                token.interrupt(f"Interrupted by {sig_name}")
+            if not task.done():
+                task.cancel()
+
+        with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
+            loop.add_signal_handler(sig, _on_signal)
+            installed.append(sig)
+    return installed
+
+
+async def _run_with_interrupt_handlers(
+    coro: Any,
+    cancellation_token: Any,
+) -> Any:
+    loop = asyncio.get_running_loop()
+    run_task: asyncio.Task[Any] = loop.create_task(coro)
+    installed_signals = _install_interrupt_handlers(loop, cancellation_token, run_task)
+    try:
+        return await run_task
+    finally:
+        for sig in installed_signals:
+            with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
+                loop.remove_signal_handler(sig)
 
 
 async def _execute_with_workspace(
@@ -576,6 +613,7 @@ async def _execute_with_workspace(
 ) -> Any:
     from functools import partial
 
+    from agent_forge.agent.budget import CancellationToken
     from agent_forge.agent.checkpoint import save_checkpoint
     from agent_forge.agent.runner import execute_agent_run
     from agent_forge.agent.verification import VerificationWorkspace
@@ -585,6 +623,7 @@ async def _execute_with_workspace(
     sandbox_config = _build_sandbox_config(cfg)
     sandbox = create_sandbox(sandbox_config)
     sink = JournalEventSink(run_id=agent_run.id)
+    cancellation_token = CancellationToken()
     verification_workspace = (
         VerificationWorkspace(
             agent_run.repo_path,
@@ -608,26 +647,41 @@ async def _execute_with_workspace(
                 on_checkpoint = _make_checkpoint_callback(
                     workspace, verify_command, save_checkpoint
                 )
+                run_base_revision = (
+                    workspace.base_revision if workspace is not None else (base_revision or "")
+                )
                 llm = _create_configured_provider(cfg, provider_name, api_key)
                 await sink.attach(event_bus)
                 try:
-                    return await execute_agent_run(
-                        agent_run,
-                        sandbox_config,
-                        llm,
-                        tools,
-                        sandbox,
-                        repo_path=path,
-                        event_bus=event_bus,
-                        verify=verify,
-                        approval_gate=_build_approval_gate(cfg.agent.approval_mode),
-                        on_checkpoint=on_checkpoint,
+                    result = await _run_with_interrupt_handlers(
+                        execute_agent_run(
+                            agent_run,
+                            sandbox_config,
+                            llm,
+                            tools,
+                            sandbox,
+                            repo_path=path,
+                            event_bus=event_bus,
+                            verify=verify,
+                            approval_gate=_build_approval_gate(cfg.agent.approval_mode),
+                            on_checkpoint=on_checkpoint,
+                            cancellation_token=cancellation_token,
+                            base_revision=run_base_revision,
+                            verify_command=verify_command,
+                        ),
+                        cancellation_token,
                     )
                 finally:
                     await sink.detach(event_bus)
         except Exception as exc:  # noqa: BLE001 — top-level catch-all for CLI
             err_console.print(f"[red]Agent failed:[/red] {exc}")
             sys.exit(1)
+
+    if getattr(getattr(result, "state", None), "value", None) == "paused":
+        err_console.print(
+            f"[yellow]Run paused.[/yellow] Resume with: [bold]agent-forge resume {result.id}[/bold]"
+        )
+    return result
 
 
 async def _run_agent_queued(
@@ -1230,6 +1284,7 @@ def cancel(run_id: str, reason: str) -> None:
     """Cancel a paused or running run and record the cancellation reason."""
     from datetime import UTC, datetime
 
+    from agent_forge.agent.journal import RunJournal
     from agent_forge.agent.models import RunState
     from agent_forge.agent.persistence import load_run, save_run
     from agent_forge.agent.state import transition
@@ -1246,11 +1301,99 @@ def cancel(run_id: str, reason: str) -> None:
         )
         sys.exit(1)
 
+    prev_state = agent_run.state.value
     transition(agent_run, RunState.CANCELLED)
     agent_run.error = reason
     agent_run.completed_at = datetime.now(UTC)
     save_run(agent_run)
+    journal = RunJournal(run_id)
+    if journal.path.exists():
+        journal.append(
+            "run_interrupted",
+            {
+                "source": "cli_cancel",
+                "state": RunState.CANCELLED.value,
+                "reason": reason,
+                "recoverable": False,
+            },
+            iteration=agent_run.iterations,
+        )
+        journal.append(
+            "state_transition",
+            {
+                "from_state": prev_state,
+                "to_state": RunState.CANCELLED.value,
+                "reason": reason,
+            },
+            iteration=agent_run.iterations,
+        )
     console.print(f"[dim]Cancelled run {run_id}: {reason}[/dim]")
+
+
+def _render_replay_text(replay_result: Any) -> None:
+    status_label = "[green]VALID[/green]" if replay_result.valid else "[red]INVALID[/red]"
+    summary = (
+        f"Run ID: {replay_result.run_id}\n"
+        f"Status: {status_label}\n"
+        f"States: {' -> '.join(replay_result.state_sequence)}\n"
+        f"Iterations: {replay_result.iterations} | LLM turns: {replay_result.llm_turns} | "
+        f"Actions: {len(replay_result.actions)} (reused: {replay_result.reused_actions})\n"
+        f"Checkpoints: {replay_result.checkpoints} | "
+        f"Incomplete: {len(replay_result.incomplete_actions)} | "
+        f"Duplicates: {len(replay_result.duplicate_side_effects)}\n"
+        f"Tokens: {replay_result.total_tokens.get('total_tokens', 0):,}"
+    )
+    console.print(Panel(summary, title="Journal Replay"))
+    if replay_result.actions:
+        table = Table(title="Replayed Actions")
+        table.add_column("Seq", justify="right")
+        table.add_column("Iter", justify="right")
+        table.add_column("Tool", style="cyan")
+        table.add_column("Idempotency Key", style="dim")
+        table.add_column("Side Effects")
+        table.add_column("Exit", justify="right")
+        table.add_column("Reused")
+        for act in replay_result.actions:
+            table.add_row(
+                str(act.seq),
+                str(act.iteration),
+                act.tool_name,
+                act.idempotency_key or "—",
+                "yes" if act.side_effecting else "no",
+                str(act.exit_code),
+                "yes" if act.reused else "no",
+            )
+        console.print(table)
+    if replay_result.anomalies:
+        for anomaly in replay_result.anomalies:
+            err_console.print(f"[red]Anomaly:[/red] {anomaly}")
+
+
+@main.command()
+@click.argument("target")
+@click.option(
+    "--output-format",
+    default="text",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    help="Render a human summary or machine-readable JSON replay report.",
+)
+def replay(target: str, output_format: str) -> None:
+    """Deterministically replay and verify a run journal or trajectory file."""
+    from agent_forge.agent.journal import replay_journal
+
+    try:
+        result = replay_journal(target)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+
+    if output_format == "json":
+        click.echo(result.model_dump_json(indent=2))
+    else:
+        _render_replay_text(result)
+
+    if not result.valid or result.duplicate_side_effects:
+        sys.exit(1)
 
 
 def _require_provider_key(cfg: ForgeConfig, provider_name: str) -> str:

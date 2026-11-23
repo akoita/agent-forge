@@ -13,6 +13,7 @@ import pytest
 import respx
 from click.testing import CliRunner
 
+from agent_forge.agent.journal import replay_journal
 from agent_forge.agent.models import AgentConfig, AgentRun, RunState, ToolInvocation
 from agent_forge.agent.verification import VerificationResult, VerificationWorkspace
 from agent_forge.cli import main as cli_main
@@ -499,11 +500,16 @@ class TestBenchmarkAggregationAndRunner:
         )
         rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
         assert [row["kind"] for row in rows] == [
-            "run_header",
-            "message",
-            "message",
-            "tool_invocation",
-            "verification",
+            "run_started",
+            "message_recorded",
+            "message_recorded",
+            "action_requested",
+            "action_result",
+            "verification_recorded",
             "attempt_result",
         ]
-        assert rows[-1]["patch_applied"] is True
+        assert rows[-1]["data"]["patch_applied"] is True
+        replayed = replay_journal(out)
+        assert replayed.valid is True
+        assert len(replayed.actions) == 1
+        assert replayed.actions[0].side_effecting is False

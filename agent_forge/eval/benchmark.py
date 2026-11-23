@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import statistics
 import subprocess
@@ -17,6 +16,11 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_forge.agent.core import react_loop
+from agent_forge.agent.journal import (
+    RunJournal,
+    compute_tool_idempotency_key,
+    is_side_effecting_tool,
+)
 from agent_forge.agent.models import AgentConfig, AgentRun, RunState
 from agent_forge.agent.prompts import build_system_prompt
 from agent_forge.agent.verification import VerificationWorkspace
@@ -268,6 +272,142 @@ def summarize_profile(
     )
 
 
+def _append_synthesized_trajectory(
+    journal: RunJournal,
+    *,
+    profile: str,
+    task_id: str,
+    attempt: int,
+    run: AgentRun,
+    result: TaskAttemptResult,
+) -> None:
+    journal.append(
+        "run_started",
+        {
+            "profile": profile,
+            "task_id": task_id,
+            "attempt": attempt,
+            "model": run.config.model,
+            "task": run.task,
+            "initial_state": RunState.PENDING.value,
+            "resumed": False,
+        },
+        iteration=0,
+    )
+    if run.state != RunState.PENDING:
+        journal.append(
+            "state_transition",
+            {
+                "from_state": RunState.PENDING.value,
+                "to_state": RunState.RUNNING.value,
+                "reason": "run_started",
+            },
+            iteration=0,
+        )
+    for index, msg in enumerate(run.messages):
+        msg_rec: dict[str, Any] = {
+            "index": index,
+            "role": msg.role.value,
+            "content": msg.content,
+        }
+        if msg.tool_call_id:
+            msg_rec["tool_call_id"] = msg.tool_call_id
+        if msg.tool_calls:
+            msg_rec["tool_calls"] = [asdict(tc) for tc in msg.tool_calls]
+        journal.append("message_recorded", msg_rec, iteration=run.iterations)
+    if run.total_tokens.total_tokens > 0:
+        journal.append(
+            "llm_response",
+            {
+                "model": run.config.model,
+                "finish_reason": "stop",
+                "usage": {
+                    "prompt_tokens": run.total_tokens.prompt_tokens,
+                    "completion_tokens": run.total_tokens.completion_tokens,
+                    "total_tokens": run.total_tokens.total_tokens,
+                },
+            },
+            iteration=run.iterations,
+        )
+    for idx, inv in enumerate(run.tool_invocations):
+        side_effecting = is_side_effecting_tool(inv.tool_name)
+        call_id = f"syn-{idx}"
+        idem_key = compute_tool_idempotency_key(
+            run.id,
+            inv.iteration,
+            call_id,
+            inv.tool_name,
+            dict(inv.arguments),
+            call_index=idx,
+        )
+        journal.append(
+            "action_requested",
+            {
+                "tool_call_id": call_id,
+                "idempotency_key": idem_key,
+                "tool_name": inv.tool_name,
+                "arguments": dict(inv.arguments),
+                "side_effecting": side_effecting,
+            },
+            iteration=inv.iteration,
+        )
+        journal.append(
+            "action_result",
+            {
+                "tool_call_id": call_id,
+                "idempotency_key": idem_key,
+                "tool_name": inv.tool_name,
+                "arguments": dict(inv.arguments),
+                "side_effecting": side_effecting,
+                "reused": False,
+                "duration_ms": inv.duration_ms,
+                "result": {
+                    "output": inv.result.output,
+                    "error": inv.result.error,
+                    "exit_code": inv.result.exit_code,
+                    "execution_time_ms": inv.result.execution_time_ms,
+                    "metadata": inv.result.metadata,
+                },
+            },
+            iteration=inv.iteration,
+        )
+    if run.verification is not None:
+        journal.append(
+            "verification_recorded",
+            {
+                "base_revision": run.verification.base_revision,
+                "reason": run.verification.reason,
+                "passed": run.verification.passed,
+                "command": run.verification.command,
+                "exit_code": run.verification.exit_code,
+                "patch": run.verification.patch,
+                "stdout": run.verification.stdout,
+                "stderr": run.verification.stderr,
+            },
+            iteration=run.iterations,
+        )
+    if run.state not in (RunState.PENDING, RunState.RUNNING):
+        journal.append(
+            "state_transition",
+            {
+                "from_state": RunState.RUNNING.value,
+                "to_state": run.state.value,
+                "reason": result.reason or run.state.value,
+            },
+            iteration=run.iterations,
+        )
+    journal.append(
+        "attempt_result",
+        {
+            "profile": profile,
+            "task_id": task_id,
+            "attempt": attempt,
+            **result.model_dump(mode="json"),
+        },
+        iteration=run.iterations,
+    )
+
+
 def save_attempt_trajectory(
     trajectory_path: Path,
     *,
@@ -277,67 +417,18 @@ def save_attempt_trajectory(
     run: AgentRun,
     result: TaskAttemptResult,
 ) -> Path:
-    """Persist the full message, tool, and verification trajectory as JSONL."""
+    """Persist a synthesized replayable ``RunJournal`` trajectory as JSONL."""
     trajectory_path.parent.mkdir(parents=True, exist_ok=True)
-    records: list[dict[str, Any]] = [
-        {
-            "kind": "run_header",
-            "profile": profile,
-            "task_id": task_id,
-            "attempt": attempt,
-            "run_id": run.id,
-            "model": run.config.model,
-            "state": run.state.value,
-            "iterations": run.iterations,
-            "total_tokens": {
-                "prompt_tokens": run.total_tokens.prompt_tokens,
-                "completion_tokens": run.total_tokens.completion_tokens,
-                "total_tokens": run.total_tokens.total_tokens,
-            },
-        }
-    ]
-    for index, msg in enumerate(run.messages):
-        msg_rec: dict[str, Any] = {
-            "kind": "message",
-            "index": index,
-            "role": msg.role.value,
-            "content": msg.content,
-        }
-        if msg.tool_call_id:
-            msg_rec["tool_call_id"] = msg.tool_call_id
-        if msg.tool_calls:
-            msg_rec["tool_calls"] = [asdict(tc) for tc in msg.tool_calls]
-        records.append(msg_rec)
-    for inv in run.tool_invocations:
-        records.append(
-            {
-                "kind": "tool_invocation",
-                "iteration": inv.iteration,
-                "tool_name": inv.tool_name,
-                "arguments": inv.arguments,
-                "exit_code": inv.result.exit_code,
-                "error": inv.result.error,
-                "output": inv.result.output,
-                "duration_ms": inv.duration_ms,
-            }
-        )
-    if run.verification is not None:
-        records.append(
-            {
-                "kind": "verification",
-                "base_revision": run.verification.base_revision,
-                "reason": run.verification.reason,
-                "passed": run.verification.passed,
-                "exit_code": run.verification.exit_code,
-                "patch": run.verification.patch,
-                "stdout": run.verification.stdout,
-                "stderr": run.verification.stderr,
-            }
-        )
-    records.append({"kind": "attempt_result", **result.model_dump(mode="json")})
-    trajectory_path.write_text(
-        "\n".join(json.dumps(item, default=str) for item in records) + "\n",
-        encoding="utf-8",
+    if trajectory_path.exists():
+        trajectory_path.unlink()
+    journal = RunJournal(run.id, path=trajectory_path, fsync=False)
+    _append_synthesized_trajectory(
+        journal,
+        profile=profile,
+        task_id=task_id,
+        attempt=attempt,
+        run=run,
+        result=result,
     )
     return trajectory_path
 
@@ -350,12 +441,25 @@ def maybe_save_trajectory(
     attempt: int,
     run: AgentRun,
     result: TaskAttemptResult,
+    journal: RunJournal | None = None,
 ) -> TaskAttemptResult:
     """Persist attempt trajectory JSONL when ``trajectory_dir`` is provided."""
     if trajectory_dir is None:
         return result
     path = trajectory_dir / f"{profile_name}__{task_id}__attempt-{attempt}.jsonl"
     updated = result.model_copy(update={"trajectory_path": str(path)})
+    if journal is not None and journal.entry_count > 0:
+        journal.append(
+            "attempt_result",
+            {
+                "profile": profile_name,
+                "task_id": task_id,
+                "attempt": attempt,
+                **updated.model_dump(mode="json"),
+            },
+            iteration=run.iterations,
+        )
+        return updated
     save_attempt_trajectory(
         path,
         profile=profile_name,
@@ -405,6 +509,12 @@ async def _run_single_attempt(
             ),
         )
         run = AgentRun(task=task.prompt, repo_path=str(repo_path), config=agent_cfg)
+        journal: RunJournal | None = None
+        if trajectory_dir is not None:
+            traj_path = trajectory_dir / f"{profile_name}__{task.id}__attempt-{attempt}.jsonl"
+            if traj_path.exists():
+                traj_path.unlink()
+            journal = RunJournal(run.id, path=traj_path, fsync=False)
         raw_llm = (
             create_provider(profile.provider, api_key, base_url=base_url)
             if base_url
@@ -424,7 +534,19 @@ async def _run_single_attempt(
                     return await workspace.verify(sandbox_config, sandbox)
 
                 async with asyncio.timeout(timeout_seconds):
-                    await react_loop(run, llm, tools, sandbox, verify=_verify)
+                    if journal is not None:
+                        await react_loop(
+                            run,
+                            llm,
+                            tools,
+                            sandbox,
+                            verify=_verify,
+                            journal=journal,
+                            base_revision=workspace.base_revision,
+                            verify_command=task.verify_command,
+                        )
+                    else:
+                        await react_loop(run, llm, tools, sandbox, verify=_verify)
         except TimeoutError:
             res = _error_attempt_result(
                 task.id,
@@ -443,6 +565,7 @@ async def _run_single_attempt(
                 attempt=attempt,
                 run=run,
                 result=res,
+                journal=journal,
             )
         except Exception as exc:  # noqa: BLE001 — isolate failed candidate runs
             res = _error_attempt_result(
@@ -462,6 +585,7 @@ async def _run_single_attempt(
                 attempt=attempt,
                 run=run,
                 result=res,
+                journal=journal,
             )
         finally:
             try:
@@ -485,6 +609,7 @@ async def _run_single_attempt(
         attempt=attempt,
         run=run,
         result=res,
+        journal=journal,
     )
 
 

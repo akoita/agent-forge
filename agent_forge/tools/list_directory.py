@@ -19,6 +19,10 @@ class ListDirectoryTool(Tool):
         return "list_directory"
 
     @property
+    def side_effecting(self) -> bool:
+        return False
+
+    @property
     def description(self) -> str:
         return "List files and directories at the given path"
 

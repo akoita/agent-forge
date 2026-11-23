@@ -21,6 +21,10 @@ class ReadFileTool(Tool):
         return "read_file"
 
     @property
+    def side_effecting(self) -> bool:
+        return False
+
+    @property
     def description(self) -> str:
         return "Read the contents of a file at the given path"
 

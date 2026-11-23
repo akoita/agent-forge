@@ -194,6 +194,10 @@ class ShellPollTool(Tool):
         return "shell_poll"
 
     @property
+    def side_effecting(self) -> bool:
+        return False
+
+    @property
     def description(self) -> str:
         return (
             "Poll a terminal session by session_id for unread output or a specific byte "
