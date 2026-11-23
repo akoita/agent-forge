@@ -74,11 +74,16 @@ class SandboxSettings(BaseModel):
 
 
 class QueueSettings(BaseModel):
-    """Settings for the task queue backend."""
+    """Settings for the task queue backend and parallel run isolation."""
 
     backend: str = "memory"
     redis_url: str = "redis://localhost:6379/0"
     max_concurrent_runs: int = 4
+    worktree_isolation: bool = True
+    worktree_root: str = ""
+    worktree_branch_prefix: str = "agent-forge/run"
+    auto_remove_unchanged_worktrees: bool = True
+    merge_strategy: Literal["merge", "rebase"] = "merge"
 
 
 class LoggingSettings(BaseModel):

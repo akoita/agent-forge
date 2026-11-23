@@ -475,6 +475,30 @@ async def _run_deterministic_attempt(
     )
 
 
+async def _run_profile_deterministic_tasks(
+    profile_name: str,
+    mode: ScriptedMode,
+    tasks: list[BenchmarkTask],
+    *,
+    trajectory_dir: Path | None,
+    max_concurrency: int,
+) -> list[TaskAttemptResult]:
+    semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def _bounded(task: BenchmarkTask) -> TaskAttemptResult:
+        async with semaphore:
+            return await _run_deterministic_attempt(
+                profile_name,
+                mode,
+                task,
+                trajectory_dir=trajectory_dir,
+            )
+
+    if max_concurrency == 1:
+        return [await _bounded(task) for task in tasks]
+    return list(await asyncio.gather(*(_bounded(task) for task in tasks)))
+
+
 async def run_deterministic_eval(
     *,
     suite: Literal["smoke", "full"] = "smoke",
@@ -482,21 +506,22 @@ async def run_deterministic_eval(
     output_json: Path | None = None,
     output_md: Path | None = None,
     trajectory_dir: Path | None = None,
+    max_concurrency: int = 1,
 ) -> BenchmarkReport:
     """Run offline scripted oracle/noop/incomplete evaluation and emit scored reports."""
+    if max_concurrency < 1:
+        msg = "max_concurrency must be >= 1"
+        raise ValueError(msg)
     tasks = resolve_tasks(task_ids, suite=suite)
     summaries: list[ProfileBenchmarkSummary] = []
     for profile_name, mode in _SCRIPTED_PROFILES:
-        results: list[TaskAttemptResult] = []
-        for task in tasks:
-            results.append(
-                await _run_deterministic_attempt(
-                    profile_name,
-                    mode,
-                    task,
-                    trajectory_dir=trajectory_dir,
-                )
-            )
+        results = await _run_profile_deterministic_tasks(
+            profile_name,
+            mode,
+            tasks,
+            trajectory_dir=trajectory_dir,
+            max_concurrency=max_concurrency,
+        )
         profile_settings = ModelProfileSettings(
             provider="deterministic",
             model=f"scripted-{mode}",

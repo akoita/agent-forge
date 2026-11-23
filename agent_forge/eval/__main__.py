@@ -59,6 +59,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Exit non-zero if deterministic quality gates fail.",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Maximum concurrent task evaluations per profile (default: 1).",
+    )
     return parser
 
 
@@ -82,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_json=output_json,
                 output_md=output_md,
                 trajectory_dir=trajectory_dir,
+                max_concurrency=max(1, args.concurrency),
             )
         )
     sys.stdout.write(render_markdown_report(report))

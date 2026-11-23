@@ -39,6 +39,10 @@ class EventType(Enum):
     APPROVAL_DECIDED = "approval.decided"
     BUDGET_EXCEEDED = "budget.exceeded"
     TOKEN_USAGE = "token.usage"  # noqa: S105 — not a password
+    WORKTREE_CREATED = "worktree.created"
+    WORKTREE_CLEANED = "worktree.cleaned"
+    WORKTREE_INTEGRATED = "worktree.integrated"
+    WORKTREE_CONFLICT = "worktree.conflict"
 
 
 @dataclass

@@ -16,14 +16,26 @@ from agent_forge.orchestration.queue import (
     TaskStatus,
 )
 from agent_forge.orchestration.worker import Worker
+from agent_forge.orchestration.worktree import (
+    DEFAULT_BRANCH_PREFIX,
+    IntegrationResult,
+    WorktreeError,
+    WorktreeInfo,
+    WorktreeLease,
+    WorktreeManager,
+    WorktreeState,
+    is_git_repo,
+)
 
 __all__ = [
+    "DEFAULT_BRANCH_PREFIX",
     "TERMINAL_STREAM_EVENTS",
     "Event",
     "EventBus",
     "EventJournal",
     "EventType",
     "InMemoryQueue",
+    "IntegrationResult",
     "JournalEventSink",
     "RedisQueue",
     "RunEventStream",
@@ -33,6 +45,12 @@ __all__ = [
     "TaskQueue",
     "TaskStatus",
     "Worker",
+    "WorktreeError",
+    "WorktreeInfo",
+    "WorktreeLease",
+    "WorktreeManager",
+    "WorktreeState",
+    "is_git_repo",
 ]
 
 

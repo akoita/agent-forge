@@ -767,6 +767,52 @@ def build_completed_result(
     )
 
 
+async def _run_profile_attempts(
+    config: ForgeConfig,
+    profile_name: str,
+    profile: ModelProfileSettings,
+    api_key: str,
+    base_url: str | None,
+    tasks: list[BenchmarkTask],
+    attempts: int,
+    *,
+    sandbox_config: SandboxConfig,
+    max_iterations: int,
+    max_tokens_per_run: int,
+    timeout_seconds: int,
+    trajectory_dir: Path | None,
+    max_concurrency: int,
+) -> list[TaskAttemptResult]:
+    semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def _bounded(task: BenchmarkTask, attempt: int) -> TaskAttemptResult:
+        async with semaphore:
+            return await _run_single_attempt(
+                config,
+                profile_name,
+                profile,
+                api_key,
+                base_url,
+                task,
+                attempt,
+                sandbox_config=sandbox_config,
+                max_iterations=max_iterations,
+                max_tokens_per_run=max_tokens_per_run,
+                timeout_seconds=timeout_seconds,
+                trajectory_dir=trajectory_dir,
+            )
+
+    if max_concurrency == 1:
+        results: list[TaskAttemptResult] = []
+        for task in tasks:
+            for attempt in range(1, attempts + 1):
+                results.append(await _bounded(task, attempt))
+        return results
+
+    coros = [_bounded(task, attempt) for task in tasks for attempt in range(1, attempts + 1)]
+    return list(await asyncio.gather(*coros))
+
+
 async def run_benchmark(
     config: ForgeConfig,
     *,
@@ -779,10 +825,14 @@ async def run_benchmark(
     max_tokens_per_run: int = 40_000,
     timeout_seconds: int = 180,
     trajectory_dir: Path | None = None,
+    max_concurrency: int = 1,
 ) -> BenchmarkReport:
     """Run pinned coding benchmark tasks across selected model profiles."""
     if attempts < 1:
         msg = "attempts must be >= 1"
+        raise ValueError(msg)
+    if max_concurrency < 1:
+        msg = "max_concurrency must be >= 1"
         raise ValueError(msg)
 
     tasks = _resolve_tasks(task_ids, suite=suite)
@@ -824,25 +874,21 @@ async def run_benchmark(
             continue
 
         base_url = resolve_profile_base_url(config, profile)
-        results: list[TaskAttemptResult] = []
-        for task in tasks:
-            for attempt in range(1, attempts + 1):
-                results.append(
-                    await _run_single_attempt(
-                        config,
-                        name,
-                        profile,
-                        api_key,
-                        base_url,
-                        task,
-                        attempt,
-                        sandbox_config=sandbox_cfg,
-                        max_iterations=max_iterations,
-                        max_tokens_per_run=max_tokens_per_run,
-                        timeout_seconds=timeout_seconds,
-                        trajectory_dir=trajectory_dir,
-                    )
-                )
+        results = await _run_profile_attempts(
+            config,
+            name,
+            profile,
+            api_key,
+            base_url,
+            tasks,
+            attempts,
+            sandbox_config=sandbox_cfg,
+            max_iterations=max_iterations,
+            max_tokens_per_run=max_tokens_per_run,
+            timeout_seconds=timeout_seconds,
+            trajectory_dir=trajectory_dir,
+            max_concurrency=max_concurrency,
+        )
         summaries.append(
             summarize_profile(
                 name,
