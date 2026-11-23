@@ -21,6 +21,12 @@ from agent_forge.tools.plugins import (
 from agent_forge.tools.read_file import ReadFileTool
 from agent_forge.tools.run_shell import RunShellTool
 from agent_forge.tools.search_codebase import SearchCodebaseTool
+from agent_forge.tools.terminal import (
+    ShellCancelTool,
+    ShellPollTool,
+    ShellStartTool,
+    ShellWriteTool,
+)
 from agent_forge.tools.write_file import WriteFileTool
 
 __all__ = [
@@ -35,6 +41,10 @@ __all__ = [
     "ReadFileTool",
     "RunShellTool",
     "SearchCodebaseTool",
+    "ShellCancelTool",
+    "ShellPollTool",
+    "ShellStartTool",
+    "ShellWriteTool",
     "Tool",
     "ToolPluginError",
     "ToolRegistry",
@@ -61,6 +71,10 @@ def create_default_registry(
     registry.register(ApplyPatchTool())
     registry.register(ListDirectoryTool())
     registry.register(RunShellTool())
+    registry.register(ShellStartTool())
+    registry.register(ShellPollTool())
+    registry.register(ShellWriteTool())
+    registry.register(ShellCancelTool())
     registry.register(SearchCodebaseTool())
     registry.register(GitDiffTool())
     registry.register(GitCommitTool())

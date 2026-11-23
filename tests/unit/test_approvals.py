@@ -38,6 +38,7 @@ class TestDestructiveClassifier:
                 "file_deletion",
             ),
             ("run_shell", {"command": "rm -f tmp.txt"}, "file_deletion"),
+            ("shell_start", {"command": "rm -rf build"}, "file_deletion"),
             ("run_shell", {"command": "git push origin feat --force"}, "git_force_push"),
             ("run_shell", {"command": "git push -f origin feat"}, "git_force_push"),
             ("run_shell", {"command": "git push --force-with-lease"}, "git_force_push"),

@@ -23,6 +23,8 @@ from agent_forge.sandbox.base import (
     SandboxState,
     sanitize_sandbox_env,
 )
+from agent_forge.sandbox.docker_sessions import DockerSessionManager
+from agent_forge.sandbox.sessions import SessionLimits, SessionSnapshot
 
 if TYPE_CHECKING:
     from docker.models.containers import Container
@@ -51,6 +53,7 @@ class DockerSandbox(Sandbox):
         self._container: Container | None = None
         self._state = SandboxState.IDLE
         self._config = SandboxConfig()
+        self._sessions: DockerSessionManager | None = None
         self._host_uid = os.getuid()
         self._host_gid = os.getgid()
 
@@ -138,11 +141,18 @@ class DockerSandbox(Sandbox):
                 self._container = await asyncio.to_thread(
                     lambda: self._client.containers.run(**run_kwargs)
                 )
+                assert self._container is not None  # noqa: S101
+                self._sessions = DockerSessionManager(
+                    self._client,
+                    container_id=str(self._container.id),
+                    user=f"{self._host_uid}:{self._host_gid}",
+                    limits=SessionLimits(default_max_duration_seconds=cfg.timeout_seconds),
+                )
 
                 self._state = SandboxState.RUNNING
                 logger.info(
                     "sandbox_started",
-                    container=self._container.short_id,  # type: ignore[union-attr]
+                    container=self._container.short_id,
                     image=cfg.image,
                     attempt=attempt + 1,
                 )
@@ -171,6 +181,7 @@ class DockerSandbox(Sandbox):
             return
 
         try:
+            await self.close_all_sessions()
             await asyncio.to_thread(self._container.stop, timeout=2)
         except NotFound:
             # Container already removed (--rm flag)
@@ -273,6 +284,82 @@ class DockerSandbox(Sandbox):
         if result.exit_code != 0:
             msg = f"Failed to write file: {path} — {result.stderr}"
             raise OSError(msg)
+
+    async def start_session(
+        self,
+        command: str,
+        *,
+        pty: bool = True,
+        max_duration_seconds: int | None = None,
+        wait_seconds: float = 0.5,
+        max_bytes: int = 32 * 1024,
+    ) -> SessionSnapshot:
+        """Start a resumable PTY or pipe session inside the running container."""
+        self._ensure_running()
+        assert self._sessions is not None  # noqa: S101
+        return await self._sessions.start(
+            command,
+            pty_enabled=pty,
+            max_duration_seconds=max_duration_seconds,
+            initial_wait_seconds=wait_seconds,
+            max_bytes=max_bytes,
+        )
+
+    async def poll_session(
+        self,
+        session_id: str,
+        *,
+        wait_seconds: float = 0.5,
+        offset: int | None = None,
+        max_bytes: int = 32 * 1024,
+    ) -> SessionSnapshot:
+        """Poll a container session for new or paginated output."""
+        self._ensure_running()
+        assert self._sessions is not None  # noqa: S101
+        return await self._sessions.poll(
+            session_id,
+            wait_seconds=wait_seconds,
+            offset=offset,
+            max_bytes=max_bytes,
+        )
+
+    async def write_session(
+        self,
+        session_id: str,
+        data: str,
+        *,
+        wait_seconds: float = 0.5,
+        max_bytes: int = 32 * 1024,
+    ) -> SessionSnapshot:
+        """Write input bytes to a running container session."""
+        self._ensure_running()
+        assert self._sessions is not None  # noqa: S101
+        return await self._sessions.write(
+            session_id,
+            data,
+            wait_seconds=wait_seconds,
+            max_bytes=max_bytes,
+        )
+
+    async def cancel_session(self, session_id: str) -> SessionSnapshot:
+        """Cancel a container session and kill its process group."""
+        self._ensure_running()
+        assert self._sessions is not None  # noqa: S101
+        return await self._sessions.cancel(session_id)
+
+    async def list_sessions(self) -> list[SessionSnapshot]:
+        """List snapshots of tracked container sessions."""
+        if self._sessions is None:
+            return []
+        return await self._sessions.list_sessions()
+
+    async def close_all_sessions(self) -> None:
+        """Cancel any active container sessions."""
+        if self._sessions is not None:
+            try:
+                await self._sessions.close_all()
+            finally:
+                self._sessions = None
 
     # ------------------------------------------------------------------
     # Internals

@@ -367,8 +367,19 @@ class Tool(ABC):
 | Description | Execute a shell command inside the sandboxed workspace                                  |
 | Parameters  | `command` (string, required), `timeout_seconds` (int, optional, default 30)             |
 | Behavior    | Runs command via `bash -c` in sandbox. Captures stdout + stderr.                        |
-| Limits      | Hard timeout at `min(timeout_seconds, 120)`. Max output: 50 KB (truncate with warning). |
+| Limits      | Hard timeout at `min(timeout_seconds, 600)`. Max output: 50 KB (sets `metadata` with `truncated`, `total_bytes`, `returned_bytes`, `bytes_elided`, and pagination `hint`). |
 | Blocklist   | Reject commands matching: `rm -rf /`, `:(){ :                                           | :& };:`, `mkfs`, `dd if=/dev/`, `shutdown` |
+
+##### `shell_start`, `shell_poll`, `shell_write`, `shell_cancel`
+
+Persistent PTY/pipe session tools for interactive programs (REPLs, installers, test watchers) and long-running background services across agent iterations:
+
+| Tool | Key Parameters | Behavior & Limits |
+| --- | --- | --- |
+| `shell_start` | `command` (req), `pty` (bool, default `true`), `wait_seconds` (default `0.5`), `max_duration_seconds`, `max_bytes` (default `32768`, max `65536`) | Launches an isolated session (subject to the shell blocklist, approval gate, max `4` concurrent sessions per sandbox, and auto-timeout). Returns `session_id` and first paginated output window. |
+| `shell_poll` | `session_id` (req), `wait_seconds` (default `0.5`), `offset` (optional byte offset), `max_bytes` (default `32768`) | Reads unread output (or from `offset`) from a bounded `2 MB` rolling byte spool with explicit `total_bytes`, `bytes_elided_before`, and `bytes_remaining_after` metadata. |
+| `shell_write` | `session_id` (req), `input` (req), `wait_seconds` (default `0.5`), `max_bytes` | Sends stdin/keystrokes to an active PTY or pipe session and returns newly captured output. |
+| `shell_cancel` | `session_id` (req) | Sends `SIGTERM`/`SIGKILL` to the session's process group inside the sandbox, closes sockets/FDs, and returns remaining output. All active sessions are also torn down on `sandbox.stop()`. |
 
 ##### `search_codebase`
 
@@ -1318,13 +1329,17 @@ agent-forge/
 │   │   ├── git_create_branch.py
 │   │   ├── create_pr.py
 │   │   ├── run_shell.py
+│   │   ├── terminal.py              # PTY session tools (start/poll/write/cancel)
 │   │   ├── search_codebase.py
 │   │   └── list_directory.py
 │   │
 │   ├── sandbox/
 │   │   ├── __init__.py
 │   │   ├── base.py                  # Sandbox ABC
+│   │   ├── bwrap.py                 # Bubblewrap implementation
 │   │   ├── docker.py                # Docker implementation
+│   │   ├── docker_sessions.py       # Docker PTY/exec session manager
+│   │   ├── sessions.py              # Bounded output spool & local PTY sessions
 │   │   └── Dockerfile               # Sandbox image definition
 │   │
 │   ├── agent/

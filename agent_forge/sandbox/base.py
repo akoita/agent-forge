@@ -9,6 +9,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agent_forge.sandbox.sessions import SessionSnapshot
 
 _SENSITIVE_ENV_SUFFIXES: tuple[str, ...] = (
     "_API_KEY",
@@ -138,3 +142,56 @@ class Sandbox(ABC):
     async def is_alive(self) -> bool:
         """Check if the sandbox is still running."""
         ...
+
+    async def start_session(
+        self,
+        command: str,
+        *,
+        pty: bool = True,
+        max_duration_seconds: int | None = None,
+        wait_seconds: float = 0.5,
+        max_bytes: int = 32 * 1024,
+    ) -> SessionSnapshot:
+        """Start a resumable PTY or pipe session inside the sandbox."""
+        del command, pty, max_duration_seconds, wait_seconds, max_bytes
+        msg = f"{type(self).__name__} does not support interactive terminal sessions"
+        raise NotImplementedError(msg)
+
+    async def poll_session(
+        self,
+        session_id: str,
+        *,
+        wait_seconds: float = 0.5,
+        offset: int | None = None,
+        max_bytes: int = 32 * 1024,
+    ) -> SessionSnapshot:
+        """Poll a terminal session for new or paginated output."""
+        del session_id, wait_seconds, offset, max_bytes
+        msg = f"{type(self).__name__} does not support interactive terminal sessions"
+        raise NotImplementedError(msg)
+
+    async def write_session(
+        self,
+        session_id: str,
+        data: str,
+        *,
+        wait_seconds: float = 0.5,
+        max_bytes: int = 32 * 1024,
+    ) -> SessionSnapshot:
+        """Write input to a running terminal session and return recent output."""
+        del session_id, data, wait_seconds, max_bytes
+        msg = f"{type(self).__name__} does not support interactive terminal sessions"
+        raise NotImplementedError(msg)
+
+    async def cancel_session(self, session_id: str) -> SessionSnapshot:
+        """Terminate a running terminal session and clean up its process group."""
+        del session_id
+        msg = f"{type(self).__name__} does not support interactive terminal sessions"
+        raise NotImplementedError(msg)
+
+    async def list_sessions(self) -> list[SessionSnapshot]:
+        """List snapshots of tracked terminal sessions."""
+        return []
+
+    async def close_all_sessions(self) -> None:  # noqa: B027 - default no-op for sandboxes without sessions
+        """Cancel all active terminal sessions on sandbox shutdown."""

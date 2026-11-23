@@ -20,6 +20,7 @@ from agent_forge.sandbox.base import (
     SandboxState,
     sanitize_sandbox_env,
 )
+from agent_forge.sandbox.sessions import LocalPtySessionManager, SessionLimits, SessionSnapshot
 
 logger = get_logger("sandbox")
 
@@ -47,6 +48,7 @@ class BwrapSandbox(Sandbox):
         self._repo_path: str | None = None
         self._bwrap_path = shutil.which("bwrap")
         self._active_processes: set[asyncio.subprocess.Process] = set()
+        self._sessions: LocalPtySessionManager | None = None
 
     @property
     def state(self) -> SandboxState:
@@ -74,6 +76,9 @@ class BwrapSandbox(Sandbox):
         cfg = config or SandboxConfig(backend="bwrap")
         self._config = cfg
         self._repo_path = str(Path(repo_path).resolve())
+        self._sessions = LocalPtySessionManager(
+            limits=SessionLimits(default_max_duration_seconds=cfg.timeout_seconds)
+        )
         self._state = SandboxState.RUNNING
         logger.info("sandbox_started", backend="bwrap", repo_path=self._repo_path)
 
@@ -147,6 +152,7 @@ class BwrapSandbox(Sandbox):
 
     async def stop(self) -> None:
         """Kill active child processes and reset the logical sandbox state."""
+        await self.close_all_sessions()
         for process in list(self._active_processes):
             if process.returncode is None:
                 with contextlib.suppress(ProcessLookupError):
@@ -161,6 +167,85 @@ class BwrapSandbox(Sandbox):
     async def is_alive(self) -> bool:
         """Check if the sandbox has been started and not yet stopped."""
         return self._state == SandboxState.RUNNING and self._repo_path is not None
+
+    async def start_session(
+        self,
+        command: str,
+        *,
+        pty: bool = True,
+        max_duration_seconds: int | None = None,
+        wait_seconds: float = 0.5,
+        max_bytes: int = 32 * 1024,
+    ) -> SessionSnapshot:
+        """Start a resumable PTY or pipe session inside bubblewrap."""
+        self._ensure_running()
+        assert self._sessions is not None  # noqa: S101
+        argv = self._build_bwrap_argv(command)
+        return await self._sessions.start(
+            argv,
+            command_label=command,
+            env={},
+            pty_enabled=pty,
+            max_duration_seconds=max_duration_seconds,
+            initial_wait_seconds=wait_seconds,
+            max_bytes=max_bytes,
+        )
+
+    async def poll_session(
+        self,
+        session_id: str,
+        *,
+        wait_seconds: float = 0.5,
+        offset: int | None = None,
+        max_bytes: int = 32 * 1024,
+    ) -> SessionSnapshot:
+        """Poll a bubblewrap session for new or paginated output."""
+        self._ensure_running()
+        assert self._sessions is not None  # noqa: S101
+        return await self._sessions.poll(
+            session_id,
+            wait_seconds=wait_seconds,
+            offset=offset,
+            max_bytes=max_bytes,
+        )
+
+    async def write_session(
+        self,
+        session_id: str,
+        data: str,
+        *,
+        wait_seconds: float = 0.5,
+        max_bytes: int = 32 * 1024,
+    ) -> SessionSnapshot:
+        """Write input bytes to a running bubblewrap session."""
+        self._ensure_running()
+        assert self._sessions is not None  # noqa: S101
+        return await self._sessions.write(
+            session_id,
+            data,
+            wait_seconds=wait_seconds,
+            max_bytes=max_bytes,
+        )
+
+    async def cancel_session(self, session_id: str) -> SessionSnapshot:
+        """Terminate a bubblewrap session and its process group."""
+        self._ensure_running()
+        assert self._sessions is not None  # noqa: S101
+        return await self._sessions.cancel(session_id)
+
+    async def list_sessions(self) -> list[SessionSnapshot]:
+        """List snapshots of tracked bubblewrap sessions."""
+        if self._sessions is None:
+            return []
+        return await self._sessions.list_sessions()
+
+    async def close_all_sessions(self) -> None:
+        """Cancel and reap all bubblewrap sessions."""
+        if self._sessions is not None:
+            try:
+                await self._sessions.close_all()
+            finally:
+                self._sessions = None
 
     def _build_bwrap_argv(self, command: str) -> list[str]:
         assert self._repo_path is not None  # noqa: S101
