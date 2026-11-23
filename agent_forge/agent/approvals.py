@@ -138,6 +138,18 @@ def classify_destructive_tool_call(
             return mcp_req
     if tool_name == "apply_patch":
         return _classify_apply_patch(arguments)
+    if tool_name == "git_push":
+        is_force = bool(arguments.get("force_with_lease", False))
+        return ApprovalRequest(
+            tool_name="git_push",
+            arguments=arguments,
+            category="git_force_push" if is_force else "git_push",
+            reason=(
+                "Force-with-lease push to remote branch."
+                if is_force
+                else "Push branch to remote Git repository."
+            ),
+        )
     if tool_name in ("run_shell", "shell_start"):
         return _classify_shell_command(tool_name, arguments)
     return None

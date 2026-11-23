@@ -73,6 +73,10 @@ class SubprocessEvalSandbox(Sandbox):
     def timeout_cap_seconds(self) -> int:
         return self._config.timeout_seconds
 
+    @property
+    def host_workspace_path(self) -> str | None:
+        return str(self._repo_root) if self._repo_root is not None else None
+
     async def start(self, repo_path: str, config: SandboxConfig | None = None) -> None:
         if self._state == SandboxState.RUNNING:
             msg = "Sandbox is already running"

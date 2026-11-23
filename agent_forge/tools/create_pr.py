@@ -180,7 +180,10 @@ class CreatePRTool(Tool):
         if not token:
             return ToolResult(
                 output="",
-                error="Missing GitHub token. Set GITHUB_TOKEN or GH_TOKEN.",
+                error=(
+                    "Missing GitHub token. Set GITHUB_TOKEN or GH_TOKEN, "
+                    "or run 'agent-forge auth login github'."
+                ),
                 exit_code=1,
             )
 

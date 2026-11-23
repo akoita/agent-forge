@@ -481,6 +481,10 @@ class HttpMCPTransport(MCPTransport):
         if self._settings.auth_env:
             token = os.environ.get(self._settings.auth_env, "").strip()
             if not token:
+                from agent_forge.auth import resolve_auth_env_fallback
+
+                token = resolve_auth_env_fallback(self._settings.auth_env) or ""
+            if not token:
                 msg = f"Missing required auth env var '{self._settings.auth_env}' for MCP HTTP"
                 raise MCPTransportError(msg)
             headers["Authorization"] = f"{self._settings.auth_scheme} {token}".strip()
