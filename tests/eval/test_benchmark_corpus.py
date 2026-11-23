@@ -666,3 +666,112 @@ async def test_openai_responses_adapter_matches_or_beats_chat_completions_on_m0_
     assert len(chat_runs) == 4
     assert sum(b for b, _ in resp_runs) < sum(b for b, _ in chat_runs)
     assert sum(c for _, c in resp_runs) < sum(c for _, c in chat_runs)
+
+
+def _ollama_handler_for_task(task: BenchmarkTask, *, emulated_tools: bool) -> object:
+    import httpx
+
+    state = {"turn": 0}
+    src_file = next(iter(task.files))
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        state["turn"] += 1
+        turn = state["turn"]
+        headers = {k.lower(): v for k, v in request.headers.items()}
+        assert "authorization" not in headers
+        body = json.loads(request.content)
+        assert "parallel_tool_calls" not in body
+
+        if emulated_tools:
+            assert "tools" not in body
+            assert "tool_choice" not in body
+            assert "Tool Invocation Format" in body["messages"][0]["content"]
+            return httpx.Response(200, json=_emulated_ollama_payload(task, src_file, turn))
+
+        assert body.get("tools")
+        return httpx.Response(200, json=_build_chat_mock_payload(task, turn, 200))
+
+    return _handler
+
+
+def _emulated_ollama_payload(task: BenchmarkTask, src_file: str, turn: int) -> dict[str, object]:
+    if turn == 1:
+        call = {"name": "read_file", "arguments": {"path": f"/workspace/{src_file}"}}
+        text = f"Reading file.\n```tool_call\n{json.dumps(call)}\n```"
+    elif turn == 2:
+        blocks: list[str] = []
+        for path, content in task.known_good_files.items():
+            call = {
+                "name": "write_file",
+                "arguments": {"path": f"/workspace/{path}", "content": content},
+            }
+            blocks.append(f"```tool_call\n{json.dumps(call)}\n```")
+        text = "Applying fix.\n" + "\n".join(blocks)
+    else:
+        text = "Verified fix complete."
+    return {
+        "model": "gemma3:12b",
+        "choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 200, "completion_tokens": 30, "total_tokens": 230},
+    }
+
+
+@pytest.mark.asyncio
+async def test_local_ollama_config_only_completes_m0_smoke_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify config-only localhost Ollama profile completes an M0 smoke task without API keys."""
+    import respx
+
+    from agent_forge.config import load_config
+    from agent_forge.eval import run_benchmark
+    from agent_forge.eval.corpus import resolve_tasks
+    from agent_forge.eval.deterministic import SubprocessEvalSandbox
+
+    monkeypatch.setattr("agent_forge.agent.persistence.USER_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("agent_forge.agent.core.save_summary", lambda *_a: tmp_path / "s.json")
+    monkeypatch.setattr(
+        "agent_forge.eval.benchmark.create_sandbox",
+        lambda _cfg: SubprocessEvalSandbox(),
+    )
+    for env_var in ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(env_var, raising=False)
+
+    toml_path = tmp_path / "agent-forge.toml"
+    toml_path.write_text(
+        '[model_profiles.local-ollama]\nprovider = "openai-compatible"\n'
+        'model = "gemma3:12b"\nbase_url = "http://localhost:11434/v1"\n\n'
+        '[model_profiles.local-ollama-no-tools]\nprovider = "openai-compatible"\n'
+        'model = "gemma3:12b"\nbase_url = "http://localhost:11434/v1"\n'
+        "capabilities = { tool_calling = false }\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(project_path=toml_path, user_path=tmp_path / "none.toml")
+    task = resolve_tasks(task_ids=["fix-health-status"])[0]
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post("http://localhost:11434/v1/chat/completions").mock(
+            side_effect=_ollama_handler_for_task(task, emulated_tools=False)
+        )
+        report = await run_benchmark(
+            cfg,
+            profile_names=["local-ollama"],
+            task_ids=["fix-health-status"],
+            sandbox_backend="docker",
+        )
+    assert report.profiles[0].status == "completed"
+    assert report.profiles[0].verified_fixes == 1
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post("http://localhost:11434/v1/chat/completions").mock(
+            side_effect=_ollama_handler_for_task(task, emulated_tools=True)
+        )
+        report_emulated = await run_benchmark(
+            cfg,
+            profile_names=["local-ollama-no-tools"],
+            task_ids=["fix-health-status"],
+            sandbox_backend="docker",
+        )
+    assert report_emulated.profiles[0].status == "completed"
+    assert report_emulated.profiles[0].verified_fixes == 1
