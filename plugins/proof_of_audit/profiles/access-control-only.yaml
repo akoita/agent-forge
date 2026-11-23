@@ -5,3 +5,17 @@ prompt_scope: |
   Focus exclusively on access control and authorization vulnerabilities.
   Check for missing access modifiers, unprotected initializers,
   privilege escalation, and improper role management patterns.
+completion_contract:
+  kind: artifact_report
+  contract_id: proof-of-audit-report-v1
+  entrypoint: plugins.proof_of_audit.contracts:build_poa_completion_contract
+  artifact_path: .agent-forge/report.json
+  expected_schema_version: proof-of-audit-report-v1
+  required_fields:
+    - schema_version
+    - run_id
+    - summary
+    - confidence
+    - findings
+    - stats
+  max_remediation_attempts: 1

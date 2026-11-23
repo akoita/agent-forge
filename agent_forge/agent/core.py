@@ -6,10 +6,16 @@ import asyncio
 import time
 from dataclasses import asdict
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agent_forge.agent.approvals import ApprovalGate
 from agent_forge.agent.budget import BudgetPolicy, CancellationToken
+from agent_forge.agent.contracts import (
+    CompletionContract,
+    ContractContext,
+    coding_fix_contract,
+)
 from agent_forge.agent.journal import (
     RunJournal,
     compute_tool_idempotency_key,
@@ -125,11 +131,13 @@ async def react_loop(
     raise_on_cancel: bool = True,
     base_revision: str = "",
     verify_command: str | None = None,
+    completion_contract: CompletionContract | None = None,
 ) -> AgentRun:
     """Execute the ReAct loop: Observe → Reason (LLM) → Act (Tool) → Repeat.
 
     Terminates when:
-    - LLM stops and any configured verification passes (→ COMPLETED)
+    - LLM stops and the completion contract passes (→ COMPLETED)
+    - Completion contract fails after verification/remediation (→ VERIFICATION_FAILED)
     - Max iterations reached (→ TIMEOUT)
     - Token/cost/time budget exceeded (→ TIMEOUT or PAUSED)
     - Cooperative or task cancellation/interruption requested (→ CANCELLED or PAUSED)
@@ -195,6 +203,7 @@ async def react_loop(
                 approval_gate=active_gate,
                 on_checkpoint=on_checkpoint,
                 cancellation_token=cancellation_token,
+                completion_contract=completion_contract,
             )
 
     except asyncio.CancelledError:
@@ -259,7 +268,9 @@ async def _run_loop_iterations(
     approval_gate: ApprovalGate | None,
     on_checkpoint: Callable[[AgentRun], Awaitable[None]] | None,
     cancellation_token: CancellationToken | None,
+    completion_contract: CompletionContract | None = None,
 ) -> None:
+    remediation_attempts = 0
     while run.iterations < run.config.max_iterations:
         if await _check_cooperative_cancel(
             run,
@@ -330,8 +341,19 @@ async def _run_loop_iterations(
             _record_message(
                 run, Message(role=Role.ASSISTANT, content=response.content or ""), journal
             )
-            await _finish_run(run, verify, lifecycle_bus, journal)
-            return
+            terminal = await _finish_run(
+                run,
+                verify,
+                lifecycle_bus,
+                journal,
+                sandbox=sandbox,
+                completion_contract=completion_contract,
+                remediation_attempts=remediation_attempts,
+            )
+            if terminal:
+                return
+            remediation_attempts += 1
+            continue
 
         # 4. ACT — record message then execute each tool call with per-step journaling
         _record_message(
@@ -384,7 +406,11 @@ async def _finish_run(
     verify: Callable[[], Awaitable[VerificationResult]] | None,
     event_bus: EventBus | None,
     journal: RunJournal,
-) -> None:
+    *,
+    sandbox: Sandbox,
+    completion_contract: CompletionContract | None,
+    remediation_attempts: int,
+) -> bool:
     if verify is not None:
         run.verification = await verify()
         journal.append(
@@ -401,12 +427,63 @@ async def _finish_run(
             },
             iteration=run.iterations,
         )
-        if not run.verification.passed:
-            run.error = run.verification.reason
-            _transition_and_journal(run, RunState.FAILED, journal, reason=run.error)
-            await _emit(event_bus, EventType.RUN_FAILED, run.id, {"error": run.error})
-            return
-    _transition_and_journal(run, RunState.COMPLETED, journal, reason="completed")
+
+    active_contract = completion_contract or (
+        coding_fix_contract(has_verifier=True) if verify is not None else None
+    )
+    if active_contract is None:
+        _transition_and_journal(run, RunState.COMPLETED, journal, reason="completed")
+        return True
+
+    evaluation = await active_contract.evaluate(
+        ContractContext(
+            run=run,
+            sandbox=sandbox,
+            workspace_path=Path(run.repo_path) if run.repo_path else None,
+            verification=run.verification,
+        ),
+        attempt=remediation_attempts + 1,
+    )
+    run.contract_evaluation = evaluation
+    journal.append(
+        "contract_evaluated", evaluation.model_dump(mode="json"), iteration=run.iterations
+    )
+
+    if evaluation.passed:
+        _transition_and_journal(run, RunState.COMPLETED, journal, reason="completed")
+        return True
+
+    if (
+        remediation_attempts < active_contract.max_remediation_attempts
+        and run.iterations < run.config.max_iterations
+    ):
+        _record_message(
+            run,
+            Message(role=Role.USER, content=active_contract.build_remediation_message(evaluation)),
+            journal,
+        )
+        return False
+
+    run.error = (
+        run.verification.reason
+        if run.verification is not None and not run.verification.passed
+        else evaluation.summary_reason
+    )
+    _transition_and_journal(run, RunState.VERIFICATION_FAILED, journal, reason=run.error)
+    await _emit(
+        event_bus,
+        EventType.RUN_FAILED,
+        run.id,
+        {
+            "state": RunState.VERIFICATION_FAILED.value,
+            "error": run.error,
+            "contract_id": evaluation.contract_id,
+            "unmet_clauses": [
+                clause.model_dump(mode="json") for clause in evaluation.unmet_clauses
+            ],
+        },
+    )
+    return True
 
 
 def _prepare_run_start(
@@ -417,8 +494,12 @@ def _prepare_run_start(
     base_revision: str = "",
     verify_command: str | None = None,
 ) -> tuple[set[str], dict[str, ToolResult]]:
-    prior_entries = journal.entry_count > 0
     initial_state = run.state
+    if initial_state == RunState.PENDING:
+        journal.reset()
+        prior_entries = False
+    else:
+        prior_entries = journal.entry_count > 0
     start_data: dict[str, Any] = {
         "task": run.task,
         "model": run.config.model,
@@ -482,7 +563,9 @@ def _prepare_run_start(
             )
 
     save_run(run)
-    by_key, _ = journal.completed_action_results()
+    by_key, _ = (
+        journal.completed_action_results() if initial_state != RunState.PENDING else ({}, {})
+    )
     completed_call_ids = {
         msg.tool_call_id for msg in run.messages if msg.role == Role.TOOL and msg.tool_call_id
     }

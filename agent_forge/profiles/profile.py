@@ -11,9 +11,10 @@ live in the extension layer (plugins/, --profiles-dir), not in core.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
 # Built-in profile directory
@@ -25,6 +26,24 @@ _BUILTIN_PROFILES_DIR = Path(__file__).parent / "builtins"
 # ---------------------------------------------------------------------------
 # Model
 # ---------------------------------------------------------------------------
+
+
+class CompletionContractConfig(BaseModel):
+    """Per-profile completion contract specification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["qa", "coding_fix", "artifact_report", "extension"] = "qa"
+    contract_id: str | None = None
+    entrypoint: str | None = None
+    require_changes: bool = False
+    require_checks: bool = False
+    require_no_unacknowledged_failures: bool = True
+    artifact_path: str | None = None
+    required_fields: list[str] = Field(default_factory=list)
+    expected_schema_version: str | None = None
+    max_remediation_attempts: int = Field(default=0, ge=0, le=5)
+    remediation_prompt: str | None = None
 
 
 class AgentProfile(BaseModel):
@@ -39,6 +58,7 @@ class AgentProfile(BaseModel):
     llm_model: str | None = None
     max_iterations: int | None = Field(default=None, ge=1)
     capabilities: list[str] = Field(default_factory=list)
+    completion_contract: CompletionContractConfig | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -41,6 +41,7 @@ JournalEntryKind = Literal[
     "action_result",
     "checkpoint_saved",
     "verification_recorded",
+    "contract_evaluated",
     "run_interrupted",
     "attempt_result",
 ]
@@ -116,6 +117,7 @@ class ReplayResult(BaseModel):
     interruptions: list[dict[str, Any]] = Field(default_factory=list)
     total_tokens: dict[str, int] = Field(default_factory=dict)
     verification: dict[str, Any] | None = None
+    contract_evaluation: dict[str, Any] | None = None
     attempt_result: dict[str, Any] | None = None
 
 
@@ -275,6 +277,12 @@ class RunJournal:
         """Load valid entries from this journal."""
         entries, _ = load_journal_entries(self.path, allow_truncated_tail=allow_truncated_tail)
         return entries
+
+    def reset(self) -> None:
+        """Clear any existing on-disk journal file before starting a brand-new run."""
+        if self.path.exists():
+            self.path.unlink()
+        self._next_seq = 0
 
     def _needs_repair(self) -> bool:
         size = self.path.stat().st_size
@@ -445,37 +453,14 @@ def _apply_recovered_state(
         run.error = latest_error
 
 
-def _reconcile_tokens_and_state(run: AgentRun, entries: list[JournalEntry]) -> None:
+def _apply_recovered_artifacts(
+    run: AgentRun,
+    latest_verification: dict[str, Any] | None,
+    latest_contract: dict[str, Any] | None,
+) -> None:
+    from agent_forge.agent.contracts import ContractEvaluation
     from agent_forge.agent.verification import VerificationResult
 
-    prompt_tokens = 0
-    completion_tokens = 0
-    total_tokens = 0
-    latest_state: str | None = None
-    latest_error: str | None = None
-    latest_verification: dict[str, Any] | None = None
-
-    for entry in entries:
-        run.iterations = max(run.iterations, entry.iteration)
-        if entry.kind == "llm_response":
-            p, c, t = _extract_usage_counts(entry)
-            prompt_tokens += p
-            completion_tokens += c
-            total_tokens += t
-        elif entry.kind == "state_transition":
-            latest_state = str(entry.data.get("to_state", ""))
-        elif entry.kind == "run_interrupted":
-            latest_error = str(entry.data.get("reason", "")) or latest_error
-        elif entry.kind == "verification_recorded":
-            latest_verification = dict(entry.data)
-
-    if total_tokens > run.total_tokens.total_tokens:
-        run.total_tokens = TokenUsage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-        )
-    _apply_recovered_state(run, latest_state, latest_error)
     if run.verification is None and latest_verification is not None:
         run.verification = VerificationResult(
             base_revision=str(latest_verification.get("base_revision", "")),
@@ -490,6 +475,43 @@ def _reconcile_tokens_and_state(run: AgentRun, entries: list[JournalEntry]) -> N
             stdout=str(latest_verification.get("stdout", "")),
             stderr=str(latest_verification.get("stderr", "")),
         )
+    if run.contract_evaluation is None and latest_contract is not None:
+        run.contract_evaluation = ContractEvaluation.model_validate(latest_contract)
+
+
+def _reconcile_tokens_and_state(run: AgentRun, entries: list[JournalEntry]) -> None:
+    prompt_tokens = 0
+    completion_tokens = 0
+    total_tokens = 0
+    latest_state: str | None = None
+    latest_error: str | None = None
+    latest_verification: dict[str, Any] | None = None
+    latest_contract: dict[str, Any] | None = None
+
+    for entry in entries:
+        run.iterations = max(run.iterations, entry.iteration)
+        if entry.kind == "llm_response":
+            p, c, t = _extract_usage_counts(entry)
+            prompt_tokens += p
+            completion_tokens += c
+            total_tokens += t
+        elif entry.kind == "state_transition":
+            latest_state = str(entry.data.get("to_state", ""))
+        elif entry.kind == "run_interrupted":
+            latest_error = str(entry.data.get("reason", "")) or latest_error
+        elif entry.kind == "verification_recorded":
+            latest_verification = dict(entry.data)
+        elif entry.kind == "contract_evaluated":
+            latest_contract = dict(entry.data)
+
+    if total_tokens > run.total_tokens.total_tokens:
+        run.total_tokens = TokenUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+        )
+    _apply_recovered_state(run, latest_state, latest_error)
+    _apply_recovered_artifacts(run, latest_verification, latest_contract)
 
 
 def reconcile_run_from_journal(
@@ -530,6 +552,7 @@ class _ReplayAccumulator:
     total_tokens: int = 0
     interruptions: list[dict[str, Any]] = field(default_factory=list)
     verification: dict[str, Any] | None = None
+    contract_evaluation: dict[str, Any] | None = None
     attempt_result: dict[str, Any] | None = None
     expected_seq: int = 0
 
@@ -629,6 +652,10 @@ def _apply_verification_entry(acc: _ReplayAccumulator, entry: JournalEntry) -> N
     acc.verification = dict(entry.data)
 
 
+def _apply_contract_entry(acc: _ReplayAccumulator, entry: JournalEntry) -> None:
+    acc.contract_evaluation = dict(entry.data)
+
+
 def _apply_attempt_entry(acc: _ReplayAccumulator, entry: JournalEntry) -> None:
     acc.attempt_result = dict(entry.data)
 
@@ -641,6 +668,7 @@ _REPLAY_HANDLERS: dict[str, Any] = {
     "checkpoint_saved": _apply_checkpoint_entry,
     "run_interrupted": _apply_interrupted_entry,
     "verification_recorded": _apply_verification_entry,
+    "contract_evaluated": _apply_contract_entry,
     "attempt_result": _apply_attempt_entry,
 }
 
@@ -733,5 +761,6 @@ def replay_journal(
             "total_tokens": acc.total_tokens,
         },
         verification=acc.verification,
+        contract_evaluation=acc.contract_evaluation,
         attempt_result=acc.attempt_result,
     )

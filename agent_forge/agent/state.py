@@ -13,9 +13,9 @@ if TYPE_CHECKING:
     from agent_forge.agent.models import AgentRun
 
 # ── Valid transition map ──────────────────────────────────────────────
-# PENDING  → RUNNING
-# RUNNING  → PAUSED | COMPLETED | FAILED | TIMEOUT | CANCELLED
-# PAUSED   → RUNNING | CANCELLED | FAILED
+# PENDING             → RUNNING
+# RUNNING             → PAUSED | COMPLETED | FAILED | VERIFICATION_FAILED | TIMEOUT | CANCELLED
+# PAUSED              → RUNNING | CANCELLED | FAILED
 
 VALID_TRANSITIONS: dict[RunState, set[RunState]] = {
     RunState.PENDING: {RunState.RUNNING},
@@ -23,6 +23,7 @@ VALID_TRANSITIONS: dict[RunState, set[RunState]] = {
         RunState.PAUSED,
         RunState.COMPLETED,
         RunState.FAILED,
+        RunState.VERIFICATION_FAILED,
         RunState.TIMEOUT,
         RunState.CANCELLED,
     },
@@ -33,6 +34,7 @@ VALID_TRANSITIONS: dict[RunState, set[RunState]] = {
     },
     RunState.COMPLETED: set(),
     RunState.FAILED: set(),
+    RunState.VERIFICATION_FAILED: set(),
     RunState.TIMEOUT: set(),
     RunState.CANCELLED: set(),
 }

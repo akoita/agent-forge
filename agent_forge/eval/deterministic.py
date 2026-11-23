@@ -521,6 +521,8 @@ def _check_profile_gate(
     expected_rate: float,
     expected_reason: str,
     expected_patch: bool,
+    expected_run_state: str,
+    expected_unmet: tuple[str, ...],
 ) -> list[str]:
     errors: list[str] = []
     if summary.attempts == 0:
@@ -529,6 +531,11 @@ def _check_profile_gate(
         errors.append(
             f"{summary.profile}: expected verified_rate={expected_rate}, "
             f"got {summary.verified_rate}"
+        )
+    if summary.false_positive_rate != 0.0:
+        errors.append(
+            f"{summary.profile}: expected false_positive_rate=0.0, "
+            f"got {summary.false_positive_rate}"
         )
     for item in summary.results:
         if item.reason != expected_reason:
@@ -541,19 +548,44 @@ def _check_profile_gate(
                 f"{summary.profile}/{item.task_id}: expected patch_applied={expected_patch}, "
                 f"got {item.patch_applied}"
             )
+        if item.run_state != expected_run_state:
+            errors.append(
+                f"{summary.profile}/{item.task_id}: expected run_state='{expected_run_state}', "
+                f"got '{item.run_state}'"
+            )
+        missing_clauses = [c for c in expected_unmet if c not in item.unmet_clauses]
+        if missing_clauses or (not expected_unmet and item.unmet_clauses):
+            errors.append(
+                f"{summary.profile}/{item.task_id}: unexpected unmet_clauses={item.unmet_clauses} "
+                f"(expected {list(expected_unmet)})"
+            )
     return errors
 
 
 def check_deterministic_gates(report: BenchmarkReport) -> list[str]:
-    """Assert that oracle passes all tasks while noop and incomplete fail verification."""
+    """Assert oracle completes while noop and incomplete fail verification with unmet clauses."""
     by_profile = {item.profile: item for item in report.profiles}
-    expectations: tuple[tuple[str, float, str, bool], ...] = (
-        ("deterministic-oracle", 1.0, "verified", True),
-        ("deterministic-noop", 0.0, "empty_patch", False),
-        ("deterministic-incomplete", 0.0, "check_failed", True),
+    expectations: tuple[tuple[str, float, str, bool, str, tuple[str, ...]], ...] = (
+        ("deterministic-oracle", 1.0, "verified", True, "completed", ()),
+        (
+            "deterministic-noop",
+            0.0,
+            "empty_patch",
+            False,
+            "verification_failed",
+            ("changes_exist", "verification_checks_passed"),
+        ),
+        (
+            "deterministic-incomplete",
+            0.0,
+            "check_failed",
+            True,
+            "verification_failed",
+            ("verification_checks_passed",),
+        ),
     )
     failures: list[str] = []
-    for name, expected_rate, expected_reason, expected_patch in expectations:
+    for name, expected_rate, expected_reason, expected_patch, exp_state, exp_unmet in expectations:
         summary = by_profile.get(name)
         if summary is None:
             failures.append(f"Missing expected profile in report: {name}")
@@ -564,6 +596,8 @@ def check_deterministic_gates(report: BenchmarkReport) -> list[str]:
                 expected_rate=expected_rate,
                 expected_reason=expected_reason,
                 expected_patch=expected_patch,
+                expected_run_state=exp_state,
+                expected_unmet=exp_unmet,
             )
         )
     return failures

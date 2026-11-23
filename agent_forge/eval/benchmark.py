@@ -82,6 +82,8 @@ class TaskAttemptResult(BaseModel):
     tool_calls: int = Field(ge=0)
     tool_errors: int = Field(ge=0)
     patch_applied: bool = False
+    run_state: str = ""
+    unmet_clauses: list[str] = Field(default_factory=list)
     trajectory_path: str | None = None
     run_id: str | None = None
     reported_model: str | None = None
@@ -241,7 +243,10 @@ def summarize_profile(
     total_calls = sum(item.tool_calls for item in results)
     total_errors = sum(item.tool_errors for item in results)
     false_positives = sum(
-        1 for item in results if item.status == "failed" and item.reason == "unverified_completion"
+        1
+        for item in results
+        if (item.run_state == "completed" and not item.verified)
+        or (item.status == "failed" and item.reason == "unverified_completion")
     )
     reported_models = list(
         dict.fromkeys(item.reported_model for item in results if item.reported_model)
@@ -643,6 +648,7 @@ def _error_attempt_result(
         estimated_cost_usd=round(_estimate_attempt_cost(run.total_tokens, model, base_url), 6),
         tool_calls=tool_calls,
         tool_errors=tool_errors,
+        run_state=run.state.value,
         run_id=run.id,
         reported_model=reported_models[0] if reported_models else None,
         reason=reason,
@@ -671,6 +677,12 @@ def build_completed_result(
         for inv in run.tool_invocations
         if inv.result.exit_code != 0 or inv.result.error is not None
     )
+    contract_eval = run.contract_evaluation
+    unmet_clauses = (
+        [clause.clause_id for clause in contract_eval.unmet_clauses]
+        if contract_eval is not None
+        else []
+    )
     reason = verification.reason if verification is not None else (run.error or run.state.value)
     return TaskAttemptResult(
         task_id=task_id,
@@ -686,6 +698,8 @@ def build_completed_result(
         tool_calls=tool_calls,
         tool_errors=tool_errors,
         patch_applied=patch_applied,
+        run_state=run.state.value,
+        unmet_clauses=unmet_clauses,
         run_id=run.id,
         reported_model=reported_models[0] if reported_models else None,
         reason=reason,
