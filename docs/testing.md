@@ -36,8 +36,9 @@ hidden verifier tests injected only inside the independent verifier checkout:
 - Every `known_good_files` fix must pass both visible and hidden verification tests.
 - `python -m agent_forge.eval --suite smoke --report-dir .eval-artifacts --assert-gates`
   runs scripted `oracle`, `noop`, and `incomplete` profiles through the full
-  `react_loop`, tool registry, `VerificationWorkspace`, and JSONL trajectory
-  capture, asserting 100% oracle pass and 0% false-positive completions.
+  `react_loop`, tool registry, `VerificationWorkspace`, and `run-journal-v1` JSONL
+  trajectory capture (replayable via `agent-forge replay <trajectory.jsonl>`),
+  asserting 100% oracle pass and 0% false-positive completions.
 
 To generate or refresh a full release report and measure live models against
 those pinned tasks, compare against the checked-in
@@ -75,15 +76,25 @@ run directory. To review and apply the patch, use a clean checkout of the
 reported base revision and run `git apply --check` before `git apply`.
 For an investigation, omit `--verify-command`.
 
-## Resume an interrupted run
+## Resume and replay an interrupted run
 
-Verified local runs persist step-level checkpoints (`checkpoint.json` and `checkpoint.patch`) pinned to the base revision. To continue a paused or interrupted run without repeating completed edits:
+Local runs persist an append-only, fsynced step journal (`journal.jsonl`) alongside
+atomic checkpoints (`checkpoint.json` and `checkpoint.patch`). To continue a paused,
+signal-interrupted, or crashed run without repeating completed side effects:
 
 ```sh
 agent-forge resume <run-id> --output-format json
 ```
 
-The resumed run checks out the saved base revision, reapplies the saved partial patch inside a fresh isolated workspace, skips already-completed tool calls, and runs independent verification when the model finishes.
+On resume, `load_checkpoint()` reconciles completed action results and messages from
+`journal.jsonl`, checks out the pinned base revision (for verified runs), reapplies the
+partial patch inside an isolated workspace, and skips already-committed idempotency keys.
+
+To replay a persisted run or benchmark trajectory and verify transition integrity offline:
+
+```sh
+agent-forge replay <run-id-or-jsonl-path> --output-format json
+```
 
 ## Check queued run outcomes
 
