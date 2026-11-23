@@ -123,6 +123,8 @@ External MCP client integration (stdio + Streamable HTTP transports, `ApprovalGa
 
 ACP server JSON-RPC framing, `StreamEvent` -> `session/update` mapping, bidirectional `session/request_permission` approval handling, cancellation, and `agent-forge acp` stdio isolation are tested in `tests/unit/test_acp_server.py` and `tests/eval/test_benchmark_corpus.py`.
 
+Host service credential storage (`~/.agent-forge/credentials.json`), `agent-forge auth` CLI commands, `CreatePRTool`/`HttpMCPTransport` credential fallbacks, secret scrubbing, and offline-sandbox host-brokered `git_push` (with `ApprovalGate` enforcement) are covered in `tests/unit/test_auth_and_git_push.py` and `tests/eval/test_benchmark_corpus.py`.
+
 ## Running Tests
 
 ```bash

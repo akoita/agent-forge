@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import posixpath
 import re
 import shlex
@@ -61,8 +60,11 @@ def quote_pathspec(pathspec: str) -> str:
 
 
 def github_token() -> str | None:
-    """Return a GitHub API token from the process environment if present."""
-    return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    """Return a GitHub API token from env vars or the host credential store."""
+    from agent_forge.auth import resolve_github_token
+
+    token, _source = resolve_github_token()
+    return token
 
 
 def parse_github_repo(remote_url: str) -> str:

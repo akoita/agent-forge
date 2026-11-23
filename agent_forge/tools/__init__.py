@@ -10,6 +10,7 @@ from agent_forge.tools.edit_file import EditFileTool
 from agent_forge.tools.git_commit import GitCommitTool
 from agent_forge.tools.git_create_branch import GitCreateBranchTool
 from agent_forge.tools.git_diff import GitDiffTool
+from agent_forge.tools.git_push import GitPushTool
 from agent_forge.tools.list_directory import ListDirectoryTool
 from agent_forge.tools.mcp import (
     HttpMCPTransport,
@@ -54,6 +55,7 @@ __all__ = [
     "GitCommitTool",
     "GitCreateBranchTool",
     "GitDiffTool",
+    "GitPushTool",
     "HttpMCPTransport",
     "ListDirectoryTool",
     "MCPCircuitBreaker",
@@ -111,6 +113,7 @@ def create_default_registry(
     registry.register(GitDiffTool())
     registry.register(GitCommitTool())
     registry.register(GitCreateBranchTool())
+    registry.register(GitPushTool())
     registry.register(CreatePRTool())
     if load_plugins:
         register_plugin_tools(registry, entry_points_factory=entry_points_factory)

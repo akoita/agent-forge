@@ -143,6 +143,11 @@ class Sandbox(ABC):
         """Check if the sandbox is still running."""
         ...
 
+    @property
+    def host_workspace_path(self) -> str | None:
+        """Return the resolved host-side path mounted at workspace_path, if any."""
+        return None
+
     async def start_session(
         self,
         command: str,

@@ -54,6 +54,7 @@ class DockerSandbox(Sandbox):
         self._state = SandboxState.IDLE
         self._config = SandboxConfig()
         self._sessions: DockerSessionManager | None = None
+        self._repo_path: str | None = None
         self._host_uid = os.getuid()
         self._host_gid = os.getgid()
 
@@ -66,6 +67,11 @@ class DockerSandbox(Sandbox):
     def timeout_cap_seconds(self) -> int:
         """Effective command timeout cap exposed to tools."""
         return self._config.timeout_seconds
+
+    @property
+    def host_workspace_path(self) -> str | None:
+        """Return the resolved host workspace path mounted into the container."""
+        return self._repo_path
 
     @property
     def container_id(self) -> str | None:
@@ -149,6 +155,7 @@ class DockerSandbox(Sandbox):
                     limits=SessionLimits(default_max_duration_seconds=cfg.timeout_seconds),
                 )
 
+                self._repo_path = os.path.realpath(repo_path)
                 self._state = SandboxState.RUNNING
                 logger.info(
                     "sandbox_started",
@@ -196,6 +203,7 @@ class DockerSandbox(Sandbox):
                 logger.warning("container_force_remove_error", error=str(remove_exc))
         finally:
             self._container = None
+            self._repo_path = None
             self._state = SandboxState.STOPPED
             logger.info("sandbox_stopped")
 

@@ -353,5 +353,6 @@ class TestDefaultRegistry:
             "git_diff",
             "git_commit",
             "git_create_branch",
+            "git_push",
         }
-        assert len(registry) == 15
+        assert len(registry) == 16

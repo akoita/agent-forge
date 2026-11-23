@@ -60,6 +60,11 @@ class BwrapSandbox(Sandbox):
         """Effective command timeout cap exposed to tools."""
         return self._config.timeout_seconds
 
+    @property
+    def host_workspace_path(self) -> str | None:
+        """Return the resolved host workspace path while running, if any."""
+        return self._repo_path
+
     async def start(self, repo_path: str, config: SandboxConfig | None = None) -> None:
         """Validate availability and cache the sandbox configuration."""
         if self._state == SandboxState.RUNNING:

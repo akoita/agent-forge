@@ -435,6 +435,14 @@ Persistent PTY/pipe session tools for interactive programs (REPLs, installers, t
 | Parameters  | `path` (string, optional, default `/workspace`), `recursive` (bool, optional, default false), `max_depth` (int, optional, default 3) |
 | Behavior    | Runs `find` or `tree` inside sandbox.                                                                                                |
 
+##### `git_push`
+
+| Field       | Value                                                                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Description | Push a committed branch from the host workspace checkout while the sandbox remains `--network none`                                        |
+| Parameters  | `remote` (string, default `origin`), `branch` (string, optional; defaults to current checked-out branch), `set_upstream` (bool, default `true`), `force_with_lease` (bool, default `false`), `allow_protected` (bool, default `false`) |
+| Behavior    | Runs host `git push` using `Sandbox.host_workspace_path` and an ephemeral `0700` `GIT_ASKPASS` script fed by host `CredentialStore`/env; refuses `main`/`master` unless `allow_protected=true`, routes through `ApprovalGate` (`git_push` / `git_force_push`), and scrubs secrets from output. |
+
 #### Tool Registry
 
 ```python
@@ -1405,8 +1413,10 @@ class InvalidStateTransitionError(AgentForgeError):
 
 ### 8.2 API Key Management
 
-- API keys are **never** passed to the sandbox container.
-- API keys are read from environment variables on the host.
+- API keys and service tokens are **never** passed to the sandbox container.
+- LLM keys are read from environment variables on the host (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`).
+- Service tokens (GitHub, HTTP MCP auth) resolve from host environment variables first and fall back to the host-only `CredentialStore` (`~/.agent-forge/credentials.json`, mode `0600`), managed via `agent-forge auth`.
+- Host-brokered `git_push` passes git credentials only via an ephemeral `0700` `GIT_ASKPASS` helper script deleted immediately after push completion, and scrubs secret values from tool outputs.
 - Structured logs **redact** any string matching an API key pattern before writing.
 - The `.env` file (if used) must be in `.gitignore`.
 

@@ -2118,7 +2118,7 @@ def mcp_inspect(server_name: str | None, output_format: str) -> None:
         sys.exit(1)
 
     if output_format.lower() == "json":
-        console.print(json.dumps(payload, indent=2))
+        click.echo(json.dumps(payload, indent=2))
         return
 
     servers = payload["servers"]
@@ -2190,6 +2190,109 @@ def acp_serve(
         max_iterations_override=max_iterations,
     )
     asyncio.run(server.serve_stdio())
+
+
+# ---------------------------------------------------------------------------
+# auth
+# ---------------------------------------------------------------------------
+
+
+@main.group()
+def auth() -> None:
+    """Manage host-side credentials for external services (GitHub, registries, MCP)."""
+
+
+@auth.command("status")
+@click.option(
+    "--output-format",
+    "output_format",
+    default="text",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    show_default=True,
+)
+def auth_status(output_format: str) -> None:
+    """Display non-secret credential status across known and stored services."""
+    from agent_forge.auth import KNOWN_SERVICES, CredentialStore, get_service_status
+
+    store = CredentialStore()
+    services = sorted({*KNOWN_SERVICES, *(r.service for r in store.list_records())})
+    rows = [asdict(get_service_status(name, store=store)) for name in services]
+    if output_format.lower() == "json":
+        click.echo(json.dumps({"credentials_path": str(store.path), "services": rows}, indent=2))
+        return
+
+    table = Table(title="Service Credentials")
+    table.add_column("Service", style="cyan")
+    table.add_column("Configured", justify="center")
+    table.add_column("Source")
+    table.add_column("Token Preview")
+    for row in rows:
+        table.add_row(
+            str(row["service"]),
+            "yes" if row["configured"] else "no",
+            str(row["source"]),
+            str(row["token_preview"]) or "-",
+        )
+    console.print(table)
+
+
+@auth.command("login")
+@click.argument("service")
+@click.option("--token", default=None, help="Secret token value (prefer --token-stdin or prompt).")
+@click.option("--token-stdin", is_flag=True, help="Read token from standard input.")
+@click.option("--username", default="", help="Optional account username.")
+@click.option("--host", default="", help="Optional service host (e.g. github.com).")
+def auth_login(
+    service: str,
+    token: str | None,
+    token_stdin: bool,
+    username: str,
+    host: str,
+) -> None:
+    """Store a credential token for SERVICE with owner-only (0600) permissions."""
+    from agent_forge.auth import CredentialStore, mask_token
+
+    raw_token = sys.stdin.read().strip() if token_stdin else token
+    if raw_token is None:
+        raw_token = click.prompt(f"Token for '{service}'", hide_input=True)
+    try:
+        record = CredentialStore().set(service, raw_token, username=username, host=host)
+    except ValueError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+    console.print(
+        f"[green]Stored credentials for {record.service}[/green] ({mask_token(record.token)})"
+    )
+
+
+@auth.command("logout")
+@click.argument("service")
+def auth_logout(service: str) -> None:
+    """Remove stored credentials for SERVICE."""
+    from agent_forge.auth import CredentialStore
+
+    try:
+        removed = CredentialStore().delete(service)
+    except ValueError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+    if removed:
+        console.print(f"[green]Removed stored credentials for {service}.[/green]")
+    else:
+        console.print(f"[dim]No stored credentials found for {service}.[/dim]")
+
+
+@auth.command("import-gh")
+def auth_import_gh() -> None:
+    """Import an authenticated token from the GitHub CLI (``gh auth token``)."""
+    from agent_forge.auth import import_github_cli_token, mask_token
+
+    try:
+        record = import_github_cli_token()
+    except RuntimeError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+    console.print(f"[green]Imported GitHub token[/green] ({mask_token(record.token)})")
 
 
 if __name__ == "__main__":
