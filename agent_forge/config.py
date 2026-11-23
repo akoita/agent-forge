@@ -13,7 +13,8 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
-from typing import Any, Literal, get_origin
+from types import UnionType
+from typing import Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -111,6 +112,8 @@ class ProviderSettings(BaseModel):
     default_model: str = ""
     base_url: str = ""
     api_mode: Literal["auto", "responses", "chat_completions"] = "auto"
+    api_key_required: bool | None = None
+    capabilities: dict[str, Any] = Field(default_factory=dict)
 
 
 class ModelProfileSettings(BaseModel):
@@ -122,6 +125,7 @@ class ModelProfileSettings(BaseModel):
     model: str = Field(min_length=1)
     base_url: str = ""
     api_key_env: str = ""
+    api_key_required: bool | None = None
     temperature: float | None = None
     api_mode: Literal["auto", "responses", "chat_completions"] = "auto"
     capabilities: dict[str, Any] = Field(default_factory=dict)
@@ -137,6 +141,30 @@ class RoutingSettings(BaseModel):
     escalate_on_failures: int = 2
 
 
+def _default_providers() -> dict[str, ProviderSettings]:
+    return {
+        "gemini": ProviderSettings(
+            api_key_env="GEMINI_API_KEY",
+            default_model="gemini-3.1-flash-lite-preview",
+        ),
+        "openai": ProviderSettings(
+            api_key_env="OPENAI_API_KEY",
+            default_model="gpt-4o",
+        ),
+        "anthropic": ProviderSettings(
+            api_key_env="ANTHROPIC_API_KEY",
+            default_model="claude-sonnet-4-20250514",
+        ),
+        "openai-compatible": ProviderSettings(
+            api_key_env="",
+            default_model="",
+            base_url="",
+            api_mode="chat_completions",
+            api_key_required=False,
+        ),
+    }
+
+
 class ForgeConfig(BaseModel):
     """Top-level configuration composing all sections."""
 
@@ -148,22 +176,7 @@ class ForgeConfig(BaseModel):
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     service: ServiceSettings = Field(default_factory=ServiceSettings)
     model_profiles: dict[str, ModelProfileSettings] = Field(default_factory=dict)
-    providers: dict[str, ProviderSettings] = Field(
-        default_factory=lambda: {
-            "gemini": ProviderSettings(
-                api_key_env="GEMINI_API_KEY",
-                default_model="gemini-3.1-flash-lite-preview",
-            ),
-            "openai": ProviderSettings(
-                api_key_env="OPENAI_API_KEY",
-                default_model="gpt-4o",
-            ),
-            "anthropic": ProviderSettings(
-                api_key_env="ANTHROPIC_API_KEY",
-                default_model="claude-sonnet-4-20250514",
-            ),
-        }
-    )
+    providers: dict[str, ProviderSettings] = Field(default_factory=_default_providers)
 
 
 # ---------------------------------------------------------------------------
@@ -220,17 +233,49 @@ _SECTION_MODELS: dict[str, type[BaseModel]] = {
 }
 
 
+_PROVIDER_ENV_ALIASES: tuple[tuple[str, str], ...] = (
+    ("OPENAI_COMPATIBLE_", "openai-compatible"),
+    ("GEMINI_", "gemini"),
+    ("OPENAI_", "openai"),
+    ("ANTHROPIC_", "anthropic"),
+)
+
+
 def _coerce_value(field_type: object, raw: str) -> Any:
     """Coerce a raw string env value to the target field type."""
-    if field_type is bool:
+    origin = get_origin(field_type)
+    if field_type is bool or (origin in (Union, UnionType) and bool in get_args(field_type)):
         return raw.lower() in ("true", "1", "yes")
     if field_type is int:
         return int(raw)
     if field_type is float:
         return float(raw)
-    if get_origin(field_type) is list:
+    if origin is list:
         return [item.strip() for item in raw.split(",") if item.strip()]
     return raw
+
+
+def _apply_provider_env_override(
+    remainder: str,
+    env_value: str,
+    result: dict[str, Any],
+) -> None:
+    if not remainder.startswith("PROVIDERS_"):
+        return
+    sub = remainder[len("PROVIDERS_") :]
+    for prefix, provider_name in _PROVIDER_ENV_ALIASES:
+        if not sub.startswith(prefix):
+            continue
+        field_name = sub[len(prefix) :].lower()
+        if field_name not in ProviderSettings.model_fields:
+            return
+        field_type = ProviderSettings.model_fields[field_name].annotation
+        if field_type is None:
+            return
+        result.setdefault("providers", {}).setdefault(provider_name, {})[field_name] = (
+            _coerce_value(field_type, env_value)
+        )
+        return
 
 
 def _collect_env_overrides() -> dict[str, Any]:
@@ -248,23 +293,19 @@ def _collect_env_overrides() -> dict[str, Any]:
 
         # Strip prefix and split: AGENT_FORGE_AGENT_MAX_ITERATIONS -> [AGENT, MAX_ITERATIONS]
         remainder = env_key[len(ENV_PREFIX) + 1 :]  # "AGENT_MAX_ITERATIONS"
+        if remainder.startswith("PROVIDERS_"):
+            _apply_provider_env_override(remainder, env_value, result)
+            continue
 
         # Try to match the first token as a known section
         matched_section: str | None = None
+        field_name = ""
         for section_name in _SECTION_MODELS:
             prefix_upper = section_name.upper() + "_"
             if remainder.startswith(prefix_upper):
                 matched_section = section_name
                 field_name = remainder[len(prefix_upper) :].lower()
                 break
-        else:
-            # Check for section-only match (e.g., AGENT_FORGE_QUEUE_BACKEND)
-            lower_remainder = remainder.lower()
-            for section_name in _SECTION_MODELS:
-                if lower_remainder == section_name:
-                    continue  # Not a valid field reference
-            continue
-
         if matched_section is None:
             continue
 
@@ -345,8 +386,10 @@ def load_config(
     Returns:
         Fully resolved ``ForgeConfig``.
     """
-    # Layer 5: Built-in defaults (empty dict — Pydantic fills them)
-    merged: dict[str, Any] = {}
+    # Layer 5: Built-in defaults (preserve default provider entries across TOML overrides)
+    merged: dict[str, Any] = {
+        "providers": {name: cfg.model_dump() for name, cfg in _default_providers().items()}
+    }
 
     # Layer 4: User config
     _user_path = user_path if user_path is not None else USER_CONFIG_PATH

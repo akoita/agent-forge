@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 _PROVIDERS: dict[str, type[LLMProvider]] = {
     "gemini": GeminiProvider,
     "openai": OpenAIProvider,
+    "openai-compatible": OpenAIProvider,
     "anthropic": AnthropicProvider,
 }
 
@@ -25,17 +26,17 @@ def provider_names() -> tuple[str, ...]:
 
 def create_provider(
     name: str,
-    api_key: str,
+    api_key: str = "",
     **kwargs: object,
 ) -> LLMProvider:
     """Create an LLM provider instance by name.
 
     Args:
         name: Provider name (e.g. ``"gemini"``, ``"openai"``,
-            ``"anthropic"``).
-        api_key: API key for the provider.
+            ``"openai-compatible"``, ``"anthropic"``).
+        api_key: API key for the provider (optional for local endpoints).
         **kwargs: Additional keyword arguments forwarded to the provider
-            constructor (e.g. ``base_url``).
+            constructor (e.g. ``base_url``, ``capability_overrides``).
 
     Returns:
         An initialized ``LLMProvider`` instance.
@@ -49,4 +50,9 @@ def create_provider(
         msg = f"Unknown LLM provider '{name}'. Available: {available}"
         raise ValueError(msg)
 
-    return provider_cls(api_key=api_key, **kwargs)  # type: ignore[call-arg]
+    init_kwargs = dict(kwargs)
+    if name == "openai-compatible":
+        init_kwargs.setdefault("api_mode", "chat_completions")
+        init_kwargs.setdefault("provider_name", "openai-compatible")
+
+    return provider_cls(api_key=api_key, **init_kwargs)  # type: ignore[call-arg]

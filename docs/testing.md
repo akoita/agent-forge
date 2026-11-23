@@ -40,6 +40,10 @@ hidden verifier tests injected only inside the independent verifier checkout:
 - `test_openai_responses_adapter_matches_or_beats_chat_completions_on_m0_corpus` verifies that
   `OpenAIProvider` (`api_mode="responses"`) holds the 4/4 smoke fix rate while transmitting
   fewer continuation bytes and lower estimated USD cost than Chat Completions.
+- `test_local_ollama_config_only_completes_m0_smoke_task` verifies that a config-only
+  `openai-compatible` profile targeting `http://localhost:11434/v1` without API keys
+  completes a smoke task (both with native tool calling and with prompt-emulated
+  `tool_calling = false`).
 - `python -m agent_forge.eval --suite smoke --report-dir .eval-artifacts --assert-gates`
   runs scripted `oracle`, `noop`, and `incomplete` profiles through the full
   `react_loop`, tool registry, `VerificationWorkspace`, `CompletionContract`, and
@@ -164,6 +168,7 @@ tests/
 │   ├── test_llm_openai.py             # OpenAI adapter (Responses + Chat Completions fallback)
 │   ├── test_model_qualification.py    # Model qualification probe & capabilities
 │   ├── test_observability.py           # Structured logging/tracing
+│   ├── test_openai_compatible.py      # OpenAI-compatible endpoints, probing & fallbacks
 │   ├── test_profiles.py               # Profile loading + validation
 │   ├── test_provider_v2.py            # Capabilities, v2 adapters, routing, parallel dispatch
 │   ├── test_queue.py                   # In-memory task queue

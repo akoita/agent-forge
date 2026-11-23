@@ -99,15 +99,17 @@ def _validate_fix_options(
 def _grade_model_fix(
     config: ForgeConfig, name: str, repo: Path, task: str, command: str, live_result: object
 ) -> dict[str, object]:
-    from agent_forge.llm.qualification import resolve_model_profile, resolve_profile_api_key_env
+    from agent_forge.llm.qualification import (
+        resolve_model_profile,
+        resolve_profile_credentials,
+    )
 
     if not isinstance(live_result, dict) or live_result["status"] != "passed":
         return {"status": "not_run", "reason": "Live tool exchange did not pass."}
 
     profile = resolve_model_profile(config, name)
-    key_env = resolve_profile_api_key_env(config, profile)
-    api_key = os.environ.get(key_env)
-    if not api_key:
+    key_env, api_key, key_required = resolve_profile_credentials(config, profile)
+    if key_required and not api_key:
         return {"status": "failed", "reason": f"Missing credential variable {key_env}."}
 
     run_config = config.model_copy(deep=True)
@@ -236,6 +238,59 @@ def benchmark_models(
     click.echo(json_payload.rstrip("\n"))
 
 
+def _build_capability_entry(
+    config: ForgeConfig,
+    item: Any,
+    *,
+    probe: bool,
+) -> dict[str, Any]:
+    from agent_forge.llm.capabilities import resolve_capabilities
+    from agent_forge.llm.qualification import (
+        probe_endpoint_capabilities,
+        resolve_profile_api_mode,
+        resolve_profile_base_url,
+        resolve_profile_capabilities,
+    )
+
+    if probe:
+        probe_result = asyncio.run(probe_endpoint_capabilities(config, item))
+        return {
+            "provider": item.provider,
+            "model": item.model,
+            **probe_result.capabilities.to_dict(),
+            "probe": {
+                "reachable": probe_result.reachable,
+                "model_listed": probe_result.model_listed,
+                "checks": probe_result.checks,
+                "error": probe_result.error,
+            },
+        }
+    caps = resolve_capabilities(
+        item.provider,
+        item.model,
+        api_mode=resolve_profile_api_mode(config, item),
+        base_url=resolve_profile_base_url(config, item),
+        overrides=resolve_profile_capabilities(config, item),
+    )
+    return {
+        "provider": item.provider,
+        "model": item.model,
+        **caps.to_dict(),
+    }
+
+
+def _render_capabilities_table(payload: dict[str, dict[str, Any]]) -> None:
+    table = Table(title="Model Capabilities", show_lines=False)
+    table.add_column("Profile", style="bold")
+    table.add_column("Provider")
+    table.add_column("Protocol")
+    table.add_column("Enabled Capabilities")
+    for name, entry in payload.items():
+        enabled = ", ".join(k for k, v in entry.items() if isinstance(v, bool) and v)
+        table.add_row(name, str(entry["provider"]), str(entry["api_protocol"]), enabled or "-")
+    console.print(table)
+
+
 @models.command("capabilities")
 @click.argument("profile", required=False, default=None)
 @click.option(
@@ -244,14 +299,15 @@ def benchmark_models(
     type=click.Choice(["text", "json"], case_sensitive=False),
     help="Render a human table or machine-readable JSON capability payload.",
 )
-def model_capabilities(profile: str | None, output_format: str) -> None:
+@click.option(
+    "--probe",
+    is_flag=True,
+    default=False,
+    help="Probe configured endpoint(s) live for tool calling and structured output support.",
+)
+def model_capabilities(profile: str | None, output_format: str, probe: bool) -> None:
     """Inspect declared provider capabilities for configured model profiles."""
-    from agent_forge.llm.capabilities import resolve_capabilities
-    from agent_forge.llm.qualification import (
-        resolve_model_profile,
-        resolve_profile_api_mode,
-        resolve_profile_base_url,
-    )
+    from agent_forge.llm.qualification import resolve_model_profile
 
     config = load_config()
     if profile is not None:
@@ -262,34 +318,15 @@ def model_capabilities(profile: str | None, output_format: str) -> None:
     else:
         targets = dict(config.model_profiles)
 
-    payload: dict[str, dict[str, Any]] = {}
-    for name, item in targets.items():
-        caps = resolve_capabilities(
-            item.provider,
-            item.model,
-            api_mode=resolve_profile_api_mode(config, item),
-            base_url=resolve_profile_base_url(config, item),
-            overrides=item.capabilities,
-        )
-        payload[name] = {
-            "provider": item.provider,
-            "model": item.model,
-            **caps.to_dict(),
-        }
+    payload = {
+        name: _build_capability_entry(config, item, probe=probe) for name, item in targets.items()
+    }
 
     if output_format == "json":
         click.echo(json.dumps(payload, indent=2))
         return
 
-    table = Table(title="Model Capabilities", show_lines=False)
-    table.add_column("Profile", style="bold")
-    table.add_column("Provider")
-    table.add_column("Protocol")
-    table.add_column("Enabled Capabilities")
-    for name, entry in payload.items():
-        enabled = ", ".join(k for k, v in entry.items() if isinstance(v, bool) and v)
-        table.add_row(name, str(entry["provider"]), str(entry["api_protocol"]), enabled or "-")
-    console.print(table)
+    _render_capabilities_table(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +340,16 @@ def model_capabilities(profile: str | None, output_format: str) -> None:
 @click.option("--verify-command", help="Verify a coding patch from a fresh Git checkout.")
 @click.option("--model", default=None, help="LLM model to use")
 @click.option("--model-profile", help="Use a named provider and model from configuration.")
-@click.option("--provider", default=None, help="LLM provider (gemini, openai, anthropic)")
+@click.option(
+    "--provider",
+    default=None,
+    help="LLM provider (gemini, openai, openai-compatible, anthropic)",
+)
+@click.option(
+    "--base-url",
+    default=None,
+    help="Custom OpenAI-compatible API base URL (e.g. http://localhost:11434/v1).",
+)
 @click.option("--max-iterations", default=None, type=int, help="Max ReAct loop iterations")
 @click.option("--max-cost", default=None, type=float, help="Max estimated LLM spend in USD")
 @click.option(
@@ -394,6 +440,7 @@ def run(
     repo: str,
     model: str | None,
     provider: str | None,
+    base_url: str | None,
     max_iterations: int | None,
     max_cost: float | None,
     max_duration: float | None,
@@ -454,24 +501,11 @@ def run(
 
     _apply_model_profile(cfg, model_profile)
 
-    # Resolve API key
+    # Resolve API key / endpoint requirements
     provider_name = cfg.agent.default_provider
-    provider_cfg = cfg.providers.get(provider_name)
-    available_providers = tuple(name for name in provider_names() if name in cfg.providers)
-    if provider_cfg is None or provider_name not in available_providers:
-        err_console.print(
-            f"[red]Unknown provider:[/red] '{provider_name}'. "
-            f"Available: {', '.join(available_providers)}"
-        )
-        sys.exit(1)
-
-    api_key = os.environ.get(provider_cfg.api_key_env, "")
-    if not api_key:
-        err_console.print(
-            f"[red]Missing API key:[/red] set [bold]{provider_cfg.api_key_env}[/bold] "
-            f"environment variable for provider '{provider_name}'"
-        )
-        sys.exit(1)
+    if base_url is not None and provider_name in cfg.providers:
+        cfg.providers[provider_name].base_url = base_url.strip()
+    api_key = _require_provider_key(cfg, provider_name)
 
     _validate_verification_mode(verify_command, queue_backend)
 
@@ -544,6 +578,13 @@ def _apply_model_profile(config: Any, name: str | None) -> None:
                 provider_cfg.base_url = resolved_base_url
             if selected.api_mode != "auto":
                 provider_cfg.api_mode = selected.api_mode
+            if selected.api_key_required is not None:
+                provider_cfg.api_key_required = selected.api_key_required
+            if selected.capabilities:
+                provider_cfg.capabilities = {
+                    **provider_cfg.capabilities,
+                    **selected.capabilities,
+                }
 
 
 def _create_configured_provider(cfg: Any, provider_name: str, api_key: str) -> Any:
@@ -557,11 +598,18 @@ def _create_configured_provider(cfg: Any, provider_name: str, api_key: str) -> A
     provider_cfg = providers.get(provider_name) if isinstance(providers, dict) else None
     raw_base_url = getattr(provider_cfg, "base_url", None) if provider_cfg is not None else None
     raw_api_mode = getattr(provider_cfg, "api_mode", None) if provider_cfg is not None else None
+    raw_caps = getattr(provider_cfg, "capabilities", None) if provider_cfg is not None else None
     kwargs: dict[str, Any] = {}
     if isinstance(raw_base_url, str) and raw_base_url:
         kwargs["base_url"] = raw_base_url
-    if provider_name == "openai" and isinstance(raw_api_mode, str) and raw_api_mode != "auto":
+    if (
+        provider_name in ("openai", "openai-compatible")
+        and isinstance(raw_api_mode, str)
+        and raw_api_mode != "auto"
+    ):
         kwargs["api_mode"] = raw_api_mode
+    if provider_name in ("openai", "openai-compatible") and isinstance(raw_caps, dict) and raw_caps:
+        kwargs["capability_overrides"] = dict(raw_caps)
     return create_provider(provider_name, api_key, **kwargs)
 
 
@@ -1517,6 +1565,8 @@ def replay(target: str, output_format: str) -> None:
 
 
 def _require_provider_key(cfg: ForgeConfig, provider_name: str) -> str:
+    from agent_forge.llm.qualification import is_api_key_required
+
     provider_cfg = cfg.providers.get(provider_name)
     available_providers = tuple(name for name in provider_names() if name in cfg.providers)
     if provider_cfg is None or provider_name not in available_providers:
@@ -1525,8 +1575,14 @@ def _require_provider_key(cfg: ForgeConfig, provider_name: str) -> str:
             f"Available: {', '.join(available_providers)}"
         )
         sys.exit(1)
-    api_key = os.environ.get(provider_cfg.api_key_env, "")
-    if not api_key:
+    if provider_name == "openai-compatible" and not provider_cfg.base_url.strip():
+        err_console.print(
+            "[red]Missing endpoint URL:[/red] set [bold]--base-url[/bold] or "
+            "[bold]providers.openai-compatible.base_url[/bold]"
+        )
+        sys.exit(1)
+    api_key = os.environ.get(provider_cfg.api_key_env, "") if provider_cfg.api_key_env else ""
+    if is_api_key_required(cfg, provider_name, base_url=provider_cfg.base_url) and not api_key:
         err_console.print(
             f"[red]Missing API key:[/red] set [bold]{provider_cfg.api_key_env}[/bold] "
             f"environment variable for provider '{provider_name}'"

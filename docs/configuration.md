@@ -70,6 +70,13 @@ default_model = "gpt-4o"
 [providers.anthropic]
 api_key_env = "ANTHROPIC_API_KEY"
 default_model = "claude-sonnet-4-20250514"
+
+[providers.openai-compatible]
+base_url = ""
+api_key_env = ""
+default_model = ""
+api_mode = "chat_completions"
+api_key_required = false
 ```
 
 ## Environment Variables
@@ -168,6 +175,50 @@ default_model = "gpt-4o"
 export OPENAI_API_KEY="sk-..."
 agent-forge run --task "Add input validation" --repo ./my-app
 ```
+
+### OpenAI-Compatible Endpoints (Ollama, vLLM, llama.cpp, Gateways)
+
+Use `--provider openai-compatible` with `--base-url` directly from the CLI, or configure a `[model_profiles.<name>]` entry. Localhost endpoints loop through without requiring an API key unless `api_key_required = true` is set:
+
+```toml
+# Ollama (localhost, no API key needed)
+[model_profiles.local-ollama]
+provider = "openai-compatible"
+model = "gemma3:12b"
+base_url = "http://localhost:11434/v1"
+
+# vLLM with explicit capability declarations
+[model_profiles.local-vllm]
+provider = "openai-compatible"
+model = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+base_url = "http://localhost:8000/v1"
+capabilities = { parallel_tool_calls = true, structured_output = true }
+
+# llama.cpp server without native tool calling (uses prompt emulation)
+[model_profiles.local-llamacpp]
+provider = "openai-compatible"
+model = "local-model"
+base_url = "http://localhost:8080/v1"
+capabilities = { tool_calling = false, structured_output = false }
+
+# Hosted gateway (API key required when api_key_env is set)
+[model_profiles.gateway]
+provider = "openai-compatible"
+model = "deepseek/deepseek-chat"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+```
+
+Run directly or probe what a live endpoint supports before benchmarking:
+
+```bash
+agent-forge run --task "Fix health check" --repo ./my-app \
+  --provider openai-compatible --base-url http://localhost:11434/v1 --model gemma3:12b
+
+agent-forge models capabilities local-ollama --probe --output-format json
+```
+
+Provider settings can also be overridden with `AGENT_FORGE_PROVIDERS_{PROVIDER}_{KEY}` (for example `AGENT_FORGE_PROVIDERS_OPENAI_COMPATIBLE_BASE_URL` and `AGENT_FORGE_PROVIDERS_OPENAI_COMPATIBLE_DEFAULT_MODEL`).
 
 ### Qualify a named model
 

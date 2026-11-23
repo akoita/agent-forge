@@ -33,11 +33,13 @@ from agent_forge.eval.corpus import (
     resolve_tasks,
 )
 from agent_forge.llm.base import LLMProvider, TokenUsage
+from agent_forge.llm.capabilities import ProviderCapabilities, query_provider_capabilities
 from agent_forge.llm.factory import create_provider
 from agent_forge.llm.qualification import (
     resolve_model_profile,
-    resolve_profile_api_key_env,
     resolve_profile_base_url,
+    resolve_profile_capabilities,
+    resolve_profile_credentials,
 )
 from agent_forge.observability.cost import COST_TABLE, _estimate_cost
 from agent_forge.sandbox.base import SandboxConfig
@@ -138,6 +140,10 @@ class _RecordingLLM(LLMProvider):
     def __init__(self, inner: LLMProvider) -> None:
         self._inner = inner
         self.reported_models: list[str] = []
+
+    def capabilities(self, model: str | None = None) -> ProviderCapabilities:
+        """Forward runtime capability queries to the wrapped provider."""
+        return query_provider_capabilities(self._inner, model)
 
     async def complete(
         self,
@@ -502,8 +508,11 @@ def _create_benchmark_provider(
     provider_kwargs: dict[str, Any] = {}
     if base_url:
         provider_kwargs["base_url"] = base_url
-    if profile.provider == "openai" and api_mode != "auto":
+    if profile.provider in ("openai", "openai-compatible") and api_mode != "auto":
         provider_kwargs["api_mode"] = api_mode
+    merged_caps = resolve_profile_capabilities(config, profile)
+    if merged_caps and profile.provider in ("openai", "openai-compatible"):
+        provider_kwargs["capability_overrides"] = merged_caps
     return create_provider(profile.provider, api_key, **provider_kwargs)
 
 
@@ -799,9 +808,8 @@ async def run_benchmark(
         temperature = (
             profile.temperature if profile.temperature is not None else config.agent.temperature
         )
-        key_env = resolve_profile_api_key_env(config, profile)
-        api_key = os.environ.get(key_env, "")
-        if not api_key:
+        key_env, api_key, key_required = resolve_profile_credentials(config, profile)
+        if key_required and not api_key:
             summaries.append(
                 summarize_profile(
                     name,

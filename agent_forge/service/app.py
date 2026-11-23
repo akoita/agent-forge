@@ -1561,8 +1561,17 @@ class HostedRunService:
                 retryable=False,
             )
             raise RuntimeError(record.error.message)
-        api_key = os.environ.get(provider_cfg.api_key_env, "")
-        if not api_key:
+        api_key = os.environ.get(provider_cfg.api_key_env, "") if provider_cfg.api_key_env else ""
+        from agent_forge.llm.qualification import is_api_key_required
+
+        if (
+            is_api_key_required(
+                self._config,
+                provider_name,
+                base_url=provider_cfg.base_url,
+            )
+            and not api_key
+        ):
             record.error = RunError(
                 code="unauthorized",
                 message=f"missing provider API key env: {provider_cfg.api_key_env}",
