@@ -76,6 +76,40 @@ def render_task_system_prompt(
     )
 
 
+def _build_react_loop_kwargs(
+    *,
+    event_bus: EventBus | None,
+    verify: Any,
+    approval_gate: Any,
+    on_checkpoint: Any,
+    emit_lifecycle: bool,
+    cancellation_token: Any,
+    journal: Any,
+    raise_on_cancel: bool,
+    base_revision: str,
+    verify_command: str | None,
+) -> dict[str, Any]:
+    optional = {
+        "verify": verify,
+        "approval_gate": approval_gate,
+        "on_checkpoint": on_checkpoint,
+        "cancellation_token": cancellation_token,
+        "journal": journal,
+        "verify_command": verify_command,
+    }
+    loop_kwargs: dict[str, Any] = {
+        "event_bus": event_bus,
+        **{k: v for k, v in optional.items() if v is not None},
+    }
+    if not emit_lifecycle:
+        loop_kwargs["emit_lifecycle"] = False
+    if not raise_on_cancel:
+        loop_kwargs["raise_on_cancel"] = False
+    if base_revision:
+        loop_kwargs["base_revision"] = base_revision
+    return loop_kwargs
+
+
 async def execute_agent_run(
     agent_run: AgentRun,
     sandbox_config: SandboxConfig,
@@ -90,6 +124,10 @@ async def execute_agent_run(
     on_checkpoint: Any = None,
     emit_lifecycle: bool = True,
     cancellation_token: Any = None,
+    journal: Any = None,
+    raise_on_cancel: bool = True,
+    base_revision: str = "",
+    verify_command: str | None = None,
     on_sandbox_started: Callable[[Sandbox], None] | None = None,
     post_run_hook: PostRunHook | None = None,
     react_loop_fn: Any = None,
@@ -102,17 +140,18 @@ async def execute_agent_run(
     else:
         loop_fn = react_loop_fn
 
-    loop_kwargs: dict[str, Any] = {"event_bus": event_bus}
-    if verify is not None:
-        loop_kwargs["verify"] = verify
-    if not emit_lifecycle:
-        loop_kwargs["emit_lifecycle"] = emit_lifecycle
-    if approval_gate is not None:
-        loop_kwargs["approval_gate"] = approval_gate
-    if on_checkpoint is not None:
-        loop_kwargs["on_checkpoint"] = on_checkpoint
-    if cancellation_token is not None:
-        loop_kwargs["cancellation_token"] = cancellation_token
+    loop_kwargs = _build_react_loop_kwargs(
+        event_bus=event_bus,
+        verify=verify,
+        approval_gate=approval_gate,
+        on_checkpoint=on_checkpoint,
+        emit_lifecycle=emit_lifecycle,
+        cancellation_token=cancellation_token,
+        journal=journal,
+        raise_on_cancel=raise_on_cancel,
+        base_revision=base_revision,
+        verify_command=verify_command,
+    )
 
     try:
         await sandbox.start(repo_path=repo_path or agent_run.repo_path, config=sandbox_config)

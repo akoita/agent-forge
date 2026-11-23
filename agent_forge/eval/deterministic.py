@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from agent_forge.agent.core import react_loop
+from agent_forge.agent.journal import RunJournal
 from agent_forge.agent.models import AgentConfig, AgentRun
 from agent_forge.agent.prompts import build_system_prompt
 from agent_forge.agent.verification import VerificationWorkspace
@@ -398,6 +399,12 @@ async def _run_deterministic_attempt(
             ),
         )
         run = AgentRun(task=task.prompt, repo_path=str(repo_path), config=agent_cfg)
+        journal: RunJournal | None = None
+        if trajectory_dir is not None:
+            traj_path = trajectory_dir / f"{profile_name}__{task.id}__attempt-1.jsonl"
+            if traj_path.exists():
+                traj_path.unlink()
+            journal = RunJournal(run.id, path=traj_path, fsync=False)
         llm = _ScriptedEvalLLM(task, mode)
         sandbox = SubprocessEvalSandbox()
         try:
@@ -415,7 +422,19 @@ async def _run_deterministic_attempt(
                         sandbox_factory=lambda _cfg: SubprocessEvalSandbox(),
                     )
 
-                await react_loop(run, llm, tools, sandbox, verify=_verify)
+                if journal is not None:
+                    await react_loop(
+                        run,
+                        llm,
+                        tools,
+                        sandbox,
+                        verify=_verify,
+                        journal=journal,
+                        base_revision=workspace.base_revision,
+                        verify_command=task.verify_command,
+                    )
+                else:
+                    await react_loop(run, llm, tools, sandbox, verify=_verify)
         finally:
             try:
                 await sandbox.stop()
@@ -438,6 +457,7 @@ async def _run_deterministic_attempt(
         attempt=1,
         run=run,
         result=result,
+        journal=journal,
     )
 
 

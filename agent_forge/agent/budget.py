@@ -96,23 +96,48 @@ class BudgetPolicy:
 
 
 class CancellationToken:
-    """Cooperative cancellation signal checked between loop steps."""
+    """Cooperative cancellation and recoverable pause signal checked between loop steps."""
 
     def __init__(self) -> None:
         self._cancelled = False
+        self._interrupted = False
         self._reason = ""
 
-    def cancel(self, reason: str = "Cancelled by operator") -> None:
-        """Mark the token as cancelled with an operator-facing reason."""
-        self._cancelled = True
+    def cancel(
+        self,
+        reason: str = "Cancelled by operator",
+        *,
+        recoverable: bool = False,
+    ) -> None:
+        """Mark the token for cancellation or recoverable interruption."""
         self._reason = reason
+        if recoverable:
+            self._interrupted = True
+            self._cancelled = False
+        else:
+            self._cancelled = True
+            self._interrupted = False
+
+    def interrupt(self, reason: str = "Interrupted by operator") -> None:
+        """Mark the token as a recoverable pause request."""
+        self.cancel(reason, recoverable=True)
 
     @property
     def is_cancelled(self) -> bool:
-        """Return whether cancellation has been requested."""
+        """Return whether terminal cancellation has been requested."""
         return self._cancelled
 
     @property
+    def is_interrupted(self) -> bool:
+        """Return whether a recoverable interruption has been requested."""
+        return self._interrupted
+
+    @property
+    def is_stop_requested(self) -> bool:
+        """Return whether either terminal cancellation or recoverable interruption was requested."""
+        return self._cancelled or self._interrupted
+
+    @property
     def reason(self) -> str:
-        """Cancellation reason recorded when cancelled."""
+        """Reason recorded when cancelled or interrupted."""
         return self._reason

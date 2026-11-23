@@ -9,6 +9,7 @@ Persists runs under ~/.agent-forge/runs/<run_id>/:
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,21 @@ from typing import Any
 from agent_forge.agent.models import AgentConfig, AgentRun, RunState, ToolInvocation
 from agent_forge.config import USER_CONFIG_DIR
 from agent_forge.llm.base import Message, Role, TokenUsage, ToolCall
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write *data* to a temp file, flush/fsync, and atomically replace *path*."""
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    with tmp_path.open("wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_path, path)
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Atomically write UTF-8 *text* to *path* with fsync."""
+    _atomic_write_bytes(path, text.encode("utf-8"))
 
 
 def _default_runs_dir() -> Path:
@@ -50,45 +66,48 @@ def save_run(run: AgentRun, *, base_dir: Path | str | None = None) -> Path:
         "error": run.error,
         "verification": asdict(run.verification) if run.verification else None,
     }
-    (run_dir / "run.json").write_text(json.dumps(run_meta, indent=2) + "\n")
+    _atomic_write_text(run_dir / "run.json", json.dumps(run_meta, indent=2) + "\n")
     if run.verification and run.verification.patch:
-        (run_dir / "change.patch").write_bytes(
-            run.verification.patch.encode(errors="surrogateescape")
+        _atomic_write_bytes(
+            run_dir / "change.patch",
+            run.verification.patch.encode(errors="surrogateescape"),
         )
 
     # ── messages.jsonl ────────────────────────────────────────────
-    with (run_dir / "messages.jsonl").open("w") as f:
-        for msg in run.messages:
-            line: dict[str, Any] = {
-                "role": msg.role.value,
-                "content": msg.content,
-            }
-            if msg.tool_call_id:
-                line["tool_call_id"] = msg.tool_call_id
-            if msg.tool_calls:
-                line["tool_calls"] = [asdict(tc) for tc in msg.tool_calls]
-            f.write(json.dumps(line) + "\n")
+    message_lines: list[str] = []
+    for msg in run.messages:
+        line: dict[str, Any] = {
+            "role": msg.role.value,
+            "content": msg.content,
+        }
+        if msg.tool_call_id:
+            line["tool_call_id"] = msg.tool_call_id
+        if msg.tool_calls:
+            line["tool_calls"] = [asdict(tc) for tc in msg.tool_calls]
+        message_lines.append(json.dumps(line) + "\n")
+    _atomic_write_text(run_dir / "messages.jsonl", "".join(message_lines))
 
     # ── events.jsonl ──────────────────────────────────────────────
-    with (run_dir / "events.jsonl").open("w") as f:
-        for inv in run.tool_invocations:
-            result_data: dict[str, Any] = {
-                "output": inv.result.output,
-                "error": inv.result.error,
-                "exit_code": inv.result.exit_code,
-                "execution_time_ms": inv.result.execution_time_ms,
-            }
-            if inv.result.metadata:
-                result_data["metadata"] = inv.result.metadata
-            line_ev: dict[str, Any] = {
-                "tool_name": inv.tool_name,
-                "arguments": inv.arguments,
-                "result": result_data,
-                "iteration": inv.iteration,
-                "timestamp": inv.timestamp.isoformat(),
-                "duration_ms": inv.duration_ms,
-            }
-            f.write(json.dumps(line_ev) + "\n")
+    event_lines: list[str] = []
+    for inv in run.tool_invocations:
+        result_data: dict[str, Any] = {
+            "output": inv.result.output,
+            "error": inv.result.error,
+            "exit_code": inv.result.exit_code,
+            "execution_time_ms": inv.result.execution_time_ms,
+        }
+        if inv.result.metadata:
+            result_data["metadata"] = inv.result.metadata
+        line_ev: dict[str, Any] = {
+            "tool_name": inv.tool_name,
+            "arguments": inv.arguments,
+            "result": result_data,
+            "iteration": inv.iteration,
+            "timestamp": inv.timestamp.isoformat(),
+            "duration_ms": inv.duration_ms,
+        }
+        event_lines.append(json.dumps(line_ev) + "\n")
+    _atomic_write_text(run_dir / "events.jsonl", "".join(event_lines))
 
     return run_dir
 

@@ -20,6 +20,10 @@ class SearchCodebaseTool(Tool):
         return "search_codebase"
 
     @property
+    def side_effecting(self) -> bool:
+        return False
+
+    @property
     def description(self) -> str:
         return "Search for a pattern across files in the workspace using ripgrep"
 

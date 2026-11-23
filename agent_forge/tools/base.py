@@ -98,6 +98,11 @@ class Tool(ABC):
         """JSON Schema describing accepted arguments."""
         ...
 
+    @property
+    def side_effecting(self) -> bool:
+        """Whether this tool can mutate workspace/external state (safe default: True)."""
+        return True
+
     @abstractmethod
     async def execute(self, arguments: dict[str, Any], sandbox: Sandbox) -> ToolResult:
         """Execute the tool inside the given sandbox."""

@@ -21,6 +21,10 @@ class GitDiffTool(Tool):
         return "git_diff"
 
     @property
+    def side_effecting(self) -> bool:
+        return False
+
+    @property
     def description(self) -> str:
         return "Show staged, unstaged, or committed git changes in the workspace"
 
