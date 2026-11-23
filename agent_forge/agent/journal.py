@@ -40,6 +40,7 @@ JournalEntryKind = Literal[
     "action_requested",
     "action_result",
     "checkpoint_saved",
+    "context_compacted",
     "verification_recorded",
     "contract_evaluated",
     "run_interrupted",
@@ -114,6 +115,8 @@ class ReplayResult(BaseModel):
     duplicate_side_effects: list[str] = Field(default_factory=list)
     reused_actions: int = Field(ge=0)
     checkpoints: int = Field(ge=0)
+    compactions: int = Field(default=0, ge=0)
+    context_tokens_saved: int = Field(default=0, ge=0)
     interruptions: list[dict[str, Any]] = Field(default_factory=list)
     total_tokens: dict[str, int] = Field(default_factory=dict)
     verification: dict[str, Any] | None = None
@@ -545,6 +548,8 @@ class _ReplayAccumulator:
     duplicate_side_effects: list[str] = field(default_factory=list)
     reused_actions: int = 0
     checkpoints: int = 0
+    compactions: int = 0
+    context_tokens_saved: int = 0
     llm_turns: int = 0
     iterations: int = 0
     prompt_tokens: int = 0
@@ -644,6 +649,11 @@ def _apply_checkpoint_entry(acc: _ReplayAccumulator, entry: JournalEntry) -> Non
     acc.checkpoints += 1
 
 
+def _apply_compaction_entry(acc: _ReplayAccumulator, entry: JournalEntry) -> None:
+    acc.compactions += 1
+    acc.context_tokens_saved += int(entry.data.get("tokens_saved", 0))
+
+
 def _apply_interrupted_entry(acc: _ReplayAccumulator, entry: JournalEntry) -> None:
     acc.interruptions.append(dict(entry.data))
 
@@ -666,6 +676,7 @@ _REPLAY_HANDLERS: dict[str, Any] = {
     "action_requested": _apply_action_requested_entry,
     "action_result": _apply_action_result_entry,
     "checkpoint_saved": _apply_checkpoint_entry,
+    "context_compacted": _apply_compaction_entry,
     "run_interrupted": _apply_interrupted_entry,
     "verification_recorded": _apply_verification_entry,
     "contract_evaluated": _apply_contract_entry,
@@ -754,6 +765,8 @@ def replay_journal(
         duplicate_side_effects=acc.duplicate_side_effects,
         reused_actions=acc.reused_actions,
         checkpoints=acc.checkpoints,
+        compactions=acc.compactions,
+        context_tokens_saved=acc.context_tokens_saved,
         interruptions=acc.interruptions,
         total_tokens={
             "prompt_tokens": acc.prompt_tokens,

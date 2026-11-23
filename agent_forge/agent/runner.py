@@ -10,12 +10,16 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+from agent_forge.agent.context import ContextEngine, ContextPolicy
 from agent_forge.agent.models import AgentConfig, AgentRun
 from agent_forge.agent.prompts import build_hosted_system_prompt, build_system_prompt
+from agent_forge.config import ContextSettings
 from agent_forge.extensions.discovery import discover_extension_prompt_fragments
 from agent_forge.sandbox.base import SandboxConfig
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from agent_forge.config import ForgeConfig
     from agent_forge.llm.base import LLMProvider
     from agent_forge.orchestration.events import EventBus
@@ -38,11 +42,33 @@ def build_sandbox_config(cfg: ForgeConfig) -> SandboxConfig:
     )
 
 
+def _resolve_context_engine_for_config(
+    repo_path: str | Path,
+    task: str,
+    cfg: Any,
+    agent_config: AgentConfig | None = None,
+) -> ContextEngine | None:
+    ctx_cfg = getattr(cfg, "context", None)
+    if isinstance(ctx_cfg, ContextSettings):
+        if not ctx_cfg.enabled:
+            if agent_config is not None:
+                agent_config.context_enabled = False
+            return None
+        return ContextEngine(
+            repo_path=repo_path,
+            task=task,
+            policy=ContextPolicy.from_settings(ctx_cfg),
+        )
+    return ContextEngine(repo_path=repo_path, task=task)
+
+
 def render_task_system_prompt(
     task: str,
     tools: ToolRegistry,
     sandbox_config: SandboxConfig,
     *,
+    repo_path: str | Path | None = None,
+    context_engine: ContextEngine | None = None,
     prompt_scope: str | None = None,
     report_schema: str | None = None,
     discover_extensions: bool = True,
@@ -51,6 +77,18 @@ def render_task_system_prompt(
     extension_prompts = (
         discover_extension_prompt_fragments() or None if discover_extensions else None
     )
+    active_context = context_engine
+    if active_context is None and repo_path is not None:
+        active_context = ContextEngine(repo_path=repo_path, task=task)
+    repo_instructions: str | None = None
+    repo_map: str | None = None
+    scoped_instructions: str | None = None
+    if active_context is not None:
+        instructions, repo_map_obj = active_context.prepare_initial_context()
+        repo_instructions = instructions.rendered or None
+        repo_map = repo_map_obj.rendered or None
+        scoped_instructions = active_context.task_scoped_instructions_rendered or None
+
     tool_definitions = tools.list_definitions()
     if report_schema is not None:
         return build_hosted_system_prompt(
@@ -61,6 +99,9 @@ def render_task_system_prompt(
             sandbox_image=sandbox_config.image,
             network_enabled=sandbox_config.network_enabled,
             command_timeout_seconds=sandbox_config.timeout_seconds,
+            repo_instructions=repo_instructions,
+            repo_map=repo_map,
+            scoped_instructions=scoped_instructions,
             prompt_scope=prompt_scope,
             extension_prompts=extension_prompts,
         )
@@ -71,6 +112,9 @@ def render_task_system_prompt(
         sandbox_image=sandbox_config.image,
         network_enabled=sandbox_config.network_enabled,
         command_timeout_seconds=sandbox_config.timeout_seconds,
+        repo_instructions=repo_instructions,
+        repo_map=repo_map,
+        scoped_instructions=scoped_instructions,
         prompt_scope=prompt_scope,
         extension_prompts=extension_prompts,
     )
@@ -89,6 +133,7 @@ def _build_react_loop_kwargs(
     base_revision: str,
     verify_command: str | None,
     completion_contract: Any = None,
+    context_engine: ContextEngine | None = None,
 ) -> dict[str, Any]:
     optional = {
         "verify": verify,
@@ -98,6 +143,7 @@ def _build_react_loop_kwargs(
         "journal": journal,
         "verify_command": verify_command,
         "completion_contract": completion_contract,
+        "context_engine": context_engine,
     }
     loop_kwargs: dict[str, Any] = {
         "event_bus": event_bus,
@@ -131,6 +177,7 @@ async def execute_agent_run(
     base_revision: str = "",
     verify_command: str | None = None,
     completion_contract: Any = None,
+    context_engine: ContextEngine | None = None,
     on_sandbox_started: Callable[[Sandbox], None] | None = None,
     post_run_hook: PostRunHook | None = None,
     react_loop_fn: Any = None,
@@ -155,6 +202,7 @@ async def execute_agent_run(
         base_revision=base_revision,
         verify_command=verify_command,
         completion_contract=completion_contract,
+        context_engine=context_engine,
     )
 
     try:
@@ -188,6 +236,7 @@ async def run_agent_task(
     emit_lifecycle: bool = True,
     cancellation_token: Any = None,
     completion_contract: Any = None,
+    context_engine: ContextEngine | None = None,
     on_sandbox_started: Callable[[Sandbox], None] | None = None,
     post_run_hook: PostRunHook | None = None,
     tools_factory: Callable[[], ToolRegistry] | None = None,
@@ -203,11 +252,18 @@ async def run_agent_task(
     else:
         tools = tools_factory()
 
+    active_context = (
+        context_engine
+        if context_engine is not None
+        else _resolve_context_engine_for_config(repo_path, task, cfg, agent_config)
+    )
     sandbox_config = build_sandbox_config(cfg)
     agent_config.system_prompt = render_task_system_prompt(
         task,
         tools,
         sandbox_config,
+        repo_path=repo_path,
+        context_engine=active_context,
         prompt_scope=prompt_scope,
         report_schema=report_schema,
         discover_extensions=discover_extensions,
@@ -245,6 +301,7 @@ async def run_agent_task(
         emit_lifecycle=emit_lifecycle,
         cancellation_token=cancellation_token,
         completion_contract=completion_contract,
+        context_engine=active_context,
         on_sandbox_started=on_sandbox_started,
         post_run_hook=post_run_hook,
         react_loop_fn=react_loop_fn,

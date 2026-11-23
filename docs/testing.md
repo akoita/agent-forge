@@ -34,6 +34,9 @@ hidden verifier tests injected only inside the independent verifier checkout:
 
 - Every base checkout, empty patch, and partial `incomplete_files` edit must fail verification.
 - Every `known_good_files` fix must pass both visible and hidden verification tests.
+- `test_context_engine_reduces_tokens_per_task_on_m0_corpus` verifies that `ContextEngine`
+  auto-discovers hierarchical `AGENTS.md` instructions (deduplicating symlinked `CLAUDE.md`)
+  and cuts cumulative prompt tokens across the 4-task smoke suite while holding 4/4 fixes.
 - `python -m agent_forge.eval --suite smoke --report-dir .eval-artifacts --assert-gates`
   runs scripted `oracle`, `noop`, and `incomplete` profiles through the full
   `react_loop`, tool registry, `VerificationWorkspace`, `CompletionContract`, and
@@ -149,6 +152,7 @@ tests/
 │   ├── test_cli.py                     # CLI commands with CliRunner
 │   ├── test_cli_orchestration.py       # Orchestration config matrix
 │   ├── test_config.py                  # Config loading + merging
+│   ├── test_context_engine.py          # Instruction discovery, repo map, working set, compaction
 │   ├── test_cost.py                    # Cost/token tracking
 │   ├── test_events.py                  # Event bus pub/sub
 │   ├── test_llm_anthropic.py           # Anthropic adapter (mocked HTTP)

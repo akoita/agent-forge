@@ -70,6 +70,7 @@ def save_run(run: AgentRun, *, base_dir: Path | str | None = None) -> Path:
             if run.contract_evaluation is not None
             else None
         ),
+        "context_stats": run.context_stats or None,
     }
     _atomic_write_text(run_dir / "run.json", json.dumps(run_meta, indent=2) + "\n")
     if run.verification and run.verification.patch:
@@ -212,4 +213,5 @@ def load_run(run_id: str, *, base_dir: Path | str | None = None) -> AgentRun:
         contract_evaluation=(
             ContractEvaluation.model_validate(contract_eval) if contract_eval is not None else None
         ),
+        context_stats=dict(meta.get("context_stats") or {}),
     )

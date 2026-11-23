@@ -269,3 +269,200 @@ async def test_completion_contract_eliminates_false_positive_completions() -> No
     assert before.false_positive_rate == 1.0
     assert after.false_positive_rate == 0.0
     assert all(r.run_state == "verification_failed" and r.unmet_clauses for r in contracted_results)
+
+
+@pytest.mark.asyncio
+async def test_context_engine_reduces_tokens_per_task_on_m0_corpus(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify M2 Context Engine cuts prompt tokens on M0 while holding 4/4 fix rate."""
+    import tempfile
+
+    from agent_forge.agent.context import ContextEngine, ContextPolicy, estimate_messages_tokens
+    from agent_forge.agent.core import react_loop
+    from agent_forge.agent.models import AgentConfig, AgentRun, RunState
+    from agent_forge.agent.verification import VerificationWorkspace
+    from agent_forge.eval.corpus import resolve_tasks
+    from agent_forge.eval.deterministic import SubprocessEvalSandbox
+    from agent_forge.llm.base import LLMResponse, TokenUsage, ToolCall
+    from agent_forge.sandbox.base import SandboxConfig
+    from agent_forge.tools import create_default_registry
+
+    monkeypatch.setattr("agent_forge.agent.persistence.USER_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("agent_forge.agent.core.save_summary", lambda *_a: tmp_path / "s.json")
+
+    class _TokenAccountingScriptedLLM:
+        def __init__(self, task: BenchmarkTask) -> None:
+            src_file = next(iter(task.files))
+            test_file = next(path for path in task.tests if path.endswith(".py") and "/" in path)
+            steps = [
+                ToolCall(
+                    id="c-log", name="read_file", arguments={"path": "/workspace/CONTEXT_LOG.md"}
+                ),
+                ToolCall(
+                    id="c-test", name="read_file", arguments={"path": f"/workspace/{test_file}"}
+                ),
+                ToolCall(
+                    id="c-src1",
+                    name="read_file",
+                    arguments={"path": f"/workspace/{src_file}"},
+                ),
+                ToolCall(
+                    id="c-fail1", name="run_shell", arguments={"command": task.verify_command}
+                ),
+                *[
+                    ToolCall(
+                        id=f"c-inc-{idx}",
+                        name="write_file",
+                        arguments={"path": f"/workspace/{path}", "content": content},
+                    )
+                    for idx, (path, content) in enumerate(task.incomplete_files.items())
+                ],
+                ToolCall(
+                    id="c-fail2", name="run_shell", arguments={"command": task.verify_command}
+                ),
+                ToolCall(
+                    id="c-src2",
+                    name="read_file",
+                    arguments={"path": f"/workspace/{src_file}"},
+                ),
+                *[
+                    ToolCall(
+                        id=f"c-good-{idx}",
+                        name="write_file",
+                        arguments={"path": f"/workspace/{path}", "content": content},
+                    )
+                    for idx, (path, content) in enumerate(task.known_good_files.items())
+                ],
+                ToolCall(id="c-pass", name="run_shell", arguments={"command": task.verify_command}),
+            ]
+            self._responses = [
+                LLMResponse(content="", tool_calls=[tc], finish_reason="tool_calls") for tc in steps
+            ] + [LLMResponse(content="Verified fix complete.", tool_calls=[], finish_reason="stop")]
+            self._cursor = 0
+
+        async def complete(self, messages, tools=None, config=None):
+            del tools, config
+            template = self._responses[min(self._cursor, len(self._responses) - 1)]
+            self._cursor += 1
+            prompt_tokens = estimate_messages_tokens(messages)
+            completion_tokens = 25
+            return LLMResponse(
+                content=template.content,
+                tool_calls=template.tool_calls,
+                usage=TokenUsage(
+                    prompt_tokens,
+                    completion_tokens,
+                    prompt_tokens + completion_tokens,
+                ),
+                model="scripted-m2",
+                finish_reason=template.finish_reason,
+            )
+
+        async def close(self) -> None:
+            return None
+
+    async def _run_suite(*, use_context: bool) -> tuple[int, int]:
+        tasks = resolve_tasks(suite="smoke")
+        tools = create_default_registry(load_plugins=False)
+        sandbox_cfg = SandboxConfig(
+            backend="subprocess-eval",
+            network_enabled=False,
+            writable_cache_mounts=False,
+            timeout_seconds=20,
+        )
+        policy = ContextPolicy(
+            context_window_tokens=1_200,
+            compaction_trigger_ratio=0.70,
+            compaction_target_ratio=0.45,
+            keep_recent_turns=2,
+            stale_tool_result_max_chars=240,
+        )
+        verified_count = 0
+        prompt_token_total = 0
+
+        for task in tasks:
+            with tempfile.TemporaryDirectory() as td:
+                repo = materialize_task_repo(task, Path(td) / "repo")
+                (repo / "AGENTS.md").write_text(
+                    "ROOT_CONVENTION: keep edits surgical and verified.", encoding="utf-8"
+                )
+                os.symlink("AGENTS.md", repo / "CLAUDE.md")
+                (repo / "tests" / "AGENTS.md").write_text(
+                    "TESTS_CONVENTION: preserve all test assertions.", encoding="utf-8"
+                )
+                (repo / "CONTEXT_LOG.md").write_text(
+                    "Diagnostic context line with historical run trace details.\n" * 60,
+                    encoding="utf-8",
+                )
+                subprocess.run(
+                    ["git", "add", "-A"],  # noqa: S607
+                    cwd=repo,
+                    check=True,
+                    capture_output=True,
+                )
+                subprocess.run(
+                    ["git", "commit", "-m", "Add repository context docs"],  # noqa: S607
+                    cwd=repo,
+                    check=True,
+                    capture_output=True,
+                    env={
+                        **os.environ,
+                        "GIT_AUTHOR_NAME": "Eval",
+                        "GIT_AUTHOR_EMAIL": "eval@example.com",
+                        "GIT_COMMITTER_NAME": "Eval",
+                        "GIT_COMMITTER_EMAIL": "eval@example.com",
+                    },
+                )
+
+                cfg = AgentConfig(
+                    model="scripted-m2",
+                    provider="deterministic",
+                    max_iterations=16,
+                    context_enabled=use_context,
+                )
+                run = AgentRun(task=task.prompt, repo_path=str(repo), config=cfg)
+                sb = SubprocessEvalSandbox()
+                with VerificationWorkspace(
+                    str(repo), task.verify_command, extra_verifier_files=task.hidden_tests
+                ) as ws:
+                    await sb.start(repo_path=str(ws.workspace), config=sandbox_cfg)
+                    engine = ContextEngine(ws.workspace, task=task.prompt, policy=policy)
+                    try:
+                        await react_loop(
+                            run,
+                            _TokenAccountingScriptedLLM(task),
+                            tools,
+                            sb,
+                            verify=lambda ws=ws, sb=sb: ws.verify(
+                                sandbox_cfg,
+                                sb,
+                                sandbox_factory=lambda _c: SubprocessEvalSandbox(),
+                            ),
+                            context_engine=engine if use_context else None,
+                        )
+                    finally:
+                        await sb.stop()
+
+                assert run.state == RunState.COMPLETED
+                assert run.verification is not None and run.verification.passed is True
+                verified_count += 1
+                prompt_token_total += run.total_tokens.prompt_tokens
+                if use_context:
+                    loaded = run.context_stats["instruction_paths"]
+                    assert "AGENTS.md" in loaded
+                    assert "tests/AGENTS.md" in loaded
+                    assert "CLAUDE.md" not in loaded
+                    assert run.context_stats["compactions"] >= 1
+                    assert "ROOT_CONVENTION" in run.messages[0].content
+                    assert any("TESTS_CONVENTION" in m.content for m in run.messages)
+
+        return verified_count, prompt_token_total
+
+    raw_verified, raw_tokens = await _run_suite(use_context=False)
+    managed_verified, managed_tokens = await _run_suite(use_context=True)
+
+    assert raw_verified == 4
+    assert managed_verified == 4
+    assert managed_tokens < raw_tokens * 0.85

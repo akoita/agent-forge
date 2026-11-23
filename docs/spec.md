@@ -705,9 +705,34 @@ You can use the following tools to complete the task:
 6. Do NOT attempt to access the internet or external services.
 7. Stay within the /workspace directory.
 
+## Sandbox
+- Backend: {sandbox_backend}
+- Runtime image: {sandbox_image}
+- Network: {network_status}
+- Max shell command timeout: {command_timeout_seconds}s{repo_context}
+
 ## Task
 {task_description}
 ```
+
+#### Context Engine
+
+`ContextEngine` (`agent_forge.agent.context`) assembles a bounded prompt view on each LLM turn without mutating `run.messages`:
+
+```mermaid
+flowchart LR
+    Repo[Parent + Root Instructions and Repo Map] --> Prefix[Static Prefix before Task]
+    Turns[Conversation + Tool Results] --> Sync[Update WorkingSet + Child Instructions]
+    Sync --> Budget{Tokens > trigger_tokens?}
+    Budget -->|No| Send[Pass cached prefix + cache_key to LLMConfig]
+    Budget -->|Yes| S1[Stage 1: Prune superseded reads and oversized outputs]
+    S1 --> S2[Stage 2: Fold oldest atomic turn groups into summary]
+    S2 --> Send
+```
+
+- **Instruction discovery (`instructions.py`):** Loads `AGENTS.md`, `CLAUDE.md`, and `.agent-forge/instructions.md` from enclosing `.git` ancestors down to target child directories, deduplicating symlinks (`Path.resolve()`) and injecting unseen child instructions append-only when subtrees are touched.
+- **Repository map (`repo_map.py`):** Extracts Python (`ast`) and multi-language (regex) definitions and ranks files with Personalized PageRank within `context.max_repo_map_tokens`.
+- **Two-stage compaction & cache alignment:** Pins modified files in `WorkingSet`, keeps recent turns and active failures intact, folds complete `(ASSISTANT, TOOL...)` turn groups so tool call pairings remain valid, emits `"context_compacted"` entries to `journal.jsonl`, and sets `LLMConfig.cache_key` and `cache_breakpoint_index`.
 
 #### Termination Conditions
 
@@ -1073,6 +1098,20 @@ default_model = "gemini-2.0-flash"
 temperature = 0.0
 system_prompt_path = ""          # Optional custom system prompt file
 
+[context]
+enabled = true
+discover_instructions = true
+max_instruction_tokens = 4000
+repo_map_enabled = true
+max_repo_map_tokens = 1500
+max_repo_files = 500
+max_working_set_files = 12
+context_window_tokens = 100000
+compaction_trigger_ratio = 0.75
+compaction_target_ratio = 0.45
+keep_recent_turns = 4
+stale_tool_result_max_chars = 600
+
 [sandbox]
 image = "agent-forge-sandbox:latest"
 cpu_limit = 1.0
@@ -1155,6 +1194,12 @@ Format: `AGENT_FORGE_{SECTION}_{KEY}` (uppercase, underscored).
 | Env Var                            | Config Path            |
 | ---------------------------------- | ---------------------- |
 | `AGENT_FORGE_AGENT_MAX_ITERATIONS` | `agent.max_iterations` |
+| `AGENT_FORGE_CONTEXT_ENABLED` | `context.enabled` |
+| `AGENT_FORGE_CONTEXT_MAX_INSTRUCTION_TOKENS` | `context.max_instruction_tokens` |
+| `AGENT_FORGE_CONTEXT_MAX_REPO_MAP_TOKENS` | `context.max_repo_map_tokens` |
+| `AGENT_FORGE_CONTEXT_CONTEXT_WINDOW_TOKENS` | `context.context_window_tokens` |
+| `AGENT_FORGE_CONTEXT_COMPACTION_TRIGGER_RATIO` | `context.compaction_trigger_ratio` |
+| `AGENT_FORGE_CONTEXT_KEEP_RECENT_TURNS` | `context.keep_recent_turns` |
 | `AGENT_FORGE_SANDBOX_MEMORY_LIMIT` | `sandbox.memory_limit` |
 | `AGENT_FORGE_QUEUE_BACKEND`        | `queue.backend`        |
 | `AGENT_FORGE_SERVICE_AUTH_ENABLED` | `service.auth_enabled` |

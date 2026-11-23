@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from agent_forge.agent.contracts import ContractEvaluation
@@ -43,6 +43,7 @@ class AgentConfig:
     max_cost_usd: float | None = None
     max_duration_seconds: float | None = None
     budget_action: str = "timeout"  # "timeout" | "pause"
+    context_enabled: bool = True
 
 
 @dataclass
@@ -79,6 +80,7 @@ class AgentRun:
     error: str | None = None
     verification: VerificationResult | None = None
     contract_evaluation: ContractEvaluation | None = None
+    context_stats: dict[str, Any] = field(default_factory=dict)
 
 
 def _zero_usage() -> TokenUsage:

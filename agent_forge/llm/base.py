@@ -92,6 +92,8 @@ class LLMConfig:
     top_p: float = 1.0
     timeout_seconds: int = 120
     max_retries: int | None = None
+    cache_key: str | None = None
+    cache_breakpoint_index: int | None = None
 
 
 class LLMProvider(ABC):
