@@ -1062,3 +1062,219 @@ async def test_deterministic_eval_parallel_concurrency_matches_gates() -> None:
     assert check_deterministic_gates(report) == []
     oracle = next(p for p in report.profiles if p.profile == "deterministic-oracle")
     assert [res.task_id for res in oracle.results] == report.tasks
+
+
+def _build_mcp_eval_server_script(tmp_path: Path) -> Path:
+    code = (
+        "import json, sys, time\n"
+        "from pathlib import Path\n"
+        "root = Path(sys.argv[1]).resolve()\n"
+        "mode = sys.argv[2]\n"
+        "for line in sys.stdin:\n"
+        "    line = line.strip()\n"
+        "    if not line:\n"
+        "        continue\n"
+        "    req = json.loads(line)\n"
+        "    rid = req.get('id')\n"
+        "    if rid is None:\n"
+        "        continue\n"
+        "    m = req.get('method')\n"
+        "    p = req.get('params') or {}\n"
+        "    if m == 'initialize':\n"
+        "        res = {'protocolVersion': '2025-03-26', 'capabilities': {}}\n"
+        "    elif m == 'tools/list':\n"
+        "        if mode == 'slow':\n"
+        "            res = {'tools': [{'name': 'ping', 'description': 'Slow ping', "
+        "'inputSchema': {'type': 'object', 'properties': {}}}]}\n"
+        "        else:\n"
+        "            res = {'tools': [\n"
+        "                {'name': 'read_file_ext', 'description': 'Read', "
+        "'inputSchema': {'type': 'object', 'properties': {'path': {'type': 'string'}}}, "
+        "'annotations': {'readOnlyHint': True}},\n"
+        "                {'name': 'write_file_ext', 'description': 'Write', "
+        "'inputSchema': {'type': 'object', 'properties': {'path': {'type': 'string'}, "
+        "'content': {'type': 'string'}}}, 'annotations': {'destructiveHint': True}}\n"
+        "            ]}\n"
+        "    elif m == 'tools/call':\n"
+        "        if mode == 'slow':\n"
+        "            time.sleep(3.0)\n"
+        "            res = {'content': [{'type': 'text', 'text': 'ok'}]}\n"
+        "        elif p.get('name') == 'read_file_ext':\n"
+        "            txt = (root / p['arguments']['path']).read_text(encoding='utf-8')\n"
+        "            res = {'content': [{'type': 'text', 'text': txt}]}\n"
+        "        else:\n"
+        "            (root / p['arguments']['path']).write_text("
+        "p['arguments']['content'], encoding='utf-8')\n"
+        "            res = {'content': [{'type': 'text', 'text': 'updated'}]}\n"
+        "    else:\n"
+        "        res = {}\n"
+        "    print(json.dumps({'jsonrpc': '2.0', 'id': rid, 'result': res}), flush=True)\n"
+    )
+    script = tmp_path / "eval_mcp_server.py"
+    script.write_text(code, encoding="utf-8")
+    return script
+
+
+@pytest.mark.asyncio
+async def test_mcp_filesystem_server_usable_in_run_with_policy_gated_approvals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exit criterion: stdio MCP server works in run_agent_task with approvals + isolation."""
+    from agent_forge.agent.approvals import ApprovalGate, ApprovalRequest
+    from agent_forge.agent.models import AgentConfig, RunState
+    from agent_forge.agent.runner import run_agent_task
+    from agent_forge.config import load_config
+    from agent_forge.eval.deterministic import SubprocessEvalSandbox
+    from agent_forge.llm.base import (
+        LLMConfig,
+        LLMProvider,
+        LLMResponse,
+        Message,
+        TokenUsage,
+        ToolCall,
+    )
+    from agent_forge.orchestration.events import Event, EventBus, EventType
+
+    monkeypatch.setattr("agent_forge.agent.persistence.USER_CONFIG_DIR", tmp_path / "home")
+    monkeypatch.setattr("agent_forge.agent.core.save_summary", lambda *_a: tmp_path / "s.json")
+
+    script = _build_mcp_eval_server_script(tmp_path)
+    fs_root = tmp_path / "mcp_fs"
+    fs_root.mkdir()
+    (fs_root / "status.txt").write_text("initial", encoding="utf-8")
+
+    toml_path = tmp_path / "agent-forge.toml"
+    toml_path.write_text(
+        f'[mcp.servers.fs]\ntransport = "stdio"\ncommand = "{sys.executable}"\n'
+        f'args = ["{script}", "{fs_root}", "fs"]\n'
+        'approval_mode = "prompt"\nallow_read_only_without_approval = true\n\n'
+        f'[mcp.servers.slowsrv]\ntransport = "stdio"\ncommand = "{sys.executable}"\n'
+        f'args = ["{script}", "{fs_root}", "slow"]\n'
+        "timeout_seconds = 0.2\nfailure_threshold = 1\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(project_path=toml_path, user_path=tmp_path / "none.toml")
+
+    seen_prompts: list[str] = []
+    seen_tools_in_call: list[str] = []
+
+    class _RunEvalLLM(LLMProvider):
+        def __init__(self) -> None:
+            self._turn = 0
+            self._responses = [
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="m1",
+                            name="mcp__fs__read_file_ext",
+                            arguments={"path": "status.txt"},
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="m2",
+                            name="mcp__fs__write_file_ext",
+                            arguments={"path": "status.txt", "content": "blocked"},
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="m3",
+                            name="mcp__fs__write_file_ext",
+                            arguments={"path": "status.txt", "content": "approved-update"},
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="m4", name="mcp__slowsrv__ping", arguments={}),
+                    ],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="m5", name="mcp__slowsrv__ping", arguments={}),
+                    ],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+                LLMResponse(
+                    content="Completed MCP tasks.",
+                    tool_calls=[],
+                    finish_reason="stop",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+            ]
+
+        async def complete(
+            self,
+            messages: list[Message],
+            tools: list[object] | None = None,
+            config: LLMConfig | None = None,
+        ) -> LLMResponse:
+            del config
+            if messages and messages[0].role.value == "system":
+                seen_prompts.append(messages[0].content or "")
+            if tools and not seen_tools_in_call:
+                seen_tools_in_call.extend(getattr(t, "name", "") for t in tools)
+            resp = self._responses[min(self._turn, len(self._responses) - 1)]
+            self._turn += 1
+            return resp
+
+        async def stream(self, messages: list[Message], **kwargs: object) -> object:
+            del kwargs
+            yield await self.complete(messages)
+
+    async def _policy_callback(req: ApprovalRequest) -> bool:
+        if req.tool_name == "mcp__fs__write_file_ext":
+            return req.arguments.get("content") == "approved-update"
+        return True
+
+    decisions: list[Event] = []
+    bus = EventBus()
+
+    async def _on_decision(event: Event) -> None:
+        decisions.append(event)
+
+    await bus.subscribe(EventType.APPROVAL_DECIDED, _on_decision)
+
+    run = await run_agent_task(
+        "Use external MCP tools safely",
+        str(fs_root),
+        cfg,
+        AgentConfig(model="eval-mock", provider="deterministic", max_iterations=8),
+        "deterministic",
+        "",
+        discover_extensions=False,
+        event_bus=bus,
+        approval_gate=ApprovalGate(mode="prompt", callback=_policy_callback),
+        sandbox_factory=lambda _c: SubprocessEvalSandbox(),
+        provider_factory=lambda _p, _k: _RunEvalLLM(),
+    )
+
+    assert run.state == RunState.COMPLETED
+    assert "mcp__fs__read_file_ext" in seen_tools_in_call
+    assert "mcp__fs__write_file_ext" in seen_tools_in_call
+    assert (fs_root / "status.txt").read_text(encoding="utf-8") == "approved-update"
+    assert [d.data.get("approved") for d in decisions].count(False) == 1
+    assert any(
+        inv.tool_name == "mcp__slowsrv__ping" and inv.result.metadata.get("mcp_circuit_open")
+        for inv in run.tool_invocations
+    )
