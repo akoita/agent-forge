@@ -779,3 +779,286 @@ async def test_local_ollama_config_only_completes_m0_smoke_task(
         )
     assert report_emulated.profiles[0].status == "completed"
     assert report_emulated.profiles[0].verified_fixes == 1
+
+
+def _scope_benchmark_task(task: BenchmarkTask) -> BenchmarkTask:
+    prefix = f"{task.id}/"
+    return BenchmarkTask(
+        id=task.id,
+        title=task.title,
+        prompt=task.prompt,
+        verify_command=f"python3 -m unittest discover -s {task.id}/tests -t {task.id} -v",
+        files={f"{prefix}{path}": body for path, body in task.files.items()},
+        tests={f"{prefix}{path}": body for path, body in task.tests.items()},
+        known_good_files={f"{prefix}{path}": body for path, body in task.known_good_files.items()},
+        hidden_tests={f"{prefix}{path}": body for path, body in task.hidden_tests.items()},
+        incomplete_files={f"{prefix}{path}": body for path, body in task.incomplete_files.items()},
+        suite=task.suite,
+    )
+
+
+def _init_monorepo_from_tasks(repo: Path, scoped_tasks: list[BenchmarkTask]) -> None:
+    repo.mkdir(parents=True, exist_ok=True)
+    for scoped in scoped_tasks:
+        _write_files(repo, scoped.files)
+        _write_files(repo, scoped.tests)
+    env = {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    for cmd in (
+        ["git", "init", "-b", "main"],
+        ["git", "config", "user.name", "Eval Harness"],
+        ["git", "config", "user.email", "eval@example.com"],
+        ["git", "add", "."],
+        ["git", "commit", "-m", "base monorepo"],
+    ):
+        subprocess.run(cmd, cwd=repo, env=env, check=True, capture_output=True, timeout=15)  # noqa: S603
+
+
+async def _verify_parallel_worktree_outcomes(
+    monorepo: Path,
+    wt_root: Path,
+    scoped_tasks: list[BenchmarkTask],
+    queue: object,
+    worker: object,
+) -> None:
+    import re
+
+    from agent_forge.orchestration import TaskStatus, WorktreeState
+
+    for t in scoped_tasks:
+        assert await queue.get_status(t.id) == TaskStatus.COMPLETED  # type: ignore[attr-defined]
+    assert await queue.get_status("noop-task") == TaskStatus.FAILED  # type: ignore[attr-defined]
+
+    manager = worker.get_worktree_manager(monorepo)  # type: ignore[attr-defined]
+    assert manager is not None
+    noop_lease = manager.get_lease("noop-task")
+    assert noop_lease is not None
+    assert noop_lease.state == WorktreeState.REMOVED
+
+    for t in scoped_tasks:
+        lease = manager.get_lease(t.id)
+        assert lease is not None
+        assert lease.state == WorktreeState.COMMITTED
+        touched = re.findall(r"^diff --git a/(\S+) b/", lease.patch, flags=re.MULTILINE)
+        assert touched
+        assert all(path.startswith(f"{t.id}/") for path in touched), (
+            f"Cross-contamination in {t.id}: {touched}"
+        )
+
+    integrations = await manager.integrate_all()
+    assert [res.status for res in integrations] == ["merged"] * len(scoped_tasks)
+    for t in scoped_tasks:
+        _write_files(monorepo, t.hidden_tests)
+        check = subprocess.run(  # noqa: S603
+            [sys.executable, "-m", "unittest", "discover", "-s", f"{t.id}/tests", "-t", t.id, "-v"],
+            cwd=monorepo,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert check.returncode == 0, check.stdout + check.stderr
+
+    assert [info.path for info in await manager.list_worktrees()] == [monorepo.resolve()]
+    assert list(wt_root.iterdir()) == []
+    refs = subprocess.run(
+        ["git", "for-each-ref", "refs/heads/agent-forge/run/"],  # noqa: S607
+        cwd=monorepo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert refs.stdout.strip() == ""
+
+
+@pytest.mark.asyncio
+async def test_parallel_worktree_benchmark_tasks_zero_cross_contamination(
+    tmp_path: Path,
+) -> None:
+    """N M0 benchmark tasks run concurrently in isolated worktrees without cross-contamination."""
+    import asyncio
+
+    from agent_forge.agent.core import react_loop
+    from agent_forge.agent.models import AgentConfig, AgentRun
+    from agent_forge.agent.verification import VerificationWorkspace
+    from agent_forge.eval.corpus import resolve_tasks
+    from agent_forge.eval.deterministic import SubprocessEvalSandbox, _ScriptedEvalLLM
+    from agent_forge.orchestration import EventBus, InMemoryQueue, Task, TaskStatus, Worker
+    from agent_forge.sandbox.base import SandboxConfig
+    from agent_forge.tools import create_default_registry
+
+    scoped_tasks = [_scope_benchmark_task(task) for task in resolve_tasks(suite="smoke")]
+    monorepo = tmp_path / "monorepo"
+    wt_root = tmp_path / "worktrees"
+    _init_monorepo_from_tasks(monorepo, scoped_tasks)
+
+    by_id = {task.id: task for task in scoped_tasks}
+    tools = create_default_registry(load_plugins=False)
+    sandbox_cfg = SandboxConfig(
+        backend="subprocess-eval",
+        network_enabled=False,
+        writable_cache_mounts=False,
+        timeout_seconds=20,
+    )
+    active = 0
+    peak_active = 0
+
+    async def _run_isolated(qtask: Task) -> AgentRun:
+        nonlocal active, peak_active
+        active += 1
+        peak_active = max(peak_active, active)
+        try:
+            await asyncio.sleep(0.05)
+            is_noop = qtask.id == "noop-task"
+            bench_task = scoped_tasks[0] if is_noop else by_id[qtask.id]
+            mode = "noop" if is_noop else "oracle"
+            run = AgentRun(
+                id=qtask.id,
+                task=bench_task.prompt,
+                repo_path=qtask.repo_path,
+                config=AgentConfig(
+                    model=f"scripted-{mode}",
+                    provider="deterministic",
+                    max_iterations=10,
+                    max_tokens_per_run=40_000,
+                ),
+            )
+            llm = _ScriptedEvalLLM(bench_task, mode)
+            sandbox = SubprocessEvalSandbox()
+            with VerificationWorkspace(
+                qtask.repo_path,
+                bench_task.verify_command,
+                extra_verifier_files=bench_task.hidden_tests,
+            ) as workspace:
+                await sandbox.start(repo_path=str(workspace.workspace), config=sandbox_cfg)
+                try:
+
+                    async def _verify() -> object:
+                        return await workspace.verify(
+                            sandbox_cfg,
+                            sandbox,
+                            sandbox_factory=lambda _c: SubprocessEvalSandbox(),
+                        )
+
+                    await react_loop(run, llm, tools, sandbox, verify=_verify)
+                finally:
+                    await sandbox.stop()
+                if run.verification and run.verification.patch and not is_noop:
+                    subprocess.run(
+                        ["git", "apply", "-"],  # noqa: S607
+                        cwd=qtask.repo_path,
+                        input=run.verification.patch,
+                        text=True,
+                        check=True,
+                    )
+            return run
+        finally:
+            active -= 1
+
+    queue = InMemoryQueue()
+    worker = Worker(
+        queue,
+        EventBus(),
+        _run_isolated,
+        poll_interval=0.01,
+        max_concurrent_tasks=5,
+        worktree_isolation=True,
+        worktree_root=wt_root,
+    )
+    all_ids = [t.id for t in scoped_tasks] + ["noop-task"]
+    for tid in all_ids:
+        await queue.enqueue(
+            Task(id=tid, task_description=tid, repo_path=str(monorepo), config=None)
+        )
+
+    await worker.start()
+    for _ in range(300):
+        statuses = [await queue.get_status(tid) for tid in all_ids]
+        if all(s not in (TaskStatus.QUEUED, TaskStatus.PROCESSING) for s in statuses):
+            break
+        await asyncio.sleep(0.05)
+    await worker.stop()
+
+    assert peak_active >= 2
+    await _verify_parallel_worktree_outcomes(monorepo, wt_root, scoped_tasks, queue, worker)
+
+
+@pytest.mark.asyncio
+async def test_aborted_parallel_runs_leave_no_orphan_worktrees(tmp_path: Path) -> None:
+    """Cancelled, crashed, and cancelled-state parallel runs leave zero orphan worktrees."""
+    import asyncio
+
+    from agent_forge.agent.models import AgentConfig, AgentRun, RunState
+    from agent_forge.eval.corpus import resolve_tasks
+    from agent_forge.orchestration import EventBus, InMemoryQueue, Task, Worker
+
+    tasks = resolve_tasks(suite="smoke")
+    repo = materialize_task_repo(tasks[0], tmp_path / "repo")
+    wt_root = tmp_path / "worktrees"
+    slow_started = 0
+    both_slow = asyncio.Event()
+
+    async def _runner(qtask: Task) -> AgentRun:
+        nonlocal slow_started
+        wt = Path(qtask.repo_path)
+        (wt / f"scratch_{qtask.id}.txt").write_text("partial change\n", encoding="utf-8")
+        if qtask.id.startswith("slow-"):
+            slow_started += 1
+            if slow_started >= 2:
+                both_slow.set()
+            await asyncio.sleep(10)
+        if qtask.id == "raise-1":
+            msg = "unexpected crash"
+            raise RuntimeError(msg)
+        return AgentRun(
+            id=qtask.id,
+            task=qtask.task_description,
+            repo_path=qtask.repo_path,
+            config=AgentConfig(),
+            state=RunState.CANCELLED,
+        )
+
+    queue = InMemoryQueue()
+    bus = EventBus()
+    worker = Worker(
+        queue,
+        bus,
+        _runner,
+        poll_interval=0.01,
+        max_concurrent_tasks=4,
+        worktree_isolation=True,
+        worktree_root=wt_root,
+    )
+    for tid in ("slow-1", "slow-2", "raise-1", "cancelled-state-1"):
+        await queue.enqueue(Task(id=tid, task_description=tid, repo_path=str(repo), config=None))
+
+    await worker.start()
+    await asyncio.wait_for(both_slow.wait(), timeout=3.0)
+    await asyncio.sleep(0.1)
+    await worker.stop()
+
+    manager = worker.get_worktree_manager(repo)
+    assert manager is not None
+    assert [info.path for info in await manager.list_worktrees()] == [repo.resolve()]
+    assert list(wt_root.iterdir()) == []
+    refs = subprocess.run(
+        ["git", "for-each-ref", "refs/heads/agent-forge/run/"],  # noqa: S607
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert refs.stdout.strip() == ""
+
+
+@pytest.mark.asyncio
+async def test_deterministic_eval_parallel_concurrency_matches_gates() -> None:
+    """Running deterministic eval with max_concurrency > 1 preserves order and passes gates."""
+    report = await run_deterministic_eval(suite="smoke", max_concurrency=4)
+    assert check_deterministic_gates(report) == []
+    oracle = next(p for p in report.profiles if p.profile == "deterministic-oracle")
+    assert [res.task_id for res in oracle.results] == report.tasks
