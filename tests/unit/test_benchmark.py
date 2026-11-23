@@ -13,19 +13,24 @@ import pytest
 import respx
 from click.testing import CliRunner
 
-from agent_forge.agent.models import AgentRun, RunState, ToolInvocation
-from agent_forge.agent.verification import VerificationResult
+from agent_forge.agent.models import AgentConfig, AgentRun, RunState, ToolInvocation
+from agent_forge.agent.verification import VerificationResult, VerificationWorkspace
 from agent_forge.cli import main as cli_main
 from agent_forge.config import ForgeConfig, ModelProfileSettings
 from agent_forge.eval import (
+    BUILTIN_TASKS,
     BenchmarkReport,
     TaskAttemptResult,
     render_markdown_report,
+    resolve_tasks,
     run_benchmark,
+    save_attempt_trajectory,
     summarize_profile,
 )
-from agent_forge.llm.base import LLMConfig, LLMResponse, TokenUsage
+from agent_forge.eval.deterministic import SubprocessEvalSandbox
+from agent_forge.llm.base import LLMConfig, LLMResponse, Message, Role, TokenUsage
 from agent_forge.llm.qualification import probe_model, resolve_model_profile
+from agent_forge.sandbox.base import SandboxConfig
 from agent_forge.tools.base import ToolResult
 
 if TYPE_CHECKING:
@@ -350,3 +355,155 @@ class TestBenchmarkAggregationAndRunner:
         assert payload["schema_version"] == "benchmark-report-v1"
         assert json.loads(json_out.read_text(encoding="utf-8")) == payload
         assert "# Model Benchmark Report" in md_out.read_text(encoding="utf-8")
+
+    def test_corpus_tiers_and_cli_suite_and_trajectory_flags(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        all_tasks = resolve_tasks()
+        smoke_tasks = resolve_tasks(suite="smoke")
+        assert len(BUILTIN_TASKS) == 12
+        assert len(all_tasks) == 12
+        assert [t.id for t in smoke_tasks] == [
+            "fix-health-status",
+            "fix-pagination-offset",
+            "fix-multi-file-summary",
+            "fix-retry-backoff",
+        ]
+
+        (tmp_path / "agent-forge.toml").write_text(
+            '[model_profiles.gemini-candidate]\nprovider = "gemini"\nmodel = "gemini-2.5-flash"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        traj_dir = tmp_path / "trajectories"
+        fake_report = BenchmarkReport(
+            generated_at="2026-11-23T00:00:00+00:00",
+            harness_revision="abc1234",
+            sandbox_backend="bwrap",
+            tasks=[t.id for t in smoke_tasks],
+            profiles=[],
+        )
+        mock_bench = AsyncMock(return_value=fake_report)
+        with patch("agent_forge.eval.run_benchmark", mock_bench):
+            res = _runner().invoke(
+                cli_main,
+                ["models", "benchmark", "--suite", "smoke", "--trajectory-dir", str(traj_dir)],
+            )
+        assert res.exit_code == 0, res.output
+        kwargs = mock_bench.await_args.kwargs
+        assert kwargs["suite"] == "smoke"
+        assert kwargs["trajectory_dir"] == traj_dir
+
+    @pytest.mark.asyncio
+    async def test_verification_workspace_extra_verifier_files_and_path_guard(
+        self, tmp_path: Path
+    ) -> None:
+        import subprocess
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "calc.py").write_text("def add(a: int, b: int) -> int:\n    return 0\n")
+        for cmd in (
+            ["git", "init"],
+            ["git", "config", "user.name", "Test"],
+            ["git", "config", "user.email", "test@example.com"],
+            ["git", "add", "."],
+            ["git", "commit", "-m", "init"],
+        ):
+            subprocess.run(cmd, cwd=repo, check=True, capture_output=True)  # noqa: S603
+
+        cfg = SandboxConfig(backend="subprocess-eval", timeout_seconds=10)
+        with VerificationWorkspace(
+            str(repo),
+            "python3 -c 'import calc; assert calc.add(2, 3) == 5'",
+            extra_verifier_files={"tests/hidden.txt": "present"},
+        ) as ws:
+            sb = SubprocessEvalSandbox()
+            await sb.start(str(ws.workspace), cfg)
+            await sb.write_file(
+                "/workspace/calc.py", "def add(a: int, b: int) -> int:\n    return a + b\n"
+            )
+            res = await ws.verify(cfg, sb, sandbox_factory=lambda _c: SubprocessEvalSandbox())
+        assert res.passed
+        assert res.reason == "verified"
+
+        with VerificationWorkspace(
+            str(repo),
+            "python3 -c 'import sys; sys.exit(0)'",
+            extra_verifier_files={"../escape.txt": "bad"},
+        ) as bad_ws:
+            sb2 = SubprocessEvalSandbox()
+            await sb2.start(str(bad_ws.workspace), cfg)
+            await sb2.write_file(
+                "/workspace/calc.py", "def add(a: int, b: int) -> int:\n    return a + b\n"
+            )
+            bad_res = await bad_ws.verify(
+                cfg, sb2, sandbox_factory=lambda _c: SubprocessEvalSandbox()
+            )
+        assert not bad_res.passed
+        assert bad_res.reason == "verification_error"
+        assert "escapes verifier checkout" in bad_res.stderr
+
+    def test_save_attempt_trajectory_writes_jsonl(self, tmp_path: Path) -> None:
+        run = AgentRun(
+            task="Fix bug",
+            repo_path=str(tmp_path),
+            config=AgentConfig(model="test-model"),
+            iterations=1,
+            messages=[
+                Message(role=Role.USER, content="Fix bug"),
+                Message(role=Role.ASSISTANT, content="Done"),
+            ],
+            tool_invocations=[
+                ToolInvocation(
+                    tool_name="read_file",
+                    arguments={"path": "/workspace/app.py"},
+                    result=ToolResult(output="ok", exit_code=0, execution_time_ms=3),
+                    iteration=1,
+                    timestamp=datetime.now(UTC),
+                    duration_ms=3,
+                )
+            ],
+            verification=VerificationResult(
+                base_revision="deadbeef",
+                patch="diff --git a/app.py b/app.py\n",
+                reason="verified",
+                command="pytest",
+                exit_code=0,
+            ),
+        )
+        attempt = TaskAttemptResult(
+            task_id="fix-health-status",
+            attempt=1,
+            status="passed",
+            verified=True,
+            latency_seconds=0.5,
+            iterations=1,
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            estimated_cost_usd=0.0,
+            tool_calls=1,
+            tool_errors=0,
+            patch_applied=True,
+            run_id=run.id,
+            reason="verified",
+        )
+        out = save_attempt_trajectory(
+            tmp_path / "traj" / "sample.jsonl",
+            profile="p1",
+            task_id="fix-health-status",
+            attempt=1,
+            run=run,
+            result=attempt,
+        )
+        rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+        assert [row["kind"] for row in rows] == [
+            "run_header",
+            "message",
+            "message",
+            "tool_invocation",
+            "verification",
+            "attempt_result",
+        ]
+        assert rows[-1]["patch_applied"] is True
