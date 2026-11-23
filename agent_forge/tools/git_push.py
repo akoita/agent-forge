@@ -139,7 +139,7 @@ class GitPushTool(Tool):
         repo_root: Path,
         remote: str,
         started: float,
-    ) -> str | None | ToolResult:
+    ) -> str | ToolResult | None:
         code, remote_url, err = await _run_host_git(repo_root, "remote", "get-url", remote)
         if code != 0:
             return self._error(started, err.strip() or f"Unknown git remote: '{remote}'.")
