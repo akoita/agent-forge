@@ -1278,3 +1278,219 @@ async def test_mcp_filesystem_server_usable_in_run_with_policy_gated_approvals(
         inv.tool_name == "mcp__slowsrv__ping" and inv.result.metadata.get("mcp_circuit_open")
         for inv in run.tool_invocations
     )
+
+
+def _build_acp_eval_llm(task: BenchmarkTask) -> object:
+    from agent_forge.llm.base import (
+        LLMConfig,
+        LLMProvider,
+        LLMResponse,
+        Message,
+        TokenUsage,
+        ToolCall,
+    )
+
+    class _ACPEditorEvalLLM(LLMProvider):
+        def __init__(self) -> None:
+            self._turn = 0
+            self._turns = [
+                LLMResponse(
+                    content=None,
+                    tool_calls=[ToolCall(id="a1", name="read_file", arguments={"path": "app.py"})],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="a2", name="run_shell", arguments={"command": "rm -f scratch.tmp"}
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="a3", name="run_shell", arguments={"command": "rm -f scratch.tmp"}
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="a4",
+                            name="write_file",
+                            arguments={
+                                "path": "app.py",
+                                "content": task.known_good_files["app.py"],
+                            },
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+                LLMResponse(
+                    content="Fixed app.py health handler.",
+                    tool_calls=[],
+                    finish_reason="stop",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+            ]
+
+        async def complete(
+            self,
+            messages: list[Message],
+            tools: list[object] | None = None,
+            config: LLMConfig | None = None,
+        ) -> LLMResponse:
+            del messages, tools, config
+            resp = self._turns[min(self._turn, len(self._turns) - 1)]
+            self._turn += 1
+            return resp
+
+        async def stream(self, messages: list[Message], **kwargs: object) -> object:
+            del kwargs
+            yield await self.complete(messages)
+
+    return _ACPEditorEvalLLM()
+
+
+async def _drive_acp_eval_turn(
+    reader: object,
+    writer: object,
+    sid: str,
+    prompt: str,
+) -> tuple[list[dict[str, object]], int, dict[str, object]]:
+    import asyncio
+
+    await reader.send(  # type: ignore[attr-defined]
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "session/prompt",
+            "params": {"sessionId": sid, "prompt": [{"type": "text", "text": prompt}]},
+        }
+    )
+    updates: list[dict[str, object]] = []
+    perm_count = 0
+    while True:
+        msg = await asyncio.wait_for(writer.msgs.get(), timeout=10.0)  # type: ignore[attr-defined]
+        if msg.get("method") == "session/update":
+            updates.append(msg["params"]["update"])
+        elif msg.get("method") == "session/request_permission":
+            perm_count += 1
+            opt = "reject_once" if perm_count == 1 else "allow_once"
+            await reader.send(  # type: ignore[attr-defined]
+                {
+                    "jsonrpc": "2.0",
+                    "id": msg["id"],
+                    "result": {"outcome": {"outcome": "selected", "optionId": opt}},
+                }
+            )
+        elif msg.get("id") == 3:
+            return updates, perm_count, msg
+
+
+class _EvalPipeReader:
+    def __init__(self) -> None:
+        import asyncio
+
+        self._q: asyncio.Queue[bytes] = asyncio.Queue()
+
+    async def send(self, obj: dict[str, object]) -> None:
+        await self._q.put((json.dumps(obj) + "\n").encode("utf-8"))
+
+    async def close(self) -> None:
+        await self._q.put(b"")
+
+    async def readline(self) -> bytes:
+        return await self._q.get()
+
+
+class _EvalPipeWriter:
+    def __init__(self) -> None:
+        import asyncio
+
+        self.msgs: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        self._buf = bytearray()
+
+    def write(self, data: bytes) -> None:
+        self._buf.extend(data)
+        while b"\n" in self._buf:
+            line, _, rest = self._buf.partition(b"\n")
+            self._buf = bytearray(rest)
+            text = line.decode("utf-8").strip()
+            if text:
+                self.msgs.put_nowait(json.loads(text))
+
+    async def drain(self) -> None:
+        import asyncio
+
+        await asyncio.sleep(0)
+
+    def close(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_acp_editor_session_streams_progress_and_approves_gated_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exit criterion: ACP editor starts run, watches stream updates, and approves gated action."""
+    import asyncio
+    from unittest.mock import patch
+
+    from agent_forge.acp import ACP_PROTOCOL_VERSION, ACPServer
+    from agent_forge.eval.corpus import resolve_tasks
+    from agent_forge.eval.deterministic import SubprocessEvalSandbox
+
+    monkeypatch.setattr("agent_forge.agent.persistence.USER_CONFIG_DIR", tmp_path / "home")
+    monkeypatch.setattr("agent_forge.agent.core.save_summary", lambda *_a: tmp_path / "s.json")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-acp-key")
+
+    task = resolve_tasks(task_ids=["fix-health-status"])[0]
+    repo = materialize_task_repo(task, tmp_path / "repo")
+    scratch = repo / "scratch.tmp"
+    scratch.write_text("to-remove", encoding="utf-8")
+
+    reader = _EvalPipeReader()
+    writer = _EvalPipeWriter()
+    server = ACPServer(
+        approval_mode="prompt",
+        sandbox_factory=lambda _c: SubprocessEvalSandbox(),
+        provider_factory=lambda _p, _k: _build_acp_eval_llm(task),
+    )
+
+    with patch("agent_forge.agent.verification.create_sandbox", lambda _c: SubprocessEvalSandbox()):
+        srv_task = asyncio.create_task(server.serve(reader, writer))
+        await reader.send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        init_msg = await writer.msgs.get()
+        assert init_msg["result"]["protocolVersion"] == ACP_PROTOCOL_VERSION  # type: ignore[index]
+
+        await reader.send(
+            {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"cwd": str(repo)}}
+        )
+        sid = (await writer.msgs.get())["result"]["sessionId"]  # type: ignore[index]
+        updates, perm_count, prompt_result = await _drive_acp_eval_turn(
+            reader, writer, sid, task.prompt
+        )
+        await reader.close()
+        await srv_task
+
+    assert perm_count == 2
+    assert prompt_result["result"]["stopReason"] == "end_turn"  # type: ignore[index]
+    assert not scratch.exists()
+    assert any(u.get("sessionUpdate") == "tool_call" for u in updates)
+    assert any(u.get("sessionUpdate") == "tool_call_update" for u in updates)
+    assert any(u.get("sessionUpdate") == "agent_message_chunk" for u in updates)
+
+    _write_files(repo, task.hidden_tests)
+    check = _run_unittest(repo)
+    assert check.returncode == 0, check.stdout + check.stderr
