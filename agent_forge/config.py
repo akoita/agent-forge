@@ -146,6 +146,40 @@ class RoutingSettings(BaseModel):
     escalate_on_failures: int = 2
 
 
+class MCPServerSettings(BaseModel):
+    """Configuration for a single external MCP tool server."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    enabled: bool = True
+    transport: Literal["stdio", "http"] = "stdio"
+    command: str = ""
+    args: list[str] = Field(default_factory=list)
+    cwd: str = ""
+    env: dict[str, str] = Field(default_factory=dict)
+    env_passthrough: list[str] = Field(default_factory=list)
+    url: str = ""
+    headers: dict[str, str] = Field(default_factory=dict)
+    auth_env: str = ""
+    auth_scheme: str = "Bearer"
+    allow_tools: list[str] = Field(default_factory=list)
+    deny_tools: list[str] = Field(default_factory=list)
+    approval_mode: Literal["inherit", "auto", "prompt", "deny"] = "inherit"
+    allow_read_only_without_approval: bool = False
+    timeout_seconds: float = Field(default=30.0, gt=0)
+    startup_timeout_seconds: float = Field(default=15.0, gt=0)
+    failure_threshold: int = Field(default=3, ge=1)
+    recovery_timeout_seconds: float = Field(default=30.0, gt=0)
+    max_output_chars: int = Field(default=32_768, ge=256)
+
+
+class MCPSettings(BaseModel):
+    """Settings for external Model Context Protocol (MCP) servers."""
+
+    enabled: bool = True
+    servers: dict[str, MCPServerSettings] = Field(default_factory=dict)
+
+
 def _default_providers() -> dict[str, ProviderSettings]:
     return {
         "gemini": ProviderSettings(
@@ -176,6 +210,7 @@ class ForgeConfig(BaseModel):
     agent: AgentSettings = Field(default_factory=AgentSettings)
     context: ContextSettings = Field(default_factory=ContextSettings)
     routing: RoutingSettings = Field(default_factory=RoutingSettings)
+    mcp: MCPSettings = Field(default_factory=MCPSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     queue: QueueSettings = Field(default_factory=QueueSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
@@ -231,6 +266,7 @@ _SECTION_MODELS: dict[str, type[BaseModel]] = {
     "agent": AgentSettings,
     "context": ContextSettings,
     "routing": RoutingSettings,
+    "mcp": MCPSettings,
     "sandbox": SandboxSettings,
     "queue": QueueSettings,
     "logging": LoggingSettings,

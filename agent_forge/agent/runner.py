@@ -240,6 +240,20 @@ def _create_provider_from_config(
     return default_provider_factory(provider_name, api_key, **kwargs)
 
 
+async def _attach_mcp_tools(cfg: Any, tools: ToolRegistry) -> Any:
+    """Connect configured MCP servers and register their tools into *tools*."""
+    from agent_forge.config import MCPSettings
+    from agent_forge.tools.mcp import MCPClientManager
+
+    raw_mcp = getattr(cfg, "mcp", None)
+    if not isinstance(raw_mcp, MCPSettings) or not raw_mcp.enabled or not raw_mcp.servers:
+        return None
+    manager = MCPClientManager.from_settings(raw_mcp)
+    await manager.connect_all()
+    manager.register_tools(tools)
+    return manager
+
+
 async def run_agent_task(
     task: str,
     repo_path: str,
@@ -257,6 +271,7 @@ async def run_agent_task(
     cancellation_token: Any = None,
     completion_contract: Any = None,
     context_engine: ContextEngine | None = None,
+    approval_gate: Any = None,
     on_sandbox_started: Callable[[Sandbox], None] | None = None,
     post_run_hook: PostRunHook | None = None,
     tools_factory: Callable[[], ToolRegistry] | None = None,
@@ -272,62 +287,68 @@ async def run_agent_task(
     else:
         tools = tools_factory()
 
-    active_context = (
-        context_engine
-        if context_engine is not None
-        else _resolve_context_engine_for_config(repo_path, task, cfg, agent_config)
-    )
-    sandbox_config = build_sandbox_config(cfg)
-    agent_config.system_prompt = render_task_system_prompt(
-        task,
-        tools,
-        sandbox_config,
-        repo_path=repo_path,
-        context_engine=active_context,
-        prompt_scope=prompt_scope,
-        report_schema=report_schema,
-        discover_extensions=discover_extensions,
-    )
-    run_kwargs: dict[str, Any] = {
-        "task": task,
-        "repo_path": repo_path,
-        "config": agent_config,
-    }
-    if run_id is not None:
-        run_kwargs["id"] = run_id
-    agent_run = AgentRun(**run_kwargs)
+    mcp_manager = await _attach_mcp_tools(cfg, tools)
+    try:
+        active_context = (
+            context_engine
+            if context_engine is not None
+            else _resolve_context_engine_for_config(repo_path, task, cfg, agent_config)
+        )
+        sandbox_config = build_sandbox_config(cfg)
+        agent_config.system_prompt = render_task_system_prompt(
+            task,
+            tools,
+            sandbox_config,
+            repo_path=repo_path,
+            context_engine=active_context,
+            prompt_scope=prompt_scope,
+            report_schema=report_schema,
+            discover_extensions=discover_extensions,
+        )
+        run_kwargs: dict[str, Any] = {
+            "task": task,
+            "repo_path": repo_path,
+            "config": agent_config,
+        }
+        if run_id is not None:
+            run_kwargs["id"] = run_id
+        agent_run = AgentRun(**run_kwargs)
 
-    if sandbox_factory is None:
-        from agent_forge.sandbox.factory import create_sandbox as default_sandbox_factory
+        if sandbox_factory is None:
+            from agent_forge.sandbox.factory import create_sandbox as default_sandbox_factory
 
-        sandbox = default_sandbox_factory(sandbox_config)
-    else:
-        sandbox = sandbox_factory(sandbox_config)
-
-    if provider_factory is None:
-        from agent_forge.config import RoutingSettings
-        from agent_forge.llm.router import RoutingLLMProvider
-
-        routing_cfg = getattr(cfg, "routing", None)
-        if isinstance(routing_cfg, RoutingSettings) and routing_cfg.enabled:
-            llm: LLMProvider = RoutingLLMProvider.from_config(cfg)
+            sandbox = default_sandbox_factory(sandbox_config)
         else:
-            llm = _create_provider_from_config(cfg, provider_name, api_key)
-    else:
-        llm = provider_factory(provider_name, api_key)
+            sandbox = sandbox_factory(sandbox_config)
 
-    return await execute_agent_run(
-        agent_run,
-        sandbox_config,
-        llm,
-        tools,
-        sandbox,
-        event_bus=event_bus,
-        emit_lifecycle=emit_lifecycle,
-        cancellation_token=cancellation_token,
-        completion_contract=completion_contract,
-        context_engine=active_context,
-        on_sandbox_started=on_sandbox_started,
-        post_run_hook=post_run_hook,
-        react_loop_fn=react_loop_fn,
-    )
+        if provider_factory is None:
+            from agent_forge.config import RoutingSettings
+            from agent_forge.llm.router import RoutingLLMProvider
+
+            routing_cfg = getattr(cfg, "routing", None)
+            if isinstance(routing_cfg, RoutingSettings) and routing_cfg.enabled:
+                llm: LLMProvider = RoutingLLMProvider.from_config(cfg)
+            else:
+                llm = _create_provider_from_config(cfg, provider_name, api_key)
+        else:
+            llm = provider_factory(provider_name, api_key)
+
+        return await execute_agent_run(
+            agent_run,
+            sandbox_config,
+            llm,
+            tools,
+            sandbox,
+            event_bus=event_bus,
+            emit_lifecycle=emit_lifecycle,
+            cancellation_token=cancellation_token,
+            completion_contract=completion_contract,
+            approval_gate=approval_gate,
+            context_engine=active_context,
+            on_sandbox_started=on_sandbox_started,
+            post_run_hook=post_run_hook,
+            react_loop_fn=react_loop_fn,
+        )
+    finally:
+        if mcp_manager is not None:
+            await mcp_manager.close()

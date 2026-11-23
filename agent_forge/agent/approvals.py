@@ -8,6 +8,12 @@ from dataclasses import dataclass
 from typing import Any
 
 VALID_APPROVAL_MODES = frozenset({"auto", "prompt", "deny"})
+_APPROVAL_STRICTNESS: dict[str, int] = {"auto": 0, "prompt": 1, "deny": 2}
+_MUTATING_MCP_NAME_RE = re.compile(
+    r"(?:^|_)(?:write|edit|delete|remove|create|update|put|post|patch|"
+    r"push|merge|exec|run|shell|drop|destroy|send|close|archive|move|mkdir)(?:_|$)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -93,16 +99,62 @@ def _classify_shell_command(tool_name: str, arguments: dict[str, Any]) -> Approv
     return None
 
 
+def _classify_mcp_tool(
+    tool_name: str,
+    arguments: dict[str, Any],
+    tool: Any,
+) -> ApprovalRequest | None:
+    if getattr(tool, "is_mcp_tool", False) is not True:
+        return None
+    annotations = getattr(tool, "annotations", None)
+    allow_ro = getattr(tool, "allow_read_only_without_approval", False) is True
+    read_only_hint = getattr(annotations, "read_only", False) is True
+    destructive_hint = getattr(annotations, "destructive", None)
+    if read_only_hint and destructive_hint is not True and allow_ro:
+        return None
+    remote_name = str(getattr(tool, "remote_name", tool_name))
+    server_name = str(getattr(tool, "server_name", "external"))
+    is_destructive = destructive_hint is True or bool(_MUTATING_MCP_NAME_RE.search(remote_name))
+    category = "mcp_destructive" if is_destructive else "mcp_external"
+    reason = f"External MCP tool '{remote_name}' on server '{server_name}'."
+    return ApprovalRequest(
+        tool_name=tool_name,
+        arguments=arguments,
+        category=category,
+        reason=reason,
+    )
+
+
 def classify_destructive_tool_call(
     tool_name: str,
     arguments: dict[str, Any],
+    *,
+    tool: Any = None,
 ) -> ApprovalRequest | None:
-    """Return an ``ApprovalRequest`` if a tool call is destructive, else ``None``."""
+    """Return an ``ApprovalRequest`` if a tool call is destructive or gated, else ``None``."""
+    if tool is not None:
+        mcp_req = _classify_mcp_tool(tool_name, arguments, tool)
+        if mcp_req is not None:
+            return mcp_req
     if tool_name == "apply_patch":
         return _classify_apply_patch(arguments)
     if tool_name in ("run_shell", "shell_start"):
         return _classify_shell_command(tool_name, arguments)
     return None
+
+
+def _resolve_effective_mode(global_mode: str, tool: Any) -> str:
+    if tool is None:
+        return global_mode
+    tool_mode = getattr(tool, "approval_mode", "inherit")
+    if not isinstance(tool_mode, str):
+        return global_mode
+    normalized = tool_mode.strip().lower()
+    if normalized not in _APPROVAL_STRICTNESS:
+        return global_mode
+    if _APPROVAL_STRICTNESS[normalized] > _APPROVAL_STRICTNESS[global_mode]:
+        return normalized
+    return global_mode
 
 
 class ApprovalGate:
@@ -130,19 +182,22 @@ class ApprovalGate:
         self,
         tool_name: str,
         arguments: dict[str, Any],
+        *,
+        tool: Any = None,
     ) -> tuple[ApprovalRequest | None, ApprovalDecision | None]:
         """Evaluate whether *tool_name* with *arguments* may execute."""
-        request = classify_destructive_tool_call(tool_name, arguments)
+        request = classify_destructive_tool_call(tool_name, arguments, tool=tool)
         if request is None:
             return None, None
 
-        if self._mode == "auto":
+        effective_mode = _resolve_effective_mode(self._mode, tool)
+        if effective_mode == "auto":
             return request, ApprovalDecision(approved=True, decided_by="policy:auto")
-        if self._mode == "deny":
+        if effective_mode == "deny":
             return request, ApprovalDecision(
                 approved=False,
                 decided_by="policy:deny",
-                reason="Destructive operations are denied by policy.",
+                reason="Operation denied by policy.",
             )
 
         if self._callback is None:
