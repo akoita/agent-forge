@@ -121,6 +121,8 @@ When running parallel tasks or deterministic eval suites concurrently (`python -
 
 External MCP client integration (stdio + Streamable HTTP transports, `ApprovalGate` enforcement with no blanket trust, timeout isolation, and circuit breaking) is covered in `tests/unit/test_mcp_client.py` and `tests/eval/test_benchmark_corpus.py`. Core suites run with zero external MCP servers configured.
 
+ACP server JSON-RPC framing, `StreamEvent` -> `session/update` mapping, bidirectional `session/request_permission` approval handling, cancellation, and `agent-forge acp` stdio isolation are tested in `tests/unit/test_acp_server.py` and `tests/eval/test_benchmark_corpus.py`.
+
 ## Running Tests
 
 ```bash

@@ -2137,5 +2137,60 @@ def mcp_inspect(server_name: str | None, output_format: str) -> None:
             )
 
 
+# ---------------------------------------------------------------------------
+# acp
+# ---------------------------------------------------------------------------
+
+
+@main.command("acp")
+@click.option("--provider", default=None, help="Override configured LLM provider.")
+@click.option("--model", default=None, help="Override configured LLM model.")
+@click.option("--base-url", default=None, help="Base URL for OpenAI-compatible endpoints.")
+@click.option("--model-profile", default=None, help="Named model profile from config.")
+@click.option(
+    "--approval-mode",
+    default="prompt",
+    type=click.Choice(["prompt", "auto", "deny"], case_sensitive=False),
+    show_default=True,
+    help="Approval policy for gated operations in ACP sessions.",
+)
+@click.option("--max-iterations", type=int, default=None, help="Override max iterations.")
+@click.option("--sandbox-backend", default=None, help="Override sandbox runtime backend.")
+def acp_serve(
+    provider: str | None,
+    model: str | None,
+    base_url: str | None,
+    model_profile: str | None,
+    approval_mode: str,
+    max_iterations: int | None,
+    sandbox_backend: str | None,
+) -> None:
+    """Run Agent Forge as an Agent Client Protocol (ACP) stdio server for editors."""
+    from agent_forge.acp import ACPServer
+
+    cfg = load_config(
+        cli_overrides=_build_cli_overrides(
+            model=model,
+            provider=provider,
+            max_iterations=max_iterations,
+            sandbox_backend=sandbox_backend,
+        )
+    )
+    _apply_model_profile(cfg, model_profile)
+    active_provider = cfg.agent.default_provider
+    if base_url is not None and active_provider in cfg.providers:
+        cfg.providers[active_provider].base_url = base_url.strip()
+
+    server = ACPServer(
+        config=cfg,
+        approval_mode=approval_mode.lower(),
+        provider_override=provider,
+        model_override=model,
+        sandbox_backend_override=sandbox_backend,
+        max_iterations_override=max_iterations,
+    )
+    asyncio.run(server.serve_stdio())
+
+
 if __name__ == "__main__":
     main()
