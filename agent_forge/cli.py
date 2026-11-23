@@ -643,6 +643,7 @@ async def _run_agent(
     from agent_forge.agent.contracts import resolve_completion_contract
     from agent_forge.agent.models import AgentRun
     from agent_forge.agent.runner import (
+        _attach_mcp_tools,
         _resolve_context_engine_for_config,
         render_task_system_prompt,
     )
@@ -661,30 +662,35 @@ async def _run_agent(
 
     event_bus = EventBus()
     tools = create_default_registry()
-    agent_config.system_prompt = render_task_system_prompt(
-        task,
-        tools,
-        sandbox_config,
-        repo_path=repo,
-        context_engine=context_engine,
-        prompt_scope=prompt_scope,
-        discover_extensions=True,
-    )
-    agent_run = AgentRun(task=task, repo_path=repo, config=agent_config)
-    ws_kwargs: dict[str, Any] = {"verify_command": verify_command}
-    if completion_contract is not None:
-        ws_kwargs["completion_contract"] = completion_contract
-    if context_engine is not None:
-        ws_kwargs["context_engine"] = context_engine
-    return await _execute_with_workspace(
-        agent_run,
-        cfg,
-        provider_name,
-        api_key,
-        tools,
-        event_bus,
-        **ws_kwargs,
-    )
+    mcp_manager = await _attach_mcp_tools(cfg, tools)
+    try:
+        agent_config.system_prompt = render_task_system_prompt(
+            task,
+            tools,
+            sandbox_config,
+            repo_path=repo,
+            context_engine=context_engine,
+            prompt_scope=prompt_scope,
+            discover_extensions=True,
+        )
+        agent_run = AgentRun(task=task, repo_path=repo, config=agent_config)
+        ws_kwargs: dict[str, Any] = {"verify_command": verify_command}
+        if completion_contract is not None:
+            ws_kwargs["completion_contract"] = completion_contract
+        if context_engine is not None:
+            ws_kwargs["context_engine"] = context_engine
+        return await _execute_with_workspace(
+            agent_run,
+            cfg,
+            provider_name,
+            api_key,
+            tools,
+            event_bus,
+            **ws_kwargs,
+        )
+    finally:
+        if mcp_manager is not None:
+            await mcp_manager.close()
 
 
 def _make_checkpoint_callback(
@@ -2016,6 +2022,119 @@ def worktrees_integrate(
         sys.exit(1)
     err_console.print(f"[red]Integration failed:[/red] {result.detail}")
     sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# mcp
+# ---------------------------------------------------------------------------
+
+
+@main.group()
+def mcp() -> None:
+    """Inspect external MCP tool servers configured in agent-forge.toml."""
+
+
+@mcp.command("list")
+def mcp_list() -> None:
+    """List configured external MCP servers."""
+    cfg = load_config()
+    if not cfg.mcp.servers:
+        console.print("[dim]No MCP servers configured.[/dim]")
+        return
+    table = Table(title="Configured MCP Servers")
+    table.add_column("Name", style="cyan")
+    table.add_column("Transport")
+    table.add_column("Enabled", justify="center")
+    table.add_column("Approval")
+    table.add_column("Endpoint / Command")
+    for name, srv in sorted(cfg.mcp.servers.items()):
+        endpoint = (
+            srv.url if srv.transport == "http" else " ".join([srv.command, *srv.args]).strip()
+        )
+        table.add_row(
+            name,
+            srv.transport,
+            "yes" if (cfg.mcp.enabled and srv.enabled) else "no",
+            srv.approval_mode,
+            endpoint or "-",
+        )
+    console.print(table)
+
+
+async def _inspect_mcp_servers(server_name: str | None) -> dict[str, Any]:
+    from agent_forge.config import MCPSettings
+    from agent_forge.tools.mcp import MCPClientManager
+
+    cfg = load_config()
+    if server_name is not None:
+        if server_name not in cfg.mcp.servers:
+            msg = f"Unknown MCP server: {server_name}"
+            raise KeyError(msg)
+        selected = MCPSettings(enabled=True, servers={server_name: cfg.mcp.servers[server_name]})
+    else:
+        selected = cfg.mcp
+
+    manager = MCPClientManager.from_settings(selected)
+    async with manager:
+        statuses = manager.statuses()
+        server_rows = [
+            {
+                "name": st.name,
+                "transport": st.transport,
+                "connected": st.connected,
+                "tool_count": st.tool_count,
+                "circuit_state": st.circuit_state,
+                "error": st.error,
+                "tools": [
+                    {
+                        "name": desc.registered_name,
+                        "remote_name": desc.remote_name,
+                        "read_only_hint": desc.annotations.read_only,
+                        "destructive_hint": desc.annotations.destructive,
+                    }
+                    for desc in manager.clients[st.name].tools
+                ],
+            }
+            for st in statuses
+        ]
+    return {"mcp_enabled": cfg.mcp.enabled, "servers": server_rows}
+
+
+@mcp.command("inspect")
+@click.argument("server_name", required=False)
+@click.option(
+    "--output-format",
+    "output_format",
+    default="text",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    show_default=True,
+)
+def mcp_inspect(server_name: str | None, output_format: str) -> None:
+    """Connect to configured MCP servers and report discovered tools and health."""
+    try:
+        payload = asyncio.run(_inspect_mcp_servers(server_name))
+    except KeyError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+
+    if output_format.lower() == "json":
+        console.print(json.dumps(payload, indent=2))
+        return
+
+    servers = payload["servers"]
+    if not servers:
+        console.print("[dim]No enabled MCP servers to inspect.[/dim]")
+        return
+    for srv in servers:
+        state_badge = "[green]connected[/green]" if srv["connected"] else "[red]error[/red]"
+        console.print(f"[bold]{srv['name']}[/bold] ({srv['transport']}) — {state_badge}")
+        if srv["error"]:
+            console.print(f"  [red]error:[/red] {srv['error']}")
+        for tool in srv["tools"]:
+            console.print(
+                f"  - [cyan]{tool['name']}[/cyan] (remote: {tool['remote_name']}, "
+                f"read_only={tool['read_only_hint']}, destructive={tool['destructive_hint']})"
+            )
 
 
 if __name__ == "__main__":

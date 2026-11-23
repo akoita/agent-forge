@@ -119,6 +119,8 @@ exit code. Use `agent-forge status <run-id>` to inspect the saved result.
 
 When running parallel tasks or deterministic eval suites concurrently (`python -m agent_forge.eval --suite smoke --concurrency 4`), each run executes in its own isolated checkout or Git worktree (`WorktreeManager`) so concurrent diffs never cross-contaminate and aborted runs leave no orphan worktrees (`tests/unit/test_worktree_isolation.py`, `tests/eval/test_benchmark_corpus.py`).
 
+External MCP client integration (stdio + Streamable HTTP transports, `ApprovalGate` enforcement with no blanket trust, timeout isolation, and circuit breaking) is covered in `tests/unit/test_mcp_client.py` and `tests/eval/test_benchmark_corpus.py`. Core suites run with zero external MCP servers configured.
+
 ## Running Tests
 
 ```bash

@@ -458,6 +458,10 @@ class ToolRegistry:
         return [t.to_definition() for t in self._tools.values()]
 ```
 
+#### External MCP Tool Client
+
+`MCPClientManager` (`agent_forge/tools/mcp.py`) discovers `[mcp.servers.<name>]` entries from configuration, connects over `stdio` or Streamable `http` (`application/json` + `text/event-stream` SSE), ingests remote JSON Schemas into `ToolRegistry` as `mcp__<server>__<tool>`, routes every invocation through `ApprovalGate` with no blanket trust, and isolates failures with per-call timeouts and a three-state `MCPCircuitBreaker`. CLI operators inspect configured servers with `agent-forge mcp list` and `agent-forge mcp inspect`.
+
 ---
 
 ### 4.3 Sandbox Runtime
@@ -1229,6 +1233,21 @@ api_key_required = false
 provider = "openai"
 model = "gpt-5.4"
 # Optional: api_mode = "auto", base_url = "", api_key_required = true, capabilities = { parallel_tool_calls = true }
+
+[mcp]
+enabled = true
+
+[mcp.servers.filesystem]
+transport = "stdio"                # "stdio" or "http"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+approval_mode = "inherit"          # "inherit", "auto", "prompt", or "deny"
+allow_read_only_without_approval = false
+timeout_seconds = 30.0
+startup_timeout_seconds = 15.0
+failure_threshold = 3
+recovery_timeout_seconds = 30.0
+max_output_chars = 32768
 ```
 
 ### 5.2 Run Persistence
@@ -1291,6 +1310,7 @@ Format: `AGENT_FORGE_{SECTION}_{KEY}` (uppercase, underscored).
 | `AGENT_FORGE_QUEUE_WORKTREE_BRANCH_PREFIX` | `queue.worktree_branch_prefix` |
 | `AGENT_FORGE_QUEUE_AUTO_REMOVE_UNCHANGED_WORKTREES` | `queue.auto_remove_unchanged_worktrees` |
 | `AGENT_FORGE_QUEUE_MERGE_STRATEGY` | `queue.merge_strategy` |
+| `AGENT_FORGE_MCP_ENABLED`          | `mcp.enabled`          |
 | `AGENT_FORGE_SERVICE_AUTH_ENABLED` | `service.auth_enabled` |
 | `AGENT_FORGE_SERVICE_PORT`         | `service.port`         |
 | `GEMINI_API_KEY`                   | (direct, not prefixed) |

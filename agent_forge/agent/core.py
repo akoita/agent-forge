@@ -771,6 +771,8 @@ def _can_execute_batch_in_parallel(
             tool_obj = tools.get(tool_call.name)
         except KeyError:
             return False
+        if getattr(tool_obj, "is_mcp_tool", False) is True:
+            return False
         if is_side_effecting_tool(tool_call.name, tool_obj):
             return False
     return True
@@ -1290,14 +1292,25 @@ async def _check_approval(
     idempotency_key: str,
     side_effecting: bool,
     journal: RunJournal,
+    tool: object = None,
 ) -> bool:
     """Evaluate destructive-operation approval; record denial if rejected."""
+    from agent_forge.agent.approvals import ApprovalGate as _ApprovalGate
     from agent_forge.tools.base import ToolResult
 
-    if approval_gate is None:
-        return True
+    active_gate = approval_gate
+    if active_gate is None:
+        tool_mode = getattr(tool, "approval_mode", "inherit")
+        if isinstance(tool_mode, str) and tool_mode.strip().lower() in ("prompt", "deny"):
+            active_gate = _ApprovalGate(mode=tool_mode)
+        else:
+            return True
 
-    request, decision = await approval_gate.evaluate(tool_call.name, dict(tool_call.arguments))
+    request, decision = await active_gate.evaluate(
+        tool_call.name,
+        dict(tool_call.arguments),
+        tool=tool,
+    )
     if request is None or decision is None:
         return True
 
@@ -1440,6 +1453,7 @@ async def _execute_tool_call(
         idempotency_key=idempotency_key,
         side_effecting=side_effecting,
         journal=journal,
+        tool=tool,
     ):
         return
 
