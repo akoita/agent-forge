@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from agent_forge.agent.journal import replay_journal
 from agent_forge.eval import (
     BUILTIN_TASKS,
     BenchmarkTask,
@@ -135,18 +136,29 @@ async def test_deterministic_eval_smoke_gates_and_trajectories(tmp_path: Path) -
     assert by_profile["deterministic-incomplete"].verified_fixes == 0
 
     for summary in report.profiles:
+        expected_final = "completed" if summary.profile == "deterministic-oracle" else "failed"
         for attempt in summary.results:
             assert attempt.trajectory_path is not None
             traj_file = (
                 tmp_path / "trajectories" / f"{summary.profile}__{attempt.task_id}__attempt-1.jsonl"
             )
             assert traj_file.is_file()
-            kinds = [
-                json.loads(line)["kind"]
-                for line in traj_file.read_text(encoding="utf-8").splitlines()
+            entries = [
+                json.loads(line) for line in traj_file.read_text(encoding="utf-8").splitlines()
             ]
-            assert "run_header" in kinds
-            assert "message" in kinds
-            assert "tool_invocation" in kinds
-            assert "verification" in kinds
+            assert all(row["schema_version"] == "run-journal-v1" for row in entries)
+            kinds = [row["kind"] for row in entries]
+            assert "run_started" in kinds
+            assert "state_transition" in kinds
+            assert "message_recorded" in kinds
+            assert "action_requested" in kinds
+            assert "action_result" in kinds
+            assert "verification_recorded" in kinds
             assert kinds[-1] == "attempt_result"
+
+            replayed = replay_journal(traj_file)
+            assert replayed.valid is True
+            assert replayed.duplicate_side_effects == []
+            assert replayed.state_sequence == ["pending", "running", expected_final]
+            assert replayed.attempt_result is not None
+            assert replayed.attempt_result["task_id"] == attempt.task_id
