@@ -1494,3 +1494,175 @@ async def test_acp_editor_session_streams_progress_and_approves_gated_action(
     _write_files(repo, task.hidden_tests)
     check = _run_unittest(repo)
     assert check.returncode == 0, check.stdout + check.stderr
+
+
+def _setup_offline_push_eval_repo(tmp_path: Path, task: BenchmarkTask) -> tuple[Path, Path]:
+    bare = tmp_path / "remote.git"
+    bare.mkdir()
+    subprocess.run(["git", "init", "--bare", "-b", "main"], cwd=bare, check=True)  # noqa: S607
+    repo = materialize_task_repo(task, tmp_path / "repo")
+    for cmd in (
+        ["git", "branch", "-M", "main"],
+        ["git", "remote", "add", "origin", str(bare)],
+        ["git", "push", "-u", "origin", "main"],
+    ):
+        subprocess.run(cmd, cwd=repo, check=True, capture_output=True)  # noqa: S603
+    return repo, bare
+
+
+@pytest.mark.asyncio
+async def test_host_brokered_git_push_from_offline_sandbox_with_approval_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exit criterion: agent pushes feature branch from offline sandbox via ApprovalGate."""
+    from agent_forge.agent.approvals import ApprovalGate, ApprovalRequest
+    from agent_forge.agent.models import AgentConfig, RunState
+    from agent_forge.agent.runner import run_agent_task
+    from agent_forge.auth import CredentialStore
+    from agent_forge.config import load_config
+    from agent_forge.eval.corpus import resolve_tasks
+    from agent_forge.eval.deterministic import SubprocessEvalSandbox
+    from agent_forge.llm.base import (
+        LLMConfig,
+        LLMProvider,
+        LLMResponse,
+        Message,
+        TokenUsage,
+        ToolCall,
+    )
+
+    monkeypatch.setattr("agent_forge.agent.persistence.USER_CONFIG_DIR", tmp_path / "home")
+    monkeypatch.setattr("agent_forge.config.USER_CONFIG_DIR", tmp_path / "home")
+    monkeypatch.setattr("agent_forge.agent.core.save_summary", lambda *_a: tmp_path / "s.json")
+
+    CredentialStore().set("github", "ghp_eval_host_only_9999", host="github.com")
+    task = resolve_tasks(task_ids=["fix-health-status"])[0]
+    repo, bare = _setup_offline_push_eval_repo(tmp_path, task)
+
+    class _PushFlowLLM(LLMProvider):
+        def __init__(self) -> None:
+            self._turn = 0
+            self._turns = [
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="p1",
+                            name="git_create_branch",
+                            arguments={"branch_name": "feat/m7-auth-fix"},
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="p2",
+                            name="write_file",
+                            arguments={
+                                "path": "app.py",
+                                "content": task.known_good_files["app.py"],
+                            },
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="p3", name="run_shell", arguments={"command": "git add app.py"})
+                    ],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="p4",
+                            name="git_commit",
+                            arguments={"message": "fix: healthy endpoint"},
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+                LLMResponse(
+                    content=None,
+                    tool_calls=[ToolCall(id="p5", name="git_push", arguments={})],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+                LLMResponse(
+                    content=None,
+                    tool_calls=[ToolCall(id="p6", name="git_push", arguments={})],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+                LLMResponse(
+                    content="Committed and pushed feat/m7-auth-fix.",
+                    tool_calls=[],
+                    finish_reason="stop",
+                    usage=TokenUsage(20, 10, 30),
+                ),
+            ]
+
+        async def complete(
+            self,
+            messages: list[Message],
+            tools: list[object] | None = None,
+            config: LLMConfig | None = None,
+        ) -> LLMResponse:
+            del messages, tools, config
+            resp = self._turns[min(self._turn, len(self._turns) - 1)]
+            self._turn += 1
+            return resp
+
+        async def stream(self, messages: list[Message], **kwargs: object) -> object:
+            del kwargs
+            yield await self.complete(messages)
+
+    seen_pushes = 0
+
+    async def _gate_cb(req: ApprovalRequest) -> bool:
+        nonlocal seen_pushes
+        if req.tool_name == "git_push":
+            seen_pushes += 1
+            return seen_pushes >= 2
+        return True
+
+    cfg = load_config(project_path=tmp_path / "none.toml", user_path=tmp_path / "none.toml")
+    run = await run_agent_task(
+        "Branch, fix, commit, and push",
+        str(repo),
+        cfg,
+        AgentConfig(model="eval-mock", provider="deterministic", max_iterations=10),
+        "deterministic",
+        "",
+        discover_extensions=False,
+        approval_gate=ApprovalGate(mode="prompt", callback=_gate_cb),
+        sandbox_factory=lambda _c: SubprocessEvalSandbox(),
+        provider_factory=lambda _p, _k: _PushFlowLLM(),
+    )
+
+    assert run.state == RunState.COMPLETED
+    assert seen_pushes == 2
+    pushed_sha = subprocess.run(
+        ["git", "rev-parse", "refs/heads/feat/m7-auth-fix"],  # noqa: S607
+        cwd=bare,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    local_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],  # noqa: S607
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert pushed_sha == local_sha

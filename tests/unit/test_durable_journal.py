@@ -885,7 +885,7 @@ def test_builtin_tools_side_effecting_classification() -> None:
         if not registry.get(defn.name).side_effecting
     }
     assert actual_readonly == expected_readonly
-    assert len(registry.list_definitions()) == 15
+    assert len(registry.list_definitions()) == 16
 
 
 def test_sigterm_pauses_cleanly_with_resume_hint(tmp_path: Path) -> None:
