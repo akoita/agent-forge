@@ -1,7 +1,7 @@
 {
   "schema_version": "benchmark-report-v1",
-  "generated_at": "2026-11-23T08:38:00.054087+00:00",
-  "harness_revision": "80a3453",
+  "generated_at": "2026-11-23T11:43:00.995574+00:00",
+  "harness_revision": "a914dfe",
   "sandbox_backend": "subprocess-eval",
   "tasks": [
     "fix-health-status",
@@ -33,8 +33,8 @@
       "attempts": 12,
       "verified_fixes": 12,
       "verified_rate": 1.0,
-      "mean_latency_seconds": 0.315,
-      "median_latency_seconds": 0.311,
+      "mean_latency_seconds": 0.442,
+      "median_latency_seconds": 0.444,
       "total_tokens": 8030,
       "total_cost_usd": 0.0,
       "cost_per_verified_fix_usd": 0.0,
@@ -46,7 +46,7 @@
           "attempt": 1,
           "status": "passed",
           "verified": true,
-          "latency_seconds": 0.276,
+          "latency_seconds": 0.437,
           "iterations": 4,
           "prompt_tokens": 570,
           "completion_tokens": 85,
@@ -58,7 +58,7 @@
           "run_state": "completed",
           "unmet_clauses": [],
           "trajectory_path": null,
-          "run_id": "978a12fe-27fc-4726-a00b-9965738da511",
+          "run_id": "7e80e52b-e435-42bc-b647-4819d35a1339",
           "reported_model": "scripted-oracle",
           "reason": "verified"
         },
@@ -67,7 +67,7 @@
           "attempt": 1,
           "status": "passed",
           "verified": true,
-          "latency_seconds": 0.341,
+          "latency_seconds": 0.452,
           "iterations": 4,
           "prompt_tokens": 570,
           "completion_tokens": 85,
@@ -79,7 +79,7 @@
           "run_state": "completed",
           "unmet_clauses": [],
           "trajectory_path": null,
-          "run_id": "37846823-56b1-4cd7-bdb0-b40f3dda8be5",
+          "run_id": "19eaf093-62b9-47a4-a220-724be9b28fca",
           "reported_model": "scripted-oracle",
           "reason": "verified"
         },
@@ -88,7 +88,7 @@
           "attempt": 1,
           "status": "passed",
           "verified": true,
-          "latency_seconds": 0.315,
+          "latency_seconds": 0.443,
           "iterations": 4,
           "prompt_tokens": 570,
           "completion_tokens": 85,
@@ -100,7 +100,7 @@
           "run_state": "completed",
           "unmet_clauses": [],
           "trajectory_path": null,
-          "run_id": "5d57bd97-fe3f-4aea-ac64-7b62457748bd",
+          "run_id": "90174671-bba5-4da6-84af-4998fb7549c0",
           "reported_model": "scripted-oracle",
           "reason": "verified"
         },
@@ -109,7 +109,7 @@
           "attempt": 1,
           "status": "passed",
           "verified": true,
-          "latency_seconds": 0.308,
+          "latency_seconds": 0.459,
           "iterations": 4,
           "prompt_tokens": 570,
           "completion_tokens": 85,
@@ -121,7 +121,7 @@
           "run_state": "completed",
           "unmet_clauses": [],
           "trajectory_path": null,
-          "run_id": "9c447159-b01a-4715-9983-d67128b1da46",
+          "run_id": "27cae413-cf04-40b1-aa06-6cecd8f4799f",
           "reported_model": "scripted-oracle",
           "reason": "verified"
         },
@@ -130,7 +130,7 @@
           "attempt": 1,
           "status": "passed",
           "verified": true,
-          "latency_seconds": 0.345,
+          "latency_seconds": 0.428,
           "iterations": 4,
           "prompt_tokens": 570,
           "completion_tokens": 85,
@@ -142,7 +142,7 @@
           "run_state": "completed",
           "unmet_clauses": [],
           "trajectory_path": null,
-          "run_id": "fe469731-c4ec-4024-b9b8-88ec396d2ba9",
+          "run_id": "01718b42-f4c0-4354-a0d1-9b1a2bb38dbf",
           "reported_model": "scripted-oracle",
           "reason": "verified"
         },
@@ -151,7 +151,7 @@
           "attempt": 1,
           "status": "passed",
           "verified": true,
-          "latency_seconds": 0.294,
+          "latency_seconds": 0.427,
           "iterations": 4,
           "prompt_tokens": 570,
           "completion_tokens": 85,
@@ -163,7 +163,7 @@
           "run_state": "completed",
           "unmet_clauses": [],
           "trajectory_path": null,
-          "run_id": "1eac8876-c5a4-4b08-8cc9-7d6777ac0562",
+          "run_id": "97ef6273-bcf8-4821-bc6c-61dc994ba800",
           "reported_model": "scripted-oracle",
           "reason": "verified"
         },
@@ -172,7 +172,7 @@
           "attempt": 1,
           "status": "passed",
           "verified": true,
-          "latency_seconds": 0.32,
+          "latency_seconds": 0.449,
           "iterations": 4,
           "prompt_tokens": 570,
           "completion_tokens": 85,
@@ -184,7 +184,7 @@
           "run_state": "completed",
           "unmet_clauses": [],
           "trajectory_path": null,
-          "run_id": "05fe2566-5dcd-4a07-bfd9-c8b17b4dac48",
+          "run_id": "a77690ff-7c88-4b41-bfc0-7a9e4f8c598b",
           "reported_model": "scripted-oracle",
           "reason": "verified"
         },
@@ -193,7 +193,7 @@
           "attempt": 1,
           "status": "passed",
           "verified": true,
-          "latency_seconds": 0.329,
+          "latency_seconds": 0.44,
           "iterations": 4,
           "prompt_tokens": 570,
           "completion_tokens": 85,
@@ -205,7 +205,7 @@
           "run_state": "completed",
           "unmet_clauses": [],
           "trajectory_path": null,
-          "run_id": "d95a26f7-963d-4cc3-b208-423e76f76ae3",
+          "run_id": "abab1113-0a6a-428c-b573-9f8d5c644cdf",
           "reported_model": "scripted-oracle",
           "reason": "verified"
         },
@@ -214,7 +214,7 @@
           "attempt": 1,
           "status": "passed",
           "verified": true,
-          "latency_seconds": 0.303,
+          "latency_seconds": 0.425,
           "iterations": 4,
           "prompt_tokens": 570,
           "completion_tokens": 85,
@@ -226,7 +226,7 @@
           "run_state": "completed",
           "unmet_clauses": [],
           "trajectory_path": null,
-          "run_id": "8963d22f-a6dc-4bbe-bb4f-20a75669d003",
+          "run_id": "c968d73b-566a-4593-9ac7-5783e30d69bb",
           "reported_model": "scripted-oracle",
           "reason": "verified"
         },
@@ -235,7 +235,7 @@
           "attempt": 1,
           "status": "passed",
           "verified": true,
-          "latency_seconds": 0.291,
+          "latency_seconds": 0.447,
           "iterations": 4,
           "prompt_tokens": 570,
           "completion_tokens": 85,
@@ -247,7 +247,7 @@
           "run_state": "completed",
           "unmet_clauses": [],
           "trajectory_path": null,
-          "run_id": "1502df23-084a-4e63-9c0e-fa5dd1ff8925",
+          "run_id": "db971df0-1c39-422f-bf9c-54c66909f955",
           "reported_model": "scripted-oracle",
           "reason": "verified"
         },
@@ -256,7 +256,7 @@
           "attempt": 1,
           "status": "passed",
           "verified": true,
-          "latency_seconds": 0.348,
+          "latency_seconds": 0.456,
           "iterations": 5,
           "prompt_tokens": 710,
           "completion_tokens": 115,
@@ -268,7 +268,7 @@
           "run_state": "completed",
           "unmet_clauses": [],
           "trajectory_path": null,
-          "run_id": "29521b02-dfc0-4b20-8aa4-8c32fac5f220",
+          "run_id": "d745dba9-5f40-4332-9485-6afa00a536ff",
           "reported_model": "scripted-oracle",
           "reason": "verified"
         },
@@ -277,7 +277,7 @@
           "attempt": 1,
           "status": "passed",
           "verified": true,
-          "latency_seconds": 0.308,
+          "latency_seconds": 0.445,
           "iterations": 4,
           "prompt_tokens": 570,
           "completion_tokens": 85,
@@ -289,7 +289,7 @@
           "run_state": "completed",
           "unmet_clauses": [],
           "trajectory_path": null,
-          "run_id": "9a517fe2-4e1b-489f-aba2-d166c4f74ad2",
+          "run_id": "b2e46592-584b-4f0e-87cb-131e15547929",
           "reported_model": "scripted-oracle",
           "reason": "verified"
         }
@@ -310,8 +310,8 @@
       "attempts": 12,
       "verified_fixes": 0,
       "verified_rate": 0.0,
-      "mean_latency_seconds": 0.133,
-      "median_latency_seconds": 0.133,
+      "mean_latency_seconds": 0.246,
+      "median_latency_seconds": 0.247,
       "total_tokens": 3780,
       "total_cost_usd": 0.0,
       "cost_per_verified_fix_usd": null,
@@ -323,7 +323,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.127,
+          "latency_seconds": 0.255,
           "iterations": 2,
           "prompt_tokens": 280,
           "completion_tokens": 35,
@@ -340,7 +340,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "ec841988-9659-456c-8795-5e71c705bf68",
+          "run_id": "18190e9d-b933-45aa-ad14-b3a26104c615",
           "reported_model": "scripted-noop",
           "reason": "empty_patch"
         },
@@ -349,7 +349,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.137,
+          "latency_seconds": 0.248,
           "iterations": 2,
           "prompt_tokens": 280,
           "completion_tokens": 35,
@@ -366,7 +366,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "655a3752-0821-4b88-ab7a-c9c10ba16603",
+          "run_id": "1e3e5369-1354-4173-b7db-a624ab187ba4",
           "reported_model": "scripted-noop",
           "reason": "empty_patch"
         },
@@ -375,7 +375,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.133,
+          "latency_seconds": 0.228,
           "iterations": 2,
           "prompt_tokens": 280,
           "completion_tokens": 35,
@@ -392,7 +392,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "3837087d-2bea-4b46-9de6-50841dcfae2a",
+          "run_id": "a3466c58-1da7-472b-aa0d-29a37069958f",
           "reported_model": "scripted-noop",
           "reason": "empty_patch"
         },
@@ -401,7 +401,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.135,
+          "latency_seconds": 0.243,
           "iterations": 2,
           "prompt_tokens": 280,
           "completion_tokens": 35,
@@ -418,7 +418,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "4bb6ecd2-27a1-49ae-affd-42ff1336cc09",
+          "run_id": "0c41958f-893d-422a-97d8-765507574f19",
           "reported_model": "scripted-noop",
           "reason": "empty_patch"
         },
@@ -427,7 +427,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.13,
+          "latency_seconds": 0.253,
           "iterations": 2,
           "prompt_tokens": 280,
           "completion_tokens": 35,
@@ -444,7 +444,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "57c3b79f-6472-497c-aa4c-b0142b2d4fee",
+          "run_id": "2b211743-8c10-46de-b91f-9e51b69dd6e8",
           "reported_model": "scripted-noop",
           "reason": "empty_patch"
         },
@@ -453,7 +453,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.127,
+          "latency_seconds": 0.259,
           "iterations": 2,
           "prompt_tokens": 280,
           "completion_tokens": 35,
@@ -470,7 +470,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "b797e8e7-4b0c-4b4c-80d9-5db595815cfe",
+          "run_id": "27ad9f4c-3ef6-462c-b6f5-9cf1f6b58dc0",
           "reported_model": "scripted-noop",
           "reason": "empty_patch"
         },
@@ -479,7 +479,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.125,
+          "latency_seconds": 0.227,
           "iterations": 2,
           "prompt_tokens": 280,
           "completion_tokens": 35,
@@ -496,7 +496,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "9ba2e5a5-df6e-4541-bff2-b3eae006dfb1",
+          "run_id": "0ea523d1-fdf5-432a-a9b3-d25433e59112",
           "reported_model": "scripted-noop",
           "reason": "empty_patch"
         },
@@ -505,7 +505,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.125,
+          "latency_seconds": 0.218,
           "iterations": 2,
           "prompt_tokens": 280,
           "completion_tokens": 35,
@@ -522,7 +522,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "ae375eb7-16fc-40d1-a5b8-9d3ec3891aaf",
+          "run_id": "f9c31739-005a-4852-81fa-731ac130c971",
           "reported_model": "scripted-noop",
           "reason": "empty_patch"
         },
@@ -531,7 +531,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.132,
+          "latency_seconds": 0.247,
           "iterations": 2,
           "prompt_tokens": 280,
           "completion_tokens": 35,
@@ -548,7 +548,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "c4416bf6-912d-47e8-b3b6-9a0ea7f91ae3",
+          "run_id": "add5d8a9-175a-4a82-909b-c27994eb2b1e",
           "reported_model": "scripted-noop",
           "reason": "empty_patch"
         },
@@ -557,7 +557,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.14,
+          "latency_seconds": 0.236,
           "iterations": 2,
           "prompt_tokens": 280,
           "completion_tokens": 35,
@@ -574,7 +574,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "b2dac50d-79aa-4862-9619-4a7b28600878",
+          "run_id": "db17ea4a-55ee-4920-9505-5f5c98b96daa",
           "reported_model": "scripted-noop",
           "reason": "empty_patch"
         },
@@ -583,7 +583,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.144,
+          "latency_seconds": 0.252,
           "iterations": 2,
           "prompt_tokens": 280,
           "completion_tokens": 35,
@@ -600,7 +600,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "bf4c6747-4fc5-419e-8e32-a0a1ed4a950c",
+          "run_id": "b486a5dd-469f-4bf8-96c0-17dfb1a14c8d",
           "reported_model": "scripted-noop",
           "reason": "empty_patch"
         },
@@ -609,7 +609,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.146,
+          "latency_seconds": 0.285,
           "iterations": 2,
           "prompt_tokens": 280,
           "completion_tokens": 35,
@@ -626,7 +626,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "8d1cfe78-6972-4d1a-a45c-0ccb58b9151b",
+          "run_id": "e56b3842-cdaa-4525-b0f9-d2adc1f5f1af",
           "reported_model": "scripted-noop",
           "reason": "empty_patch"
         }
@@ -647,8 +647,8 @@
       "attempts": 12,
       "verified_fixes": 0,
       "verified_rate": 0.0,
-      "mean_latency_seconds": 0.222,
-      "median_latency_seconds": 0.224,
+      "mean_latency_seconds": 0.435,
+      "median_latency_seconds": 0.417,
       "total_tokens": 5820,
       "total_cost_usd": 0.0,
       "cost_per_verified_fix_usd": null,
@@ -660,7 +660,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.194,
+          "latency_seconds": 0.399,
           "iterations": 3,
           "prompt_tokens": 420,
           "completion_tokens": 65,
@@ -674,7 +674,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "977cf7e5-b3bd-4905-90ca-3edf99c33d8d",
+          "run_id": "ab42a7d9-711b-492f-b1eb-fdefce9f476d",
           "reported_model": "scripted-incomplete",
           "reason": "check_failed"
         },
@@ -683,7 +683,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.23,
+          "latency_seconds": 0.423,
           "iterations": 3,
           "prompt_tokens": 420,
           "completion_tokens": 65,
@@ -697,7 +697,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "399b12ac-14f7-4340-8f60-ee07a066c896",
+          "run_id": "885375e7-70b5-46d4-8a06-77797e24fb02",
           "reported_model": "scripted-incomplete",
           "reason": "check_failed"
         },
@@ -706,7 +706,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.227,
+          "latency_seconds": 0.444,
           "iterations": 3,
           "prompt_tokens": 420,
           "completion_tokens": 65,
@@ -720,7 +720,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "7dbe25fd-208b-4c74-b9a5-eb961ea3bfc1",
+          "run_id": "7e305fd4-9c6e-450d-97c4-f1a90b8f3d78",
           "reported_model": "scripted-incomplete",
           "reason": "check_failed"
         },
@@ -729,7 +729,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.225,
+          "latency_seconds": 0.393,
           "iterations": 3,
           "prompt_tokens": 420,
           "completion_tokens": 65,
@@ -743,7 +743,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "a21bb2c3-bb3c-4afe-aadc-1924efc1e8de",
+          "run_id": "aca5acb8-8998-4b84-8cb9-f6d8b8190ea2",
           "reported_model": "scripted-incomplete",
           "reason": "check_failed"
         },
@@ -752,7 +752,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.24,
+          "latency_seconds": 0.557,
           "iterations": 3,
           "prompt_tokens": 420,
           "completion_tokens": 65,
@@ -766,7 +766,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "816477c8-8007-4aea-bd96-688839ede3a4",
+          "run_id": "9359fbae-3cec-4517-a79e-eabb0bd8b5b0",
           "reported_model": "scripted-incomplete",
           "reason": "check_failed"
         },
@@ -775,7 +775,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.222,
+          "latency_seconds": 0.425,
           "iterations": 3,
           "prompt_tokens": 420,
           "completion_tokens": 65,
@@ -789,7 +789,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "886ef161-a8a9-4d12-b2d4-1cbc901efac5",
+          "run_id": "32afdd41-6566-40f1-91ec-5d7b9f7de196",
           "reported_model": "scripted-incomplete",
           "reason": "check_failed"
         },
@@ -798,7 +798,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.221,
+          "latency_seconds": 0.412,
           "iterations": 3,
           "prompt_tokens": 420,
           "completion_tokens": 65,
@@ -812,7 +812,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "09c3a43c-c2ad-4ac4-8b42-b15a410c7048",
+          "run_id": "ffd9737f-2ccc-427d-bb60-13f5f2e143f0",
           "reported_model": "scripted-incomplete",
           "reason": "check_failed"
         },
@@ -821,7 +821,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.221,
+          "latency_seconds": 0.395,
           "iterations": 3,
           "prompt_tokens": 420,
           "completion_tokens": 65,
@@ -835,7 +835,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "11786089-d13e-44ae-aa36-f8caad87d6fa",
+          "run_id": "1b910f35-707c-4797-8d8e-336ab4cdf57f",
           "reported_model": "scripted-incomplete",
           "reason": "check_failed"
         },
@@ -844,7 +844,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.231,
+          "latency_seconds": 0.489,
           "iterations": 3,
           "prompt_tokens": 420,
           "completion_tokens": 65,
@@ -858,7 +858,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "f6debe42-29a9-4c3a-a6df-8e9b7a27439a",
+          "run_id": "4618edcd-9e9c-4b2e-8f62-1dad8fc972e8",
           "reported_model": "scripted-incomplete",
           "reason": "check_failed"
         },
@@ -867,7 +867,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.228,
+          "latency_seconds": 0.495,
           "iterations": 3,
           "prompt_tokens": 420,
           "completion_tokens": 65,
@@ -881,7 +881,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "0a91191a-53fa-4ab3-b755-89d0df211676",
+          "run_id": "bbdbe195-f120-4626-bad3-dffc140d6d1a",
           "reported_model": "scripted-incomplete",
           "reason": "check_failed"
         },
@@ -890,7 +890,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.216,
+          "latency_seconds": 0.393,
           "iterations": 3,
           "prompt_tokens": 420,
           "completion_tokens": 65,
@@ -904,7 +904,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "8ae6b796-3e65-4384-9796-696c9f1ea995",
+          "run_id": "9ac592f6-26a6-44ee-85d9-364c749da1d3",
           "reported_model": "scripted-incomplete",
           "reason": "check_failed"
         },
@@ -913,7 +913,7 @@
           "attempt": 1,
           "status": "failed",
           "verified": false,
-          "latency_seconds": 0.211,
+          "latency_seconds": 0.4,
           "iterations": 3,
           "prompt_tokens": 420,
           "completion_tokens": 65,
@@ -927,7 +927,7 @@
             "verification_checks_passed"
           ],
           "trajectory_path": null,
-          "run_id": "155268c6-c859-4277-bc00-4c480df10109",
+          "run_id": "459edce4-7da6-48dc-8141-d35fb320bd7f",
           "reported_model": "scripted-incomplete",
           "reason": "check_failed"
         }
