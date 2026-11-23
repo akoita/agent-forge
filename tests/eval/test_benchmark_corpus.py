@@ -735,6 +735,10 @@ async def test_local_ollama_config_only_completes_m0_smoke_task(
         "agent_forge.eval.benchmark.create_sandbox",
         lambda _cfg: SubprocessEvalSandbox(),
     )
+    monkeypatch.setattr(
+        "agent_forge.agent.verification.create_sandbox",
+        lambda _cfg: SubprocessEvalSandbox(),
+    )
     for env_var in ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
         monkeypatch.delenv(env_var, raising=False)
 
