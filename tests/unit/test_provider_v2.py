@@ -410,6 +410,8 @@ class TestAnthropicAndGeminiV2:
 
 
 def test_estimate_cost_discounts_cached_prompt_tokens() -> None:
+    from agent_forge.observability.cost import COST_TABLE
+
     uncached = TokenUsage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100)
     cached = TokenUsage(
         prompt_tokens=1000,
@@ -421,7 +423,8 @@ def test_estimate_cost_discounts_cached_prompt_tokens() -> None:
     cached_usd = _estimate_cost(cached, "gpt-5.4")
     assert uncached_usd > 0.0
     assert cached_usd < uncached_usd
-    assert cached_usd == pytest.approx(200 * 2.5e-6 + 800 * (2.5e-6 * 0.5) + 100 * 1.5e-5)
+    cached_rate = COST_TABLE["gpt-5.4"].get("cache_read_input_token_cost", 2.5e-6 * 0.5)
+    assert cached_usd == pytest.approx(200 * 2.5e-6 + 800 * cached_rate + 100 * 1.5e-5)
 
 
 # ---------------------------------------------------------------------------

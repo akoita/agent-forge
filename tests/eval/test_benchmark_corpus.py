@@ -1770,3 +1770,82 @@ async def test_greenfield_empty_directory_scaffolds_and_verifies_end_to_end(
     assert "calc.py" in verification.patch
     assert "test_calc.py" in verification.patch
     assert list(greenfield_dir.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_unknown_frontier_model_profile_enforces_max_cost_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exit criterion: unlisted frontier model ID enforces --max-cost via profile pricing."""
+    from agent_forge.agent.models import AgentConfig, RunState
+    from agent_forge.agent.runner import run_agent_task
+    from agent_forge.config import load_config
+    from agent_forge.eval.deterministic import SubprocessEvalSandbox
+    from agent_forge.llm.base import LLMProvider, LLMResponse, Message, TokenUsage
+    from agent_forge.observability.cost import build_pricing_overrides
+
+    monkeypatch.setattr("agent_forge.agent.persistence.USER_CONFIG_DIR", tmp_path / "home")
+    monkeypatch.setattr("agent_forge.config.USER_CONFIG_DIR", tmp_path / "home")
+    monkeypatch.setattr("agent_forge.agent.core.save_summary", lambda *_a: tmp_path / "s.json")
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config_file = tmp_path / "agent-forge.toml"
+    config_file.write_text(
+        "[agent]\n"
+        'default_provider = "openai"\n'
+        'default_model = "gpt-6.2-sol-unlisted"\n'
+        "max_cost_usd = 0.05\n"
+        'budget_action = "timeout"\n\n'
+        "[model_profiles.frontier]\n"
+        'provider = "openai"\n'
+        'model = "gpt-6.2-sol-unlisted"\n'
+        "input_cost_per_million = 20.0\n"
+        "output_cost_per_million = 80.0\n"
+        'reasoning_effort = "high"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(project_path=config_file, user_path=tmp_path / "none.toml")
+    seen_effort: list[str | None] = []
+
+    class _FrontierMockLLM(LLMProvider):
+        async def complete(
+            self, messages: list[Message], tools: object = None, config: object = None
+        ) -> LLMResponse:
+            del messages, tools
+            seen_effort.append(getattr(config, "reasoning_effort", None))
+            return LLMResponse(
+                content="Still reasoning...",
+                finish_reason="tool_calls",
+                usage=TokenUsage(prompt_tokens=2000, completion_tokens=500, total_tokens=2500),
+            )
+
+        async def stream(self, messages: list[Message], **kwargs: object) -> object:
+            del kwargs
+            yield await self.complete(messages)
+
+    agent_cfg = AgentConfig(
+        model="gpt-6.2-sol-unlisted",
+        provider="openai",
+        max_iterations=5,
+        max_cost_usd=0.05,
+        budget_action="timeout",
+        pricing_overrides=build_pricing_overrides(cfg),
+        reasoning_effort=cfg.model_profiles["frontier"].reasoning_effort,
+    )
+    run = await run_agent_task(
+        "Solve frontier task",
+        str(repo),
+        cfg,
+        agent_cfg,
+        "openai",
+        "",
+        discover_extensions=False,
+        sandbox_factory=lambda _c: SubprocessEvalSandbox(),
+        provider_factory=lambda _p, _k: _FrontierMockLLM(),
+    )
+
+    assert run.state == RunState.TIMEOUT
+    assert run.error is not None and "cost" in run.error.lower()
+    assert seen_effort == ["high"]
