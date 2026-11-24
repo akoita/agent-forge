@@ -6,10 +6,14 @@ import asyncio
 import inspect
 import os
 import shlex
+import sys
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from agent_forge.agent.approvals import ApprovalDecision, ApprovalGate, ApprovalRequest
 from agent_forge.agent.context import ContextAssembly, ContextEngine, estimate_messages_tokens
 from agent_forge.agent.models import AgentConfig, AgentRun
 from agent_forge.agent.runner import (
@@ -20,7 +24,9 @@ from agent_forge.agent.runner import (
     build_sandbox_config,
     execute_agent_run,
 )
+from agent_forge.config import USER_CONFIG_DIR
 from agent_forge.observability.cost import build_pricing_overrides
+from agent_forge.orchestration.events import Event, EventBus, EventType
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -28,7 +34,6 @@ if TYPE_CHECKING:
     from agent_forge.agent.session import DevSession, SessionStore
     from agent_forge.config import ForgeConfig
     from agent_forge.llm.base import LLMProvider
-    from agent_forge.orchestration.events import EventBus
     from agent_forge.sandbox.base import Sandbox, SandboxConfig
     from agent_forge.tools.base import ToolRegistry
 
@@ -260,6 +265,7 @@ class ChatSessionRuntime:
         cancellation_token: Any = None,
         verify_command: str | None = None,
         on_sandbox_started: Callable[[Sandbox], None] | None = None,
+        stream_tokens: bool = False,
     ) -> AgentRun:
         """Execute a single conversational turn using the warm session sandbox."""
         tools = await self._ensure_tools()
@@ -303,6 +309,7 @@ class ChatSessionRuntime:
             on_sandbox_started=on_sandbox_started,
             react_loop_fn=self._react_loop_fn,
             manage_sandbox=False,
+            stream_tokens=stream_tokens,
         )
         self.session.record_turn(
             prompt=prompt,
@@ -555,6 +562,180 @@ class ChatSessionRuntime:
         )
 
 
+class _ReplOutputCoordinator:
+    """Coordinate streamed assistant tokens, tool status lines, and full-line replies."""
+
+    def __init__(
+        self,
+        output_fn: Callable[[str], None],
+        *,
+        stream_fn: Callable[[str], None] | None = None,
+        status_fn: Callable[[str], None] | None = None,
+    ) -> None:
+        self.output_fn = output_fn
+        self.stream_fn = stream_fn
+        self.status_fn = status_fn
+        self.in_stream_line = False
+        self.streamed_any = False
+
+    def reset_turn(self) -> None:
+        self.in_stream_line = False
+        self.streamed_any = False
+
+    def emit_delta(self, text: str) -> None:
+        if not text or self.stream_fn is None:
+            return
+        self.stream_fn(text)
+        self.streamed_any = True
+        self.in_stream_line = not text.endswith("\n")
+
+    def finish_stream_line(self) -> None:
+        if self.in_stream_line and self.stream_fn is not None:
+            self.stream_fn("\n")
+            self.in_stream_line = False
+
+    def emit_status(self, line: str) -> None:
+        self.finish_stream_line()
+        if self.status_fn is not None and line:
+            self.status_fn(line)
+
+    def emit_output(self, line: str) -> None:
+        self.finish_stream_line()
+        self.output_fn(line)
+
+
+class _CoordinatorApprovalGate:
+    """Flush any partial streamed line before delegating approval evaluation."""
+
+    def __init__(self, inner: Any, coordinator: _ReplOutputCoordinator) -> None:
+        self._inner = inner
+        self._coordinator = coordinator
+
+    @property
+    def mode(self) -> str:
+        return str(getattr(self._inner, "mode", "prompt"))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    async def evaluate(self, request: ApprovalRequest) -> ApprovalDecision:
+        self._coordinator.finish_stream_line()
+        result: ApprovalDecision = await self._inner.evaluate(request)
+        return result
+
+
+class _PromptHistory:
+    """Manage persistent line-based REPL prompt history with optional readline integration."""
+
+    def __init__(
+        self,
+        history_path: Path | None,
+        *,
+        use_readline: bool,
+        max_entries: int = 1000,
+    ) -> None:
+        self._path = history_path
+        self._use_readline = use_readline
+        self._max_entries = max_entries
+        self._entries: list[str] = []
+
+    def load(self) -> None:
+        if self._path is not None and self._path.is_file():
+            with suppress(OSError):
+                raw_lines = self._path.read_text(encoding="utf-8").splitlines()
+                self._entries = [line for line in raw_lines if line.strip()][-self._max_entries :]
+        if self._use_readline:
+            try:
+                import readline
+
+                readline.set_history_length(self._max_entries)
+                for item in self._entries:
+                    readline.add_history(item)
+            except Exception:  # noqa: BLE001
+                self._use_readline = False
+
+    def record(self, entry: str) -> None:
+        cleaned = entry.strip()
+        if not cleaned:
+            return
+        single_line = " ".join(cleaned.splitlines())
+        if not self._entries or self._entries[-1] != single_line:
+            self._entries.append(single_line)
+            if len(self._entries) > self._max_entries:
+                self._entries = self._entries[-self._max_entries :]
+        if self._use_readline:
+            with suppress(Exception):
+                import readline
+
+                readline.add_history(single_line)
+
+    def save(self) -> None:
+        if self._path is None:
+            return
+        with suppress(OSError):
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            content = "\n".join(self._entries) + ("\n" if self._entries else "")
+            self._path.write_text(content, encoding="utf-8")
+
+
+def _truncate_value(value: Any, *, max_len: int = 56) -> str:
+    text = str(value).replace("\n", "\\n")
+    return text[: max_len - 3] + "..." if len(text) > max_len else text
+
+
+def _format_tool_call_status(data: dict[str, Any]) -> str:
+    tool_name = str(data.get("tool_name", "tool"))
+    args = data.get("arguments")
+    if isinstance(args, dict) and args:
+        first_k, first_v = next(iter(args.items()))
+        return f"  -> {tool_name}({first_k}={_truncate_value(first_v)})"
+    return f"  -> {tool_name}()"
+
+
+def _format_tool_result_status(data: dict[str, Any]) -> str:
+    tool_name = str(data.get("tool_name", "tool"))
+    exit_code = int(data.get("exit_code", 0) or 0)
+    duration_ms = int(data.get("duration_ms", 0) or 0)
+    if exit_code == 0 and not data.get("error"):
+        return f"  [ok] {tool_name} ({duration_ms}ms)"
+    return f"  [err] {tool_name} (exit {exit_code}, {duration_ms}ms)"
+
+
+async def _attach_repl_event_handlers(
+    event_bus: EventBus,
+    coordinator: _ReplOutputCoordinator,
+) -> None:
+    async def _on_delta(event: Event) -> None:
+        coordinator.emit_delta(str(event.data.get("delta", "")))
+
+    async def _on_tool_called(event: Event) -> None:
+        coordinator.emit_status(_format_tool_call_status(event.data))
+
+    async def _on_tool_completed(event: Event) -> None:
+        coordinator.emit_status(_format_tool_result_status(event.data))
+
+    async def _on_approval_requested(event: Event) -> None:
+        tool_name = str(event.data.get("tool_name", "tool"))
+        reason = str(event.data.get("reason", "")).strip()
+        msg = (
+            f"  [?] Approval needed for {tool_name}: {reason}"
+            if reason
+            else f"  [?] Approval needed for {tool_name}"
+        )
+        coordinator.emit_status(msg)
+
+    async def _on_approval_decided(event: Event) -> None:
+        tool_name = str(event.data.get("tool_name", "tool"))
+        verdict = "approved" if event.data.get("approved") else "denied"
+        coordinator.emit_status(f"  [{verdict}] {tool_name}")
+
+    await event_bus.subscribe(EventType.ASSISTANT_DELTA, _on_delta)
+    await event_bus.subscribe(EventType.TOOL_CALLED, _on_tool_called)
+    await event_bus.subscribe(EventType.TOOL_COMPLETED, _on_tool_completed)
+    await event_bus.subscribe(EventType.APPROVAL_REQUESTED, _on_approval_requested)
+    await event_bus.subscribe(EventType.APPROVAL_DECIDED, _on_approval_decided)
+
+
 async def _read_repl_line(
     prompt_text: str,
     input_fn: Callable[[str], str | Awaitable[str]],
@@ -568,8 +749,112 @@ async def _read_repl_line(
         return None
 
 
+async def _read_triple_quoted_block(
+    first_body: str,
+    continuation_prompt: str,
+    input_fn: Callable[[str], str | Awaitable[str]],
+) -> str:
+    if '"""' in first_body:
+        return first_body.split('"""', 1)[0]
+    block_lines = [first_body] if first_body else []
+    while True:
+        nxt = await _read_repl_line(continuation_prompt, input_fn)
+        if nxt is None:
+            break
+        if '"""' in nxt:
+            before = nxt.split('"""', 1)[0]
+            if before:
+                block_lines.append(before)
+            break
+        block_lines.append(nxt)
+    return "\n".join(block_lines)
+
+
+async def _read_repl_entry(
+    prompt_text: str,
+    input_fn: Callable[[str], str | Awaitable[str]],
+    *,
+    continuation_prompt: str = "... ",
+) -> str | None:
+    first = await _read_repl_line(prompt_text, input_fn)
+    if first is None:
+        return None
+
+    stripped_leading = first.lstrip()
+    if stripped_leading.startswith('"""'):
+        return await _read_triple_quoted_block(stripped_leading[3:], continuation_prompt, input_fn)
+
+    if not first.endswith("\\"):
+        return first
+
+    parts = [first[:-1]]
+    while True:
+        nxt = await _read_repl_line(continuation_prompt, input_fn)
+        if nxt is None:
+            break
+        parts.append(nxt[:-1] if nxt.endswith("\\") else nxt)
+        if not nxt.endswith("\\"):
+            break
+    return "\n".join(parts)
+
+
 async def _default_stdin_reader(prompt_text: str) -> str:
     return await asyncio.to_thread(input, prompt_text)
+
+
+def _default_stream_writer(chunk: str) -> None:
+    sys.stdout.write(chunk)
+    sys.stdout.flush()
+
+
+def _resolve_turn_approval_gate(
+    runtime: ChatSessionRuntime,
+    coordinator: _ReplOutputCoordinator,
+    confirm_fn: Callable[[ApprovalRequest], bool | Awaitable[bool]] | None,
+) -> tuple[bool, Any]:
+    existing = runtime.approval_gate
+    if confirm_fn is not None:
+
+        async def _confirm_callback(request: ApprovalRequest) -> bool:
+            coordinator.finish_stream_line()
+            ans = confirm_fn(request)
+            if inspect.isawaitable(ans):
+                return bool(await ans)
+            return bool(ans)
+
+        mode = getattr(existing, "mode", None) or runtime.approval_mode
+        runtime.approval_gate = ApprovalGate(mode=str(mode), callback=_confirm_callback)
+        return True, existing
+    if existing is not None and getattr(existing, "mode", "") == "prompt":
+        runtime.approval_gate = _CoordinatorApprovalGate(existing, coordinator)
+        return True, existing
+    return False, existing
+
+
+async def _run_repl_turn(
+    runtime: ChatSessionRuntime,
+    prompt: str,
+    coordinator: _ReplOutputCoordinator,
+    *,
+    stream_tokens: bool,
+) -> None:
+    coordinator.reset_turn()
+    turn_bus = EventBus()
+    await _attach_repl_event_handlers(turn_bus, coordinator)
+    result_run = await runtime.run_turn(
+        prompt,
+        event_bus=turn_bus,
+        stream_tokens=stream_tokens and coordinator.stream_fn is not None,
+    )
+    coordinator.finish_stream_line()
+    reply = _extract_reply(result_run)
+    if reply:
+        if not coordinator.streamed_any:
+            coordinator.emit_output(reply)
+    elif result_run.error:
+        coordinator.emit_output(f"[{result_run.state.value}] {result_run.error}")
+    else:
+        coordinator.emit_output(f"[{result_run.state.value}]")
 
 
 async def run_chat_repl(
@@ -577,39 +862,54 @@ async def run_chat_repl(
     *,
     input_fn: Callable[[str], str | Awaitable[str]] | None = None,
     output_fn: Callable[[str], None] | None = None,
+    stream_fn: Callable[[str], None] | None = None,
+    status_fn: Callable[[str], None] | None = None,
+    confirm_fn: Callable[[ApprovalRequest], bool | Awaitable[bool]] | None = None,
+    history_path: Path | str | None = None,
+    stream_tokens: bool = True,
     prompt_text: str = "you> ",
 ) -> DevSession:
     """Run an interactive terminal loop over *runtime* until ``/exit`` or EOF."""
     reader = input_fn if input_fn is not None else _default_stdin_reader
     writer = output_fn or print
+    effective_stream_fn = (
+        _default_stream_writer if (stream_fn is None and output_fn is None) else stream_fn
+    )
+    coordinator = _ReplOutputCoordinator(writer, stream_fn=effective_stream_fn, status_fn=status_fn)
 
+    resolved_history: Path | None = (
+        Path(history_path)
+        if history_path is not None
+        else (USER_CONFIG_DIR / "chat_history" if input_fn is None else None)
+    )
+    history = _PromptHistory(resolved_history, use_readline=(input_fn is None))
+    history.load()
+
+    gate_swapped, original_gate = _resolve_turn_approval_gate(runtime, coordinator, confirm_fn)
     writer(
         f"Session {runtime.session.id} ({runtime.session.provider}/{runtime.session.model}) "
         f"in {runtime.session.repo_path}. Type /help for commands."
     )
     try:
         while True:
-            line = await _read_repl_line(prompt_text, reader)
-            if line is None:
+            entry = await _read_repl_entry(prompt_text, reader)
+            if entry is None:
                 break
-            stripped = line.strip()
+            stripped = entry.strip()
             if not stripped:
                 continue
+            history.record(stripped)
             if stripped.startswith("/"):
                 cmd_res = await runtime.handle_slash_command(stripped)
                 if cmd_res.output:
-                    writer(cmd_res.output)
+                    coordinator.emit_output(cmd_res.output)
                 if cmd_res.should_exit:
                     break
                 continue
-            result_run = await runtime.run_turn(stripped)
-            reply = _extract_reply(result_run)
-            if reply:
-                writer(reply)
-            elif result_run.error:
-                writer(f"[{result_run.state.value}] {result_run.error}")
-            else:
-                writer(f"[{result_run.state.value}]")
+            await _run_repl_turn(runtime, stripped, coordinator, stream_tokens=stream_tokens)
     finally:
+        history.save()
+        if gate_swapped:
+            runtime.approval_gate = original_gate
         await runtime.close()
     return runtime.session
