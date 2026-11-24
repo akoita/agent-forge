@@ -24,6 +24,13 @@ from agent_forge.agent.runner import (
     build_sandbox_config,
     execute_agent_run,
 )
+from agent_forge.agent.workspace_undo import (
+    TurnWorkspaceSnapshot,
+    build_turn_snapshot,
+    capture_workspace_state,
+    render_workspace_diff,
+    restore_turn_snapshot,
+)
 from agent_forge.config import USER_CONFIG_DIR
 from agent_forge.observability.cost import build_pricing_overrides
 from agent_forge.orchestration.events import Event, EventBus, EventType
@@ -31,7 +38,7 @@ from agent_forge.orchestration.events import Event, EventBus, EventType
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from agent_forge.agent.session import DevSession, SessionStore
+    from agent_forge.agent.session import DevSession, SessionStore, SessionSummary
     from agent_forge.config import ForgeConfig
     from agent_forge.llm.base import LLMProvider
     from agent_forge.sandbox.base import Sandbox, SandboxConfig
@@ -41,6 +48,10 @@ if TYPE_CHECKING:
 _HELP_TEXT = """Available slash commands:
   /compact [keep_recent]  Compact older conversation turns while keeping working set
   /context                Show token usage, compaction stats, active files, and warm sandbox status
+  /diff [--stat]          Show uncommitted workspace changes in the active repository
+  /undo [--force]         Revert the last turn's workspace edits (checks for external edits)
+  /sessions [--all] [N]   List saved sessions for this repo (or all repos)
+  /resume <id|latest>     Switch to another saved session in-place
   /model [spec]           Show or switch active model (model, provider/model, or profile)
   /clear [--sandbox]      Reset conversation history and optionally restart the warm sandbox
   /help                   Show this help message
@@ -159,6 +170,7 @@ class ChatSessionRuntime:
         self._last_activity_at: float | None = None
         self._tools: ToolRegistry | None = None
         self._mcp_manager: Any = None
+        self._undo_stack: list[TurnWorkspaceSnapshot] = []
 
         self.context_engine: ContextEngine = self.session.build_context_engine()
         agent_cfg = _agent_config_from_runtime(
@@ -293,6 +305,8 @@ class ChatSessionRuntime:
             discover_extensions=True,
             dev_session=self.session,
         )
+        repo_dir = Path(self.session.repo_path)
+        before_state = capture_workspace_state(repo_dir)
         llm = self._build_llm(agent_cfg.provider)
         result_run = await execute_agent_run(
             agent_run,
@@ -311,6 +325,11 @@ class ChatSessionRuntime:
             manage_sandbox=False,
             stream_tokens=stream_tokens,
         )
+        after_state = capture_workspace_state(repo_dir)
+        turn_idx = len(self.session.turns)
+        snapshot = build_turn_snapshot(turn_idx, before_state, after_state)
+        if snapshot is not None:
+            self._undo_stack.append(snapshot)
         self.session.record_turn(
             prompt=prompt,
             run=result_run,
@@ -423,6 +442,7 @@ class ChatSessionRuntime:
         self.session.total_tokens.total_tokens = 0
         self.session.total_tokens.cached_prompt_tokens = 0
         self.session.total_tokens.reasoning_tokens = 0
+        self._undo_stack.clear()
 
         self.context_engine = self.session.build_context_engine()
         agent_cfg = _agent_config_from_runtime(
@@ -504,6 +524,98 @@ class ChatSessionRuntime:
         ]
         return SlashCommandResult(handled=True, output="\n".join(lines), payload=summary)
 
+    def workspace_diff(self, *, stat_only: bool = False) -> dict[str, Any]:
+        """Inspect uncommitted Git changes in the active session workspace."""
+        return render_workspace_diff(Path(self.session.repo_path), stat_only=stat_only)
+
+    def undo_last_turn(self, *, force: bool = False) -> dict[str, Any]:
+        """Revert workspace edits from the latest turn that modified files."""
+        if not self._undo_stack:
+            return {
+                "reverted": False,
+                "reason": "empty",
+                "output": "Nothing to undo in this session.",
+            }
+        snapshot = self._undo_stack[-1]
+        restored, removed, conflicts = restore_turn_snapshot(
+            Path(self.session.repo_path),
+            snapshot,
+            force=force,
+        )
+        if conflicts:
+            return {
+                "reverted": False,
+                "reason": "conflict",
+                "conflicts": conflicts,
+                "output": (
+                    "Undo blocked: modified since last turn: "
+                    + ", ".join(conflicts)
+                    + ". Re-run with /undo --force to overwrite."
+                ),
+            }
+        self._undo_stack.pop()
+        self.session.capture_context_engine(self.context_engine)
+        self.session_store.save(self.session)
+        parts = []
+        if restored:
+            parts.append(f"restored {', '.join(restored)}")
+        if removed:
+            parts.append(f"removed {', '.join(removed)}")
+        summary = "; ".join(parts) or "no file changes"
+        return {
+            "reverted": True,
+            "turn_index": snapshot.turn_index,
+            "restored": restored,
+            "removed": removed,
+            "remaining_undo_steps": len(self._undo_stack),
+            "output": f"Undid turn {snapshot.turn_index + 1} workspace changes ({summary}).",
+        }
+
+    def list_stored_sessions(
+        self,
+        *,
+        all_repos: bool = False,
+        limit: int | None = 20,
+    ) -> list[SessionSummary]:
+        """List stored sessions sorted newest-first."""
+        repo_filter = None if all_repos else self.session.repo_path
+        return self.session_store.list_sessions(repo_path=repo_filter, limit=limit)
+
+    async def switch_session(self, target: str) -> DevSession:
+        """Persist the current session and switch to another stored session ID or ``latest``."""
+        cleaned = target.strip()
+        if not cleaned:
+            msg = "Session identifier or 'latest' is required"
+            raise ValueError(msg)
+
+        self.session.capture_context_engine(self.context_engine)
+        self.session_store.save(self.session)
+
+        if cleaned.lower() == "latest":
+            loaded = self.session_store.latest_for_repo(self.session.repo_path)
+            if loaded is None:
+                msg = f"No saved sessions found for repo: {self.session.repo_path}"
+                raise FileNotFoundError(msg)
+        else:
+            loaded = self.session_store.load(cleaned)
+
+        if Path(loaded.repo_path).resolve() != Path(self.session.repo_path).resolve():
+            await self.close_sandbox()
+
+        self.session = loaded
+        self.cfg.agent.default_provider = loaded.provider
+        self.cfg.agent.default_model = loaded.model
+        self._undo_stack.clear()
+        self.context_engine = loaded.build_context_engine()
+        agent_cfg = _agent_config_from_runtime(
+            self.cfg,
+            self.session,
+            approval_mode=self.approval_mode,
+            profile=self.profile,
+        )
+        _sync_context_engine_window(self.context_engine, self.cfg, agent_cfg)
+        return loaded
+
     async def _handle_model_command(self, args: list[str]) -> SlashCommandResult:
         if not args:
             return SlashCommandResult(
@@ -519,6 +631,72 @@ class ChatSessionRuntime:
             handled=True,
             output=f"Switched model to {provider}/{model}",
             payload={"provider": provider, "model": model},
+        )
+
+    async def _handle_diff_command(self, args: list[str]) -> SlashCommandResult:
+        stat_only = "--stat" in args
+        result = self.workspace_diff(stat_only=stat_only)
+        return SlashCommandResult(handled=True, output=str(result["output"]), payload=result)
+
+    async def _handle_undo_command(self, args: list[str]) -> SlashCommandResult:
+        force = "--force" in args
+        result = self.undo_last_turn(force=force)
+        return SlashCommandResult(handled=True, output=str(result["output"]), payload=result)
+
+    async def _handle_sessions_command(self, args: list[str]) -> SlashCommandResult:
+        all_repos = "--all" in args
+        limit = 20
+        for arg in args:
+            if arg.startswith("-"):
+                continue
+            try:
+                limit = max(1, int(arg))
+            except ValueError:
+                return SlashCommandResult(
+                    handled=True,
+                    output=f"Usage: /sessions [--all] [limit] (got invalid limit '{arg}')",
+                )
+        summaries = self.list_stored_sessions(all_repos=all_repos, limit=limit)
+        if not summaries:
+            return SlashCommandResult(
+                handled=True,
+                output="No stored sessions found.",
+                payload={"sessions": []},
+            )
+        lines = ["Stored sessions:"]
+        serialized = []
+        for s in summaries:
+            marker = "*" if s.id == self.session.id else " "
+            title = s.title or "(empty)"
+            lines.append(
+                f"  {marker} {s.id} | {s.turn_count} turns | {s.provider}/{s.model} | {title}"
+            )
+            serialized.append({"id": s.id, "turns": s.turn_count, "model": s.model, "title": title})
+        return SlashCommandResult(
+            handled=True,
+            output="\n".join(lines),
+            payload={"sessions": serialized, "active_session_id": self.session.id},
+        )
+
+    async def _handle_resume_command(self, args: list[str]) -> SlashCommandResult:
+        if not args:
+            return SlashCommandResult(handled=True, output="Usage: /resume <session_id|latest>")
+        try:
+            switched = await self.switch_session(args[0])
+        except (FileNotFoundError, ValueError) as exc:
+            return SlashCommandResult(handled=True, output=f"Resume failed: {exc}")
+        return SlashCommandResult(
+            handled=True,
+            output=(
+                f"Resumed session {switched.id} "
+                f"({len(switched.turns)} turns, {switched.provider}/{switched.model})."
+            ),
+            payload={
+                "session_id": switched.id,
+                "turns": len(switched.turns),
+                "provider": switched.provider,
+                "model": switched.model,
+            },
         )
 
     async def handle_slash_command(self, line: str) -> SlashCommandResult:
@@ -540,14 +718,6 @@ class ChatSessionRuntime:
                 output="Ending chat session.",
                 should_exit=True,
             )
-        if cmd == "/help":
-            return SlashCommandResult(handled=True, output=_HELP_TEXT)
-        if cmd == "/compact":
-            return await self._handle_compact_command(args)
-        if cmd == "/context":
-            return await self._handle_context_command()
-        if cmd == "/model":
-            return await self._handle_model_command(args)
         if cmd == "/clear":
             reset_sandbox = "--sandbox" in args
             await self.clear_session(reset_sandbox=reset_sandbox)
@@ -556,6 +726,21 @@ class ChatSessionRuntime:
                 handled=True,
                 output=f"Cleared conversation history{suffix}.",
             )
+        if cmd == "/help":
+            return SlashCommandResult(handled=True, output=_HELP_TEXT)
+
+        handlers: dict[str, Callable[[], Awaitable[SlashCommandResult]]] = {
+            "/compact": lambda: self._handle_compact_command(args),
+            "/context": self._handle_context_command,
+            "/diff": lambda: self._handle_diff_command(args),
+            "/undo": lambda: self._handle_undo_command(args),
+            "/sessions": lambda: self._handle_sessions_command(args),
+            "/resume": lambda: self._handle_resume_command(args),
+            "/model": lambda: self._handle_model_command(args),
+        }
+        handler = handlers.get(cmd)
+        if handler is not None:
+            return await handler()
         return SlashCommandResult(
             handled=True,
             output=f"Unknown command: {cmd}. Type /help for available commands.",

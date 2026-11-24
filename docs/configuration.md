@@ -455,4 +455,4 @@ agent-forge session compact <session-id> --keep-recent 2
 agent-forge session delete <session-id>
 ```
 
-Inside `agent-forge chat`, use `/compact [keep_recent]`, `/context`, `/model [spec]`, `/clear [--sandbox]`, `/help`, or `/exit`. Enter multiline prompts using trailing `\` continuation or `"""..."""` blocks.
+Inside `agent-forge chat`, use `/diff [--stat]`, `/undo [--force]`, `/sessions [--all] [N]`, `/resume <id|latest>`, `/compact [keep_recent]`, `/context`, `/model [spec]`, `/clear [--sandbox]`, `/help`, or `/exit`. Enter multiline prompts using trailing `\` continuation or `"""..."""` blocks.
