@@ -147,7 +147,8 @@ plugin directories and are loaded via `--profiles-dir` or auto-discovery from
 Unified interface `LLMProvider` with adapters for:
 
 - **Gemini** (primary) — REST API via httpx, retry with exponential backoff
-- **OpenAI** — chat completions API
+- **OpenAI** — Responses API (`/v1/responses`) & Chat Completions API
+- **OpenRouter** — Multi-provider gateway (`/v1/chat/completions`) with routing/privacy preferences, `reasoning_details` continuity, and reported cost tracking
 - **Anthropic** — messages API with tool_use blocks
 
 All adapters implement:

@@ -174,6 +174,8 @@ from agent_forge.llm.my_provider import MyProvider
 _PROVIDERS: dict[str, type[LLMProvider]] = {
     "gemini": GeminiProvider,
     "openai": OpenAIProvider,
+    "openai-compatible": OpenAIProvider,
+    "openrouter": OpenRouterProvider,
     "anthropic": AnthropicProvider,
     "my_provider": MyProvider,  # ← add here
 }
