@@ -967,7 +967,7 @@ Before executing a tool call, `ApprovalGate` classifies destructive actions (`ap
 - **Warm session sandbox:** Reuses a single `Sandbox` container (and active PTY sessions) across consecutive `run_turn()` calls until explicit `close()` or `--idle-timeout` expiry.
 - **Live streaming & tool progress:** Streams assistant token deltas via `EventType.ASSISTANT_DELTA` (`--stream/--no-stream`) and prints real-time `EventBus` tool-call/approval status lines cleanly via `_ReplOutputCoordinator`.
 - **Multiline prompts & history:** Supports trailing `\` line continuation and `"""..."""` fenced blocks alongside persistent line history (`--history-file`, defaulting to `~/.agent-forge/chat_history` on interactive TTYs).
-- **Slash commands:** Handles `/compact [keep_recent]` (deterministic two-stage `ContextEngine.force_compact`), `/context` (raw vs assembled token budget and active PTY count), `/model [spec]` (`provider/model`, named `model_profile`, or model name), `/clear [--sandbox]`, `/help`, and `/exit` (`/quit`).
+- **Workspace & session controls:** Supports `/diff [--stat]` (Git status + diff), `/undo [--force]` (conflict-guarded pre/post turn workspace snapshot rollback via `workspace_undo.py`), `/sessions [--all] [N]`, `/resume <id|latest>` (in-place session switch preserving warm same-repo sandboxes), `/compact [keep_recent]`, `/context`, `/model [spec]`, `/clear [--sandbox]`, `/help`, and `/exit` (`/quit`).
 - **Session lifecycle CLI:** `agent-forge chat --resume <id|latest> [--sessions-dir PATH] [--idle-timeout SECONDS]` continues sessions across restarts; `agent-forge session list|show|compact|delete` inspects, compacts, and prunes stored sessions (`text` or `json` output).
 
 ---

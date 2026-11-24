@@ -132,6 +132,8 @@ Per-profile pricing overrides (`--max-cost` budget enforcement on unlisted front
 
 Zero-wrapper stock Docker images (overridden entrypoint, `bash`->`sh` fallback, offline `HOME`), `search_codebase` non-ripgrep fallbacks, and `bwrap` read-only host toolchain passthrough with credential-path rejection are covered in `tests/unit/test_stock_images_and_bwrap_toolchains.py` and `tests/eval/test_benchmark_corpus.py`.
 
+Interactive ADE chat sessions (warm sandbox reuse, `/compact`, `/context`, `/model`, `/diff`, `/undo`, `/sessions`, `/resume`, live streaming, prompt history, and multiline input) are covered by unit tests in `tests/unit/test_cli_chat_and_session.py`, `tests/unit/test_chat_streaming_and_history.py`, and `tests/unit/test_chat_workspace_controls.py`, plus the real Docker warm-container integration test in `tests/integration/test_warm_chat_sandbox_integration.py`.
+
 ## Running Tests
 
 ```bash
