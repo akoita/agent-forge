@@ -43,6 +43,15 @@ backend = "memory"              # "memory" or "redis"
 redis_url = "redis://localhost:6379/0"
 max_concurrent_runs = 4
 worktree_isolation = true       # isolate parallel queued runs in git worktrees
+
+[subagents]
+enabled = false                 # opt-in spawn_subagent delegation (or --subagents)
+max_depth = 1                   # recursion guard (1..3)
+max_subagents_per_run = 8       # per-run delegation budget (1..32)
+max_iterations = 10             # per-child step cap (1..50)
+max_tokens = 60000              # per-child token cap
+max_result_chars = 8000         # bounded parent tool response length
+branch_prefix = "agent-forge/subagent"
 worktree_root = ""              # empty defaults to ~/.agent-forge/worktrees/<repo>
 worktree_branch_prefix = "agent-forge/run"
 auto_remove_unchanged_worktrees = true
@@ -143,6 +152,7 @@ agent-forge run \
   --max-duration 300 \              # optional wall-clock seconds cap
   --budget-action pause \           # "timeout" or "pause" on budget exceed
   --approval-mode prompt \          # "auto", "prompt", or "deny"
+  --subagents \                     # enable bounded spawn_subagent delegation
   --sandbox-backend auto \
   --sandbox-image agent-forge-sandbox:full \
   --network \

@@ -134,6 +134,8 @@ Zero-wrapper stock Docker images (overridden entrypoint, `bash`->`sh` fallback, 
 
 Interactive ADE chat sessions (warm sandbox reuse, `/compact`, `/context`, `/model`, `/diff`, `/undo`, `/sessions`, `/resume`, live streaming, prompt history, and multiline input) are covered by unit tests in `tests/unit/test_cli_chat_and_session.py`, `tests/unit/test_chat_streaming_and_history.py`, and `tests/unit/test_chat_workspace_controls.py`, plus the real Docker warm-container integration test in `tests/integration/test_warm_chat_sandbox_integration.py`.
 
+Bounded hierarchical subagent delegation (read-only research fan-out sharing the parent sandbox, isolated Git worktree workers with orphan cleanup, depth/budget guards, token accumulation, and config/CLI flags) is covered in `tests/unit/test_subagent_delegation.py` and `tests/eval/test_benchmark_corpus.py`.
+
 ## Running Tests
 
 ```bash
