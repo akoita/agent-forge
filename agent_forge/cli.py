@@ -341,6 +341,33 @@ def model_capabilities(profile: str | None, output_format: str, probe: bool) -> 
 @click.option("--model", default=None, help="LLM model to use")
 @click.option("--model-profile", help="Use a named provider and model from configuration.")
 @click.option(
+    "--reasoning-effort",
+    default=None,
+    type=click.Choice(
+        ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+        case_sensitive=False,
+    ),
+    help="Reasoning effort knob forwarded to supporting models.",
+)
+@click.option(
+    "--thinking-mode",
+    default=None,
+    type=click.Choice(["disabled", "enabled", "adaptive"], case_sensitive=False),
+    help="Thinking mode for supporting models (e.g. Anthropic adaptive thinking).",
+)
+@click.option(
+    "--thinking-level",
+    default=None,
+    type=click.Choice(["minimal", "low", "medium", "high"], case_sensitive=False),
+    help="Thinking level for Gemini 3.x / next-gen models.",
+)
+@click.option(
+    "--thinking-budget",
+    default=None,
+    type=int,
+    help="Explicit thinking token budget override.",
+)
+@click.option(
     "--provider",
     default=None,
     help="LLM provider (gemini, openai, openai-compatible, anthropic)",
@@ -475,6 +502,10 @@ def run(
     profiles_dir: Path | None,
     verify_command: str | None,
     model_profile: str | None,
+    reasoning_effort: str | None,
+    thinking_mode: str | None,
+    thinking_level: str | None,
+    thinking_budget: int | None,
     contract: str,
 ) -> None:
     """Run an agent task on a repository."""
@@ -514,6 +545,10 @@ def run(
             sandbox_backend=sandbox_backend,
             network=network,
             command_timeout=command_timeout,
+            reasoning_effort=reasoning_effort,
+            thinking_mode=thinking_mode,
+            thinking_level=thinking_level,
+            thinking_budget=thinking_budget,
         )
     )
 
@@ -572,6 +607,20 @@ def run(
         _exit_on_verification_failure(verify_command, result.state.value)
 
 
+def _copy_profile_agent_defaults(agent_cfg: Any, selected: Any) -> None:
+    for field_name in (
+        "input_cost_per_million",
+        "output_cost_per_million",
+        "reasoning_effort",
+        "thinking_mode",
+        "thinking_budget_tokens",
+        "thinking_level",
+    ):
+        value = getattr(selected, field_name, None)
+        if value is not None and getattr(agent_cfg, field_name, None) is None:
+            setattr(agent_cfg, field_name, value)
+
+
 def _apply_model_profile(config: Any, name: str | None) -> None:
     if name is not None:
         from agent_forge.llm.qualification import (
@@ -588,6 +637,7 @@ def _apply_model_profile(config: Any, name: str | None) -> None:
         config.agent.default_model = selected.model
         if selected.temperature is not None:
             config.agent.temperature = selected.temperature
+        _copy_profile_agent_defaults(config.agent, selected)
         provider_cfg = config.providers.get(selected.provider)
         if provider_cfg is not None:
             provider_cfg.api_key_env = resolve_profile_api_key_env(config, selected)
@@ -626,7 +676,7 @@ def _create_configured_provider(cfg: Any, provider_name: str, api_key: str) -> A
         and raw_api_mode != "auto"
     ):
         kwargs["api_mode"] = raw_api_mode
-    if provider_name in ("openai", "openai-compatible") and isinstance(raw_caps, dict) and raw_caps:
+    if isinstance(raw_caps, dict) and raw_caps:
         kwargs["capability_overrides"] = dict(raw_caps)
     return create_provider(provider_name, api_key, **kwargs)
 
@@ -1019,6 +1069,7 @@ def _build_agent_config(
 ) -> Any:
     """Build an ``AgentConfig`` from resolved settings, guarding mocked configs."""
     from agent_forge.agent.models import AgentConfig
+    from agent_forge.observability.cost import build_pricing_overrides
 
     approval = cfg.agent.approval_mode if isinstance(cfg.agent.approval_mode, str) else "auto"
     budget_action = (
@@ -1030,6 +1081,10 @@ def _build_agent_config(
         if isinstance(cfg.agent.max_duration_seconds, (int, float))
         else None
     )
+    raw_effort = getattr(cfg.agent, "reasoning_effort", None)
+    raw_mode = getattr(cfg.agent, "thinking_mode", None)
+    raw_budget = getattr(cfg.agent, "thinking_budget_tokens", None)
+    raw_level = getattr(cfg.agent, "thinking_level", None)
     return AgentConfig(
         model=cfg.agent.default_model,
         provider=provider_name,
@@ -1041,6 +1096,13 @@ def _build_agent_config(
         max_cost_usd=float(max_cost) if max_cost is not None else None,
         max_duration_seconds=float(max_duration) if max_duration is not None else None,
         budget_action=budget_action,
+        pricing_overrides=build_pricing_overrides(cfg),
+        reasoning_effort=raw_effort if isinstance(raw_effort, str) else None,
+        thinking_mode=raw_mode if isinstance(raw_mode, str) else None,
+        thinking_budget_tokens=(
+            raw_budget if isinstance(raw_budget, int) and not isinstance(raw_budget, bool) else None
+        ),
+        thinking_level=raw_level if isinstance(raw_level, str) else None,
     )
 
 
@@ -1059,6 +1121,10 @@ def _build_cli_overrides(
     sandbox_backend: str | None = None,
     network: bool | None = None,
     command_timeout: int | None = None,
+    reasoning_effort: str | None = None,
+    thinking_mode: str | None = None,
+    thinking_level: str | None = None,
+    thinking_budget: int | None = None,
 ) -> dict[str, Any] | None:
     """Collect non-empty CLI overrides into config dotted keys."""
     mapping = {
@@ -1069,6 +1135,12 @@ def _build_cli_overrides(
         "agent.max_duration_seconds": max_duration,
         "agent.budget_action": budget_action.lower() if budget_action is not None else None,
         "agent.approval_mode": approval_mode.lower() if approval_mode is not None else None,
+        "agent.reasoning_effort": (
+            reasoning_effort.lower() if reasoning_effort is not None else None
+        ),
+        "agent.thinking_mode": thinking_mode.lower() if thinking_mode is not None else None,
+        "agent.thinking_level": thinking_level.lower() if thinking_level is not None else None,
+        "agent.thinking_budget_tokens": thinking_budget,
         "sandbox.image": sandbox_image,
         "sandbox.toolchain": toolchain.lower() if toolchain is not None else None,
         "sandbox.published_ports": list(publish_port) if publish_port else None,

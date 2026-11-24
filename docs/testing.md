@@ -127,6 +127,8 @@ Host service credential storage (`~/.agent-forge/credentials.json`), `agent-forg
 
 Polyglot toolchain detection (`go.mod`, `Cargo.toml`, `pom.xml`/`build.gradle*`, `package.json`, `pyproject.toml`), loopback port publishing validation/forwarding, and greenfield empty-directory verification (`VerificationWorkspace` bootstrap without pre-existing Git commits) are covered in `tests/unit/test_polyglot_sandbox_and_greenfield.py` and `tests/eval/test_benchmark_corpus.py`.
 
+Per-profile pricing overrides (`--max-cost` budget enforcement on unlisted frontier models), generalized long-context heuristics + `ContextEngine` window auto-sizing, and Anthropic/Gemini/OpenAI reasoning payloads are covered in `tests/unit/test_frontier_models_and_reasoning.py` and `tests/eval/test_benchmark_corpus.py`.
+
 ## Running Tests
 
 ```bash

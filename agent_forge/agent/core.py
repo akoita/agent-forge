@@ -165,12 +165,16 @@ async def react_loop(
         context_engine=active_context,
     )
     set_trace_context(run.id)
-    tracker = CostTracker(run_id=run.id)
+    tracker = CostTracker(run_id=run.id, pricing_overrides=dict(run.config.pricing_overrides))
     loop_started = time.monotonic()
 
     llm_config = LLMConfig(
         model=run.config.model,
         temperature=run.config.temperature,
+        reasoning_effort=run.config.reasoning_effort,
+        thinking_mode=run.config.thinking_mode,
+        thinking_budget_tokens=run.config.thinking_budget_tokens,
+        thinking_level=run.config.thinking_level,
     )
     tool_definitions = tools.list_definitions()
     lifecycle_bus = event_bus if emit_lifecycle else None
@@ -339,6 +343,14 @@ def _update_consecutive_failures(
     return 0
 
 
+def _sync_turn_context_window(
+    context_engine: ContextEngine | None,
+    provider_caps: ProviderCapabilities,
+) -> None:
+    if context_engine is not None:
+        context_engine.sync_context_window(provider_caps.max_context_tokens)
+
+
 async def _run_loop_iterations(
     run: AgentRun,
     llm: LLMProvider,
@@ -408,6 +420,7 @@ async def _run_loop_iterations(
             last_response_id=last_response_id,
             active_route=active_route,
         )
+        _sync_turn_context_window(context_engine, provider_caps)
         if compacted_now or not provider_caps.stateful_response_ids:
             last_response_id = None
         llm_config.parallel_tool_calls = provider_caps.parallel_tool_calls

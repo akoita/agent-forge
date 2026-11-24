@@ -277,10 +277,17 @@ identifier for an API the selected adapter supports.
 [model_profiles.candidate]
 provider = "openai"
 model = "gpt-5.4"
-# Optional overrides for OpenAI-compatible or custom endpoints:
+# Optional overrides for OpenAI-compatible, frontier, or custom endpoints:
 # base_url = "https://api.together.xyz/v1"
 # api_key_env = "TOGETHER_API_KEY"
 # temperature = 0.0
+# input_cost_per_million = 2.5
+# output_cost_per_million = 15.0
+# cache_read_cost_per_million = 0.25
+# reasoning_effort = "high"      # OpenAI/Anthropic effort level
+# thinking_mode = "adaptive"     # "adaptive" | "enabled" | "disabled" (Anthropic)
+# thinking_level = "high"        # "minimal" | "low" | "medium" | "high" (Gemini)
+# thinking_budget_tokens = 2048  # Explicit thinking token budget
 ```
 
 Run these commands from the project directory.

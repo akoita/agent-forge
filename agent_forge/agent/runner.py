@@ -58,6 +58,43 @@ def build_sandbox_config(
     )
 
 
+def _sync_context_engine_window(
+    engine: ContextEngine, cfg: Any, agent_config: AgentConfig | None
+) -> None:
+    if not engine.policy.auto_size_context_window:
+        return
+    from agent_forge.llm.capabilities import resolve_capabilities
+
+    agent_cfg = getattr(cfg, "agent", None)
+    raw_provider = getattr(agent_cfg, "default_provider", None)
+    raw_model = getattr(agent_cfg, "default_model", None)
+    provider_name = (
+        agent_config.provider
+        if agent_config is not None
+        else (raw_provider if isinstance(raw_provider, str) else "")
+    )
+    model_name = (
+        agent_config.model
+        if agent_config is not None
+        else (raw_model if isinstance(raw_model, str) else "")
+    )
+    if not provider_name:
+        return
+    providers = getattr(cfg, "providers", None)
+    provider_cfg = providers.get(provider_name) if isinstance(providers, dict) else None
+    raw_mode = getattr(provider_cfg, "api_mode", None)
+    raw_url = getattr(provider_cfg, "base_url", None)
+    raw_caps = getattr(provider_cfg, "capabilities", None)
+    caps = resolve_capabilities(
+        provider_name,
+        model_name,
+        api_mode=raw_mode if isinstance(raw_mode, str) else None,
+        base_url=raw_url if isinstance(raw_url, str) and raw_url else None,
+        overrides=dict(raw_caps) if isinstance(raw_caps, dict) and raw_caps else None,
+    )
+    engine.sync_context_window(caps.max_context_tokens)
+
+
 def _resolve_context_engine_for_config(
     repo_path: str | Path,
     task: str,
@@ -70,11 +107,13 @@ def _resolve_context_engine_for_config(
             if agent_config is not None:
                 agent_config.context_enabled = False
             return None
-        return ContextEngine(
+        engine = ContextEngine(
             repo_path=repo_path,
             task=task,
             policy=ContextPolicy.from_settings(ctx_cfg),
         )
+        _sync_context_engine_window(engine, cfg, agent_config)
+        return engine
     return ContextEngine(repo_path=repo_path, task=task)
 
 
@@ -253,7 +292,7 @@ def _create_provider_from_config(
             kwargs["base_url"] = provider_cfg.base_url
         if provider_name in ("openai", "openai-compatible") and provider_cfg.api_mode != "auto":
             kwargs["api_mode"] = provider_cfg.api_mode
-        if provider_cfg.capabilities and provider_name in ("openai", "openai-compatible"):
+        if provider_cfg.capabilities:
             kwargs["capability_overrides"] = dict(provider_cfg.capabilities)
     return default_provider_factory(provider_name, api_key, **kwargs)
 

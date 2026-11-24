@@ -54,9 +54,16 @@ _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 529}  # 529 = overloaded
 class AnthropicProvider(LLMProvider):
     """Anthropic adapter using the Messages REST API with httpx."""
 
-    def __init__(self, api_key: str, *, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str | None = None,
+        capability_overrides: dict[str, Any] | None = None,
+    ) -> None:
         self._api_key = api_key
         self._base_url = base_url or _ANTHROPIC_BASE_URL
+        self._capability_overrides = dict(capability_overrides or {})
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=httpx.Timeout(120.0),
@@ -69,7 +76,11 @@ class AnthropicProvider(LLMProvider):
 
     def capabilities(self, model: str | None = None) -> ProviderCapabilities:
         """Return declared capabilities for Anthropic Messages API."""
-        return resolve_capabilities("anthropic", model or _DEFAULT_MODEL)
+        return resolve_capabilities(
+            "anthropic",
+            model or _DEFAULT_MODEL,
+            overrides=self._capability_overrides or None,
+        )
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""
@@ -151,6 +162,20 @@ class AnthropicProvider(LLMProvider):
                 {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
             ]
 
+    @staticmethod
+    def _apply_thinking_config(body: dict[str, Any], config: LLMConfig) -> None:
+        if config.thinking_mode == "adaptive":
+            body["thinking"] = {"type": "adaptive"}
+        elif config.thinking_mode == "disabled":
+            body["thinking"] = {"type": "disabled"}
+        elif config.thinking_budget_tokens is not None and config.thinking_budget_tokens > 0:
+            body["thinking"] = {"type": "enabled", "budget_tokens": config.thinking_budget_tokens}
+        elif config.thinking_mode == "enabled":
+            body["thinking"] = {"type": "enabled", "budget_tokens": 1024}
+
+        if config.reasoning_effort:
+            body["output_config"] = {"effort": config.reasoning_effort.strip().lower()}
+
     def _build_request_body(
         self,
         messages: list[Message],
@@ -192,8 +217,7 @@ class AnthropicProvider(LLMProvider):
             if config.parallel_tool_calls is False:
                 body["tool_choice"] = {"type": "auto", "disable_parallel_tool_use": True}
 
-        if config.thinking_budget_tokens is not None and config.thinking_budget_tokens > 0:
-            body["thinking"] = {"type": "enabled", "budget_tokens": config.thinking_budget_tokens}
+        self._apply_thinking_config(body, config)
 
         return body
 

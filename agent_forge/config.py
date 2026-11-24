@@ -42,6 +42,12 @@ class AgentSettings(BaseModel):
     max_cost_usd: float | None = None
     max_duration_seconds: float | None = None
     budget_action: Literal["timeout", "pause"] = "timeout"
+    input_cost_per_million: float | None = Field(default=None, ge=0.0)
+    output_cost_per_million: float | None = Field(default=None, ge=0.0)
+    reasoning_effort: str | None = None
+    thinking_mode: Literal["disabled", "enabled", "adaptive"] | None = None
+    thinking_budget_tokens: int | None = Field(default=None, ge=0)
+    thinking_level: Literal["minimal", "low", "medium", "high"] | None = None
 
 
 class ContextSettings(BaseModel):
@@ -55,6 +61,7 @@ class ContextSettings(BaseModel):
     max_repo_files: int = 500
     max_working_set_files: int = 12
     context_window_tokens: int = 100_000
+    auto_size_context_window: bool = True
     compaction_trigger_ratio: float = 0.75
     compaction_target_ratio: float = 0.45
     keep_recent_turns: int = 4
@@ -145,6 +152,13 @@ class ModelProfileSettings(BaseModel):
     temperature: float | None = None
     api_mode: Literal["auto", "responses", "chat_completions"] = "auto"
     capabilities: dict[str, Any] = Field(default_factory=dict)
+    input_cost_per_million: float | None = Field(default=None, ge=0.0)
+    output_cost_per_million: float | None = Field(default=None, ge=0.0)
+    cache_read_cost_per_million: float | None = Field(default=None, ge=0.0)
+    reasoning_effort: str | None = None
+    thinking_mode: Literal["disabled", "enabled", "adaptive"] | None = None
+    thinking_budget_tokens: int | None = Field(default=None, ge=0)
+    thinking_level: Literal["minimal", "low", "medium", "high"] | None = None
 
 
 class RoutingSettings(BaseModel):
@@ -298,10 +312,10 @@ def _coerce_value(field_type: object, raw: str) -> Any:
     origin = get_origin(field_type)
     if field_type is bool or (origin in (Union, UnionType) and bool in get_args(field_type)):
         return raw.lower() in ("true", "1", "yes")
-    if field_type is int:
-        return int(raw)
-    if field_type is float:
-        return float(raw)
+    if field_type is int or (origin in (Union, UnionType) and int in get_args(field_type)):
+        return None if raw.strip().lower() in ("", "none", "null") else int(raw)
+    if field_type is float or (origin in (Union, UnionType) and float in get_args(field_type)):
+        return None if raw.strip().lower() in ("", "none", "null") else float(raw)
     if origin is list:
         return [item.strip() for item in raw.split(",") if item.strip()]
     return raw

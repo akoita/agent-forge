@@ -559,6 +559,8 @@ class OpenAIProvider(LLMProvider):
             "max_tokens": config.max_tokens,
             "top_p": config.top_p,
         }
+        if config.reasoning_effort:
+            body["reasoning_effort"] = config.reasoning_effort.strip().lower()
 
         if config.response_schema and caps.structured_output:
             body["response_format"] = {

@@ -108,7 +108,9 @@ class LLMConfig:
     response_schema: dict[str, Any] | None = None
     reasoning_effort: str | None = None
     parallel_tool_calls: bool | None = None
+    thinking_mode: str | None = None
     thinking_budget_tokens: int | None = None
+    thinking_level: str | None = None
 
 
 class LLMProvider(ABC):
