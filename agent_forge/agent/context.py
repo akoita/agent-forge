@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -287,6 +287,63 @@ class WorkingSet:
             "evicted_tool_results": self.evicted_tool_results,
             "evicted_tokens": self.evicted_tokens,
         }
+
+    def export_state(self) -> dict[str, Any]:
+        """Serialize complete working-set state for durable session persistence."""
+        return {
+            "max_files": self.max_files,
+            "seq": self._seq,
+            "files": [asdict(entry) for entry in self.files.values()],
+            "loaded_instruction_paths": list(self.loaded_instruction_paths),
+            "active_failures": [asdict(failure) for failure in self.active_failures],
+            "last_verification": (
+                asdict(self.last_verification) if self.last_verification is not None else None
+            ),
+            "evicted_tool_results": self.evicted_tool_results,
+            "evicted_tokens": self.evicted_tokens,
+        }
+
+    @classmethod
+    def from_state(cls, data: dict[str, Any]) -> WorkingSet:
+        """Restore a :class:`WorkingSet` snapshot produced by :meth:`export_state`."""
+        ws = cls(max_files=int(data.get("max_files", 12)))
+        ws._seq = int(data.get("seq", 0))
+        for raw_file in data.get("files", []):
+            if isinstance(raw_file, dict) and raw_file.get("rel_path"):
+                entry = WorkingFileEntry(
+                    rel_path=str(raw_file["rel_path"]),
+                    pinned=bool(raw_file.get("pinned", False)),
+                    last_iteration=int(raw_file.get("last_iteration", 0)),
+                    last_action=str(raw_file.get("last_action", "read")),
+                    reads=int(raw_file.get("reads", 0)),
+                    writes=int(raw_file.get("writes", 0)),
+                    touched_order=int(raw_file.get("touched_order", 0)),
+                )
+                ws.files[entry.rel_path] = entry
+        ws.loaded_instruction_paths = [
+            str(item) for item in data.get("loaded_instruction_paths", [])
+        ]
+        ws.active_failures = [
+            FailureRecord(
+                iteration=int(item["iteration"]),
+                tool_name=str(item["tool_name"]),
+                target=str(item["target"]),
+                summary=str(item["summary"]),
+            )
+            for item in data.get("active_failures", [])
+            if isinstance(item, dict)
+        ]
+        raw_verif = data.get("last_verification")
+        if isinstance(raw_verif, dict):
+            ws.last_verification = VerificationSnapshot(
+                iteration=int(raw_verif["iteration"]),
+                command=str(raw_verif["command"]),
+                exit_code=int(raw_verif["exit_code"]),
+                summary=str(raw_verif["summary"]),
+            )
+        ws.evicted_tool_results = int(data.get("evicted_tool_results", 0))
+        ws.evicted_tokens = int(data.get("evicted_tokens", 0))
+        return ws
 
 
 @dataclass(frozen=True)
@@ -802,6 +859,7 @@ class ContextEngine:
         groups: Sequence[_TurnGroup],
         *,
         protected_start: int,
+        force_all: bool = False,
     ) -> int:
         if protected_start <= self._compacted_group_cutoff:
             return 0
@@ -813,20 +871,87 @@ class ContextEngine:
             notes.append(_extract_group_note(groups[cutoff]))
             cutoff += 1
             summary_text = _render_durable_summary(run.task, self.working_set, notes, cutoff)
-            candidate_view = self._render_view(
-                header,
-                groups,
-                cutoff=cutoff,
-                summary_text=summary_text,
-            )
-            if estimate_messages_tokens(candidate_view) <= self.policy.target_tokens:
-                break
+            if not force_all:
+                candidate_view = self._render_view(
+                    header,
+                    groups,
+                    cutoff=cutoff,
+                    summary_text=summary_text,
+                )
+                if estimate_messages_tokens(candidate_view) <= self.policy.target_tokens:
+                    break
 
         summarized = cutoff - self._compacted_group_cutoff
         self._compacted_group_cutoff = cutoff
         self._folded_notes = notes
         self._summary_message_text = summary_text
         return summarized
+
+    def _run_compaction_pass(
+        self,
+        run: AgentRun,
+        *,
+        header: Sequence[Message],
+        groups: Sequence[_TurnGroup],
+        current_tokens: int,
+        raw_tokens: int,
+        prefix_hash: str,
+        keep_recent_turns: int,
+        force_stage2: bool = False,
+    ) -> tuple[list[Message], int, CompactionEvent | None]:
+        protected_start = max(
+            self._compacted_group_cutoff,
+            len(groups) - max(0, keep_recent_turns),
+        )
+        call_lookup = _build_call_lookup(groups)
+        latest_touches = _latest_file_touch_indices(groups, call_lookup)
+        pruned_count = self._apply_stage1_pruning(
+            groups,
+            start_group=self._compacted_group_cutoff,
+            protected_start=protected_start,
+            call_lookup=call_lookup,
+            latest_touches=latest_touches,
+        )
+        current_view = self._render_view(
+            header,
+            groups,
+            cutoff=self._compacted_group_cutoff,
+            summary_text=self._summary_message_text,
+        )
+        summarized_turns = 0
+        if force_stage2 or estimate_messages_tokens(current_view) > self.policy.target_tokens:
+            summarized_turns = self._apply_stage2_summarization(
+                run,
+                header,
+                groups,
+                protected_start=protected_start,
+                force_all=force_stage2,
+            )
+            current_view = self._render_view(
+                header,
+                groups,
+                cutoff=self._compacted_group_cutoff,
+                summary_text=self._summary_message_text,
+            )
+        compaction_event: CompactionEvent | None = None
+        if pruned_count > 0 or summarized_turns > 0:
+            self._compaction_epoch += 1
+            new_tokens = estimate_messages_tokens(current_view)
+            saved_now = max(0, current_tokens - new_tokens)
+            self._tokens_saved_total += saved_now
+            compaction_event = CompactionEvent(
+                epoch=self._compaction_epoch,
+                iteration=run.iterations,
+                raw_tokens=raw_tokens,
+                compacted_tokens=new_tokens,
+                tokens_saved=saved_now,
+                pruned_tool_results=pruned_count,
+                summarized_turns=summarized_turns,
+                working_set_files=tuple(self.working_set.active_file_paths()),
+                stable_prefix_hash=prefix_hash,
+            )
+            return current_view, new_tokens, compaction_event
+        return current_view, current_tokens, None
 
     def assemble(
         self,
@@ -867,56 +992,16 @@ class ContextEngine:
         compaction_event: CompactionEvent | None = None
 
         if current_tokens > self.policy.trigger_tokens:
-            protected_start = max(
-                self._compacted_group_cutoff,
-                len(groups) - self.policy.keep_recent_turns,
+            current_view, current_tokens, compaction_event = self._run_compaction_pass(
+                run,
+                header=header,
+                groups=groups,
+                current_tokens=current_tokens,
+                raw_tokens=raw_tokens,
+                prefix_hash=prefix_hash,
+                keep_recent_turns=self.policy.keep_recent_turns,
+                force_stage2=False,
             )
-            call_lookup = _build_call_lookup(groups)
-            latest_touches = _latest_file_touch_indices(groups, call_lookup)
-            pruned_count = self._apply_stage1_pruning(
-                groups,
-                start_group=self._compacted_group_cutoff,
-                protected_start=protected_start,
-                call_lookup=call_lookup,
-                latest_touches=latest_touches,
-            )
-            current_view = self._render_view(
-                header,
-                groups,
-                cutoff=self._compacted_group_cutoff,
-                summary_text=self._summary_message_text,
-            )
-            summarized_turns = 0
-            if estimate_messages_tokens(current_view) > self.policy.target_tokens:
-                summarized_turns = self._apply_stage2_summarization(
-                    run,
-                    header,
-                    groups,
-                    protected_start=protected_start,
-                )
-                current_view = self._render_view(
-                    header,
-                    groups,
-                    cutoff=self._compacted_group_cutoff,
-                    summary_text=self._summary_message_text,
-                )
-            if pruned_count > 0 or summarized_turns > 0:
-                self._compaction_epoch += 1
-                new_tokens = estimate_messages_tokens(current_view)
-                saved_now = max(0, current_tokens - new_tokens)
-                self._tokens_saved_total += saved_now
-                compaction_event = CompactionEvent(
-                    epoch=self._compaction_epoch,
-                    iteration=run.iterations,
-                    raw_tokens=raw_tokens,
-                    compacted_tokens=new_tokens,
-                    tokens_saved=saved_now,
-                    pruned_tool_results=pruned_count,
-                    summarized_turns=summarized_turns,
-                    working_set_files=tuple(self.working_set.active_file_paths()),
-                    stable_prefix_hash=prefix_hash,
-                )
-                current_tokens = new_tokens
 
         breakpoint_idx = len(header) if self._compacted_group_cutoff > 0 else 0
         return ContextAssembly(
@@ -931,6 +1016,166 @@ class ContextEngine:
             compaction_event=compaction_event,
             working_set_files=tuple(self.working_set.active_file_paths()),
         )
+
+    def force_compact(
+        self,
+        run: AgentRun,
+        *,
+        tool_definitions: Sequence[ToolDefinition] = (),
+        keep_recent_turns: int | None = None,
+    ) -> ContextAssembly:
+        """Deterministically run compaction regardless of token thresholds (e.g. ``/compact``)."""
+        self.sync_from_run(run)
+        raw_tokens = estimate_messages_tokens(run.messages)
+        system_text = (
+            run.messages[0].content if run.messages and run.messages[0].role == Role.SYSTEM else ""
+        )
+        prefix_hash = compute_stable_prefix_hash(system_text, tool_definitions)
+        header, groups = _partition_turn_groups(run.messages)
+        current_view = self._render_view(
+            header,
+            groups,
+            cutoff=self._compacted_group_cutoff,
+            summary_text=self._summary_message_text,
+        )
+        current_tokens = estimate_messages_tokens(current_view)
+        keep_turns = (
+            self.policy.keep_recent_turns if keep_recent_turns is None else keep_recent_turns
+        )
+        current_view, current_tokens, compaction_event = self._run_compaction_pass(
+            run,
+            header=header,
+            groups=groups,
+            current_tokens=current_tokens,
+            raw_tokens=raw_tokens,
+            prefix_hash=prefix_hash,
+            keep_recent_turns=keep_turns,
+            force_stage2=True,
+        )
+        breakpoint_idx = len(header) if self._compacted_group_cutoff > 0 else 0
+        return ContextAssembly(
+            messages=current_view,
+            stable_prefix_hash=prefix_hash,
+            cache_breakpoint_index=breakpoint_idx,
+            compaction_epoch=self._compaction_epoch,
+            raw_prompt_tokens=raw_tokens,
+            assembled_prompt_tokens=current_tokens,
+            tokens_saved=max(0, raw_tokens - current_tokens),
+            compacted_this_turn=compaction_event is not None,
+            compaction_event=compaction_event,
+            working_set_files=tuple(self.working_set.active_file_paths()),
+        )
+
+    def export_state(self) -> dict[str, Any]:
+        """Serialize complete engine state for durable multi-turn session storage."""
+        return {
+            "version": 1,
+            "task": self.task,
+            "policy": asdict(self.policy),
+            "initial_prepared": self._initial_prepared,
+            "loaded_instruction_resolved": sorted(
+                str(path) for path in self._loaded_instruction_resolved
+            ),
+            "base_instructions": {
+                "rendered": self._base_instructions.rendered,
+                "total_tokens": self._base_instructions.total_tokens,
+                "truncated": self._base_instructions.truncated,
+            },
+            "task_scoped_instructions": {
+                "rendered": self._task_scoped_instructions.rendered,
+                "total_tokens": self._task_scoped_instructions.total_tokens,
+                "truncated": self._task_scoped_instructions.truncated,
+            },
+            "repo_map": {
+                "rendered": self._repo_map.rendered,
+                "ranked_files": list(self._repo_map.ranked_files),
+                "total_files_scanned": self._repo_map.total_files_scanned,
+                "total_symbols": self._repo_map.total_symbols,
+                "estimated_tokens": self._repo_map.estimated_tokens,
+                "truncated": self._repo_map.truncated,
+            },
+            "working_set": self.working_set.export_state(),
+            "observed_invocations": self._observed_invocations,
+            "compaction_epoch": self._compaction_epoch,
+            "compacted_group_cutoff": self._compacted_group_cutoff,
+            "folded_notes": list(self._folded_notes),
+            "summary_message_text": self._summary_message_text,
+            "pruned_tool_stubs": {str(idx): text for idx, text in self._pruned_tool_stubs.items()},
+            "tokens_saved_total": self._tokens_saved_total,
+        }
+
+    def restore_state(self, state: dict[str, Any], *, keep_policy: bool = False) -> None:
+        """Restore engine internals in-place from a snapshot produced by :meth:`export_state`."""
+        if not isinstance(state, dict):
+            msg = "ContextEngine state snapshot must be a JSON object"
+            raise ValueError(msg)
+        version = state.get("version", 1)
+        if version != 1:
+            msg = f"Unsupported ContextEngine state version: {version}"
+            raise ValueError(msg)
+
+        if "task" in state:
+            self.task = str(state["task"])
+        raw_policy = state.get("policy")
+        if not keep_policy and isinstance(raw_policy, dict):
+            self.policy = ContextPolicy(**raw_policy)
+
+        self._initial_prepared = bool(state.get("initial_prepared", False))
+        self._loaded_instruction_resolved = {
+            Path(str(item)) for item in state.get("loaded_instruction_resolved", [])
+        }
+        base_data = state.get("base_instructions") or {}
+        self._base_instructions = DiscoveredInstructions(
+            files=(),
+            rendered=str(base_data.get("rendered", "")),
+            total_tokens=int(base_data.get("total_tokens", 0)),
+            truncated=bool(base_data.get("truncated", False)),
+        )
+        scoped_data = state.get("task_scoped_instructions") or {}
+        self._task_scoped_instructions = DiscoveredInstructions(
+            files=(),
+            rendered=str(scoped_data.get("rendered", "")),
+            total_tokens=int(scoped_data.get("total_tokens", 0)),
+            truncated=bool(scoped_data.get("truncated", False)),
+        )
+        map_data = state.get("repo_map") or {}
+        self._repo_map = RepoMap(
+            rendered=str(map_data.get("rendered", "")),
+            ranked_files=tuple(str(item) for item in map_data.get("ranked_files", [])),
+            total_files_scanned=int(map_data.get("total_files_scanned", 0)),
+            total_symbols=int(map_data.get("total_symbols", 0)),
+            estimated_tokens=int(map_data.get("estimated_tokens", 0)),
+            truncated=bool(map_data.get("truncated", False)),
+        )
+        raw_ws = state.get("working_set")
+        if isinstance(raw_ws, dict):
+            self.working_set = WorkingSet.from_state(raw_ws)
+        self._observed_invocations = int(state.get("observed_invocations", 0))
+        self._compaction_epoch = int(state.get("compaction_epoch", 0))
+        self._compacted_group_cutoff = int(state.get("compacted_group_cutoff", 0))
+        self._folded_notes = [str(item) for item in state.get("folded_notes", [])]
+        self._summary_message_text = str(state.get("summary_message_text", ""))
+        raw_stubs = state.get("pruned_tool_stubs") or {}
+        self._pruned_tool_stubs = {
+            int(k): str(v) for k, v in raw_stubs.items() if str(k).lstrip("-").isdigit()
+        }
+        self._tokens_saved_total = int(state.get("tokens_saved_total", 0))
+
+    @classmethod
+    def from_state(
+        cls,
+        repo_path: Path | str,
+        state: dict[str, Any],
+        *,
+        policy: ContextPolicy | None = None,
+    ) -> ContextEngine:
+        """Construct a :class:`ContextEngine` directly from an exported state dictionary."""
+        if not isinstance(state, dict):
+            msg = "ContextEngine state snapshot must be a JSON object"
+            raise ValueError(msg)
+        engine = cls(repo_path, task=str(state.get("task", "")), policy=policy)
+        engine.restore_state(state, keep_policy=policy is not None)
+        return engine
 
     def stats_dict(self, assembly: ContextAssembly | None = None) -> dict[str, Any]:
         """Return JSON-serializable telemetry describing assembled context state."""

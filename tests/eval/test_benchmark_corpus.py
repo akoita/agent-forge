@@ -2089,3 +2089,72 @@ async def test_declarative_approval_plugin_tool_and_egress_proxy_policy(
     assert tool.executed == 1
 
     await _verify_eval_proxy_allowlist()
+
+
+@pytest.mark.asyncio
+async def test_dev_session_restart_preserves_messages_working_set_and_compaction_state(
+    tmp_path: Path,
+) -> None:
+    """Exit criterion: restarting DevSession recovers history, WorkingSet, and compaction."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from agent_forge.agent import AgentConfig, ContextPolicy, DevSession, SessionStore
+    from agent_forge.agent.core import react_loop
+    from agent_forge.llm.base import LLMResponse, TokenUsage, ToolCall
+    from agent_forge.tools import create_default_registry
+    from agent_forge.tools.base import ToolResult
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Session Guide\nKeep tests green.\n", encoding="utf-8")
+    (repo / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    store = SessionStore(base_dir=tmp_path / "sessions")
+    session = DevSession(repo_path=str(repo), id="eval-session-205")
+    policy = ContextPolicy(
+        context_window_tokens=1000,
+        compaction_trigger_ratio=0.35,
+        compaction_target_ratio=0.20,
+        keep_recent_turns=1,
+    )
+    engine = session.build_context_engine(task="Inspect VALUE", policy=policy)
+    registry = create_default_registry(load_plugins=False)
+    sandbox = AsyncMock()
+    sandbox.exec.return_value = MagicMock(exit_code=0, stdout="", stderr="")
+    sandbox.read_file.return_value = "VALUE = 1\n"
+
+    llm = AsyncMock()
+    llm.complete.side_effect = [
+        LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCall(
+                    id="call_1",
+                    name="write_file",
+                    arguments={"path": "/workspace/app.py", "content": "VALUE = 2\n"},
+                )
+            ],
+            usage=TokenUsage(50, 10, 60),
+            finish_reason="tool_calls",
+        ),
+        LLMResponse(
+            content="Updated VALUE to 2.",
+            tool_calls=[],
+            usage=TokenUsage(50, 10, 60),
+            finish_reason="stop",
+        ),
+    ]
+    run1 = session.prepare_next_run("Update VALUE", config=AgentConfig(max_iterations=4))
+    await react_loop(run1, llm, registry, sandbox, context_engine=engine)
+    assert isinstance(run1.tool_invocations[0].result, ToolResult)
+    engine.force_compact(run1, keep_recent_turns=0)
+    session.record_turn(prompt="Update VALUE", run=run1, context_engine=engine)
+    store.save(session)
+
+    restored = SessionStore(base_dir=tmp_path / "sessions").load("eval-session-205")
+    restored_engine = restored.build_context_engine()
+    assert len(restored.turns) == 1
+    assert restored.turns[0].response == "Updated VALUE to 2."
+    assert "app.py" in restored_engine.working_set.modified_files
+    assert restored_engine._compaction_epoch >= 1
+    assert restored_engine._summary_message_text.startswith("[CONTEXT SUMMARY")

@@ -797,6 +797,7 @@ flowchart LR
 - **Instruction discovery (`instructions.py`):** Loads `AGENTS.md`, `CLAUDE.md`, and `.agent-forge/instructions.md` from enclosing `.git` ancestors down to target child directories, deduplicating symlinks (`Path.resolve()`) and injecting unseen child instructions append-only when subtrees are touched.
 - **Repository map (`repo_map.py`):** Extracts Python (`ast`) and multi-language (regex) definitions and ranks files with Personalized PageRank within `context.max_repo_map_tokens`.
 - **Two-stage compaction & cache alignment:** Pins modified files in `WorkingSet`, keeps recent turns and active failures intact, folds complete `(ASSISTANT, TOOL...)` turn groups so tool call pairings remain valid, emits `"context_compacted"` entries to `journal.jsonl`, and sets `LLMConfig.cache_key` and `cache_breakpoint_index`.
+- **Durable multi-turn ADE sessions (`session.py`):** `WorkingSet` and `ContextEngine` export/restore full snapshots (`export_state()` / `from_state()`, plus `force_compact()`), while `DevSession` and `SessionStore` persist multi-turn conversation history, tool invocations, turns, and context snapshots atomically under `~/.agent-forge/sessions/<session_id>/` (`session.json`, `messages.jsonl`, `events.jsonl`, `context_state.json`).
 
 #### Termination Conditions
 
