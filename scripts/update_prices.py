@@ -18,11 +18,12 @@ import urllib.request
 from pathlib import Path
 
 _LITELLM_URL = (
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/"
-    "model_prices_and_context_window.json"
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 )
 
-_OUTPUT = Path(__file__).resolve().parent.parent / "agent_forge" / "observability" / "model_prices.json"
+_OUTPUT = (
+    Path(__file__).resolve().parent.parent / "agent_forge" / "observability" / "model_prices.json"
+)
 
 
 def main() -> None:
@@ -38,10 +39,21 @@ def main() -> None:
         output_cost = info.get("output_cost_per_token")
         if input_cost is None or output_cost is None:
             continue
-        prices[model_key] = {
+        entry: dict[str, object] = {
             "input_cost_per_token": input_cost,
             "output_cost_per_token": output_cost,
         }
+        cache_cost = info.get("cache_read_input_token_cost")
+        if (
+            isinstance(cache_cost, (int, float))
+            and not isinstance(cache_cost, bool)
+            and cache_cost >= 0
+        ):
+            entry["cache_read_input_token_cost"] = cache_cost
+        max_input = info.get("max_input_tokens")
+        if isinstance(max_input, int) and not isinstance(max_input, bool) and max_input > 0:
+            entry["max_input_tokens"] = max_input
+        prices[model_key] = entry
 
     _OUTPUT.write_text(json.dumps(prices, indent=2) + "\n")
     print(f"Wrote {len(prices)} models to {_OUTPUT}")

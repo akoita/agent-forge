@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from agent_forge.agent.models import AgentRun
     from agent_forge.llm.base import TokenUsage
 
@@ -64,16 +66,97 @@ _FALLBACK_PRICES: dict[str, dict[str, float]] = {
 
 
 def _load_prices() -> dict[str, dict[str, float]]:
-    """Load pricing from vendored file, falling back to hardcoded defaults."""
+    """Load pricing from vendored file, keeping fallback entries for legacy IDs."""
+    merged: dict[str, dict[str, float]] = {
+        model: dict(rates) for model, rates in _FALLBACK_PRICES.items()
+    }
     if _PRICES_FILE.exists():
         try:
-            return json.loads(_PRICES_FILE.read_text())  # type: ignore[no-any-return]
+            loaded = json.loads(_PRICES_FILE.read_text())
+            if isinstance(loaded, dict):
+                merged.update(loaded)
         except (json.JSONDecodeError, OSError):
             pass
-    return dict(_FALLBACK_PRICES)
+    return merged
 
 
 COST_TABLE: dict[str, dict[str, float]] = _load_prices()
+
+
+def pricing_override_from_per_million(
+    input_cost_per_million: float | None,
+    output_cost_per_million: float | None,
+    *,
+    cache_read_cost_per_million: float | None = None,
+) -> dict[str, float] | None:
+    """Convert per-1M USD token prices into a per-token pricing dictionary."""
+    if input_cost_per_million is None and output_cost_per_million is None:
+        return None
+    entry: dict[str, float] = {
+        "input_cost_per_token": float(input_cost_per_million or 0.0) / 1_000_000.0,
+        "output_cost_per_token": float(output_cost_per_million or 0.0) / 1_000_000.0,
+    }
+    if cache_read_cost_per_million is not None:
+        entry["cache_read_input_token_cost"] = float(cache_read_cost_per_million) / 1_000_000.0
+    return entry
+
+
+def lookup_model_pricing(
+    model: str,
+    *,
+    pricing_overrides: Mapping[str, Mapping[str, float]] | None = None,
+) -> Mapping[str, float] | None:
+    """Resolve per-token pricing from overrides first, then ``COST_TABLE``."""
+    lower = model.lower()
+    if pricing_overrides:
+        for key in (model, lower, "*"):
+            if key in pricing_overrides:
+                return pricing_overrides[key]
+    for candidate in (
+        model,
+        lower,
+        f"gemini/{lower}",
+        f"anthropic/{lower}",
+        f"openai/{lower}",
+    ):
+        if candidate in COST_TABLE:
+            return COST_TABLE[candidate]
+    return None
+
+
+def _num_or_none(value: object) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
+
+
+def _extract_profile_pricing(obj: object) -> dict[str, float] | None:
+    return pricing_override_from_per_million(
+        _num_or_none(getattr(obj, "input_cost_per_million", None)),
+        _num_or_none(getattr(obj, "output_cost_per_million", None)),
+        cache_read_cost_per_million=_num_or_none(getattr(obj, "cache_read_cost_per_million", None)),
+    )
+
+
+def build_pricing_overrides(cfg: Any) -> dict[str, dict[str, float]]:
+    """Collect per-model and agent-level USD/1M pricing overrides from *cfg*."""
+    overrides: dict[str, dict[str, float]] = {}
+    profiles = getattr(cfg, "model_profiles", None)
+    if isinstance(profiles, dict):
+        for profile in profiles.values():
+            model_name = getattr(profile, "model", None)
+            rates = _extract_profile_pricing(profile)
+            if isinstance(model_name, str) and model_name and rates is not None:
+                overrides[model_name] = rates
+    agent_cfg = getattr(cfg, "agent", None)
+    agent_rates = _extract_profile_pricing(agent_cfg)
+    if agent_rates is not None:
+        default_model = getattr(agent_cfg, "default_model", None)
+        if isinstance(default_model, str) and default_model:
+            overrides[default_model] = agent_rates
+        overrides["*"] = agent_rates
+    return overrides
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -97,12 +180,13 @@ class CostTracker:
 
     run_id: str
     entries: list[CostEntry] = field(default_factory=list)
+    pricing_overrides: dict[str, dict[str, float]] = field(default_factory=dict)
 
     # -- Recording ---------------------------------------------------------
 
     def record(self, usage: TokenUsage, model: str) -> None:
         """Append a cost entry for one LLM call."""
-        cost = _estimate_cost(usage, model)
+        cost = _estimate_cost(usage, model, pricing_overrides=self.pricing_overrides or None)
         self.entries.append(
             CostEntry(
                 model=model,
@@ -135,14 +219,19 @@ class CostTracker:
 # ---------------------------------------------------------------------------
 
 
-def _estimate_cost(usage: TokenUsage, model: str) -> float:
+def _estimate_cost(
+    usage: TokenUsage,
+    model: str,
+    *,
+    pricing_overrides: Mapping[str, Mapping[str, float]] | None = None,
+) -> float:
     """Compute estimated USD cost for a single LLM call.
 
-    Pricing is **per token** (sourced from LiteLLM's community database).
+    Pricing is **per token** (sourced from overrides or LiteLLM's database).
     Cached prompt tokens use ``cache_read_input_token_cost`` when present or
     a 50% discount on ``input_cost_per_token``.
     """
-    pricing = COST_TABLE.get(model)
+    pricing = lookup_model_pricing(model, pricing_overrides=pricing_overrides)
     if pricing is None:
         return 0.0
     input_rate = pricing["input_cost_per_token"]

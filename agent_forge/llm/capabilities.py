@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import inspect
+import re
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Any
 from urllib.parse import urlparse
+
+from agent_forge.observability.cost import lookup_model_pricing
 
 _CAPABILITY_BOOL_FIELDS: tuple[str, ...] = (
     "tool_calling",
@@ -17,7 +20,10 @@ _CAPABILITY_BOOL_FIELDS: tuple[str, ...] = (
     "stateful_response_ids",
     "native_tools",
 )
-_LONG_CONTEXT_PREFIXES: tuple[str, ...] = ("gpt-5", "o3", "o4", "gpt-4.1")
+_OPENAI_LONG_CONTEXT_RE = re.compile(
+    r"^(?:gpt-(?:4\.1|[5-9]\d*(?:[.\-_]|$))|o[3-9](?:[.\-_]|$)|codex-)"
+)
+_MILLION_CONTEXT_RE = re.compile(r"(?:^|[-_.:/])1m(?:$|[-_.:/])")
 _LOCAL_ENDPOINT_HOSTS: frozenset[str] = frozenset(
     {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"}  # noqa: S104
 )
@@ -79,6 +85,35 @@ def _is_native_openai_url(base_url: str | None) -> bool:
     return not normalized or normalized.startswith("https://api.openai.com")
 
 
+def _strip_provider_prefix(model: str) -> str:
+    cleaned = model.strip()
+    if "/" in cleaned:
+        return cleaned.rsplit("/", 1)[-1]
+    return cleaned
+
+
+def _lookup_vendored_context_window(model: str) -> int | None:
+    if not model.strip():
+        return None
+    pricing = lookup_model_pricing(model)
+    if pricing is None:
+        return None
+    raw = pricing.get("max_input_tokens")
+    if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+        return raw
+    return None
+
+
+def _resolve_openai_max_context(model: str) -> int:
+    short = _strip_provider_prefix(model).lower()
+    if _MILLION_CONTEXT_RE.search(short):
+        return 1_000_000
+    if _OPENAI_LONG_CONTEXT_RE.match(short):
+        return 200_000
+    vendored = _lookup_vendored_context_window(model)
+    return vendored if vendored is not None else 128_000
+
+
 def _openai_capabilities(
     model: str,
     *,
@@ -92,7 +127,7 @@ def _openai_capabilities(
     else:
         effective_mode = "responses" if is_native else "chat_completions"
 
-    max_ctx = 200_000 if model.lower().startswith(_LONG_CONTEXT_PREFIXES) else 128_000
+    max_ctx = _resolve_openai_max_context(model)
     if effective_mode == "responses":
         return ProviderCapabilities(
             tool_calling=True,
@@ -160,6 +195,8 @@ def resolve_capabilities(
             force_non_native=True,
         )
     elif normalized == "anthropic":
+        short_anthropic = _strip_provider_prefix(model).lower()
+        anthropic_ctx = 1_000_000 if _MILLION_CONTEXT_RE.search(short_anthropic) else 200_000
         base = ProviderCapabilities(
             reasoning_continuity=True,
             parallel_tool_calls=True,
@@ -168,7 +205,7 @@ def resolve_capabilities(
             structured_output=True,
             stateful_response_ids=False,
             native_tools=True,
-            max_context_tokens=200_000,
+            max_context_tokens=anthropic_ctx,
             api_protocol="anthropic_messages",
         )
     elif normalized == "gemini":
@@ -184,7 +221,10 @@ def resolve_capabilities(
             api_protocol="gemini_generate_content",
         )
     else:
-        base = ProviderCapabilities()
+        vendored_ctx = _lookup_vendored_context_window(model)
+        base = ProviderCapabilities(
+            max_context_tokens=vendored_ctx if vendored_ctx is not None else 128_000
+        )
     return _apply_overrides(base, overrides)
 
 

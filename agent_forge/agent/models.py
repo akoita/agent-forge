@@ -44,6 +44,11 @@ class AgentConfig:
     max_duration_seconds: float | None = None
     budget_action: str = "timeout"  # "timeout" | "pause"
     context_enabled: bool = True
+    pricing_overrides: dict[str, dict[str, float]] = field(default_factory=dict)
+    reasoning_effort: str | None = None
+    thinking_mode: str | None = None
+    thinking_budget_tokens: int | None = None
+    thinking_level: str | None = None
 
 
 @dataclass

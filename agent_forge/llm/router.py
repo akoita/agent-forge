@@ -16,7 +16,7 @@ from agent_forge.llm.qualification import (
     resolve_profile_capabilities,
     resolve_profile_credentials,
 )
-from agent_forge.observability.cost import COST_TABLE
+from agent_forge.observability.cost import lookup_model_pricing, pricing_override_from_per_million
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Mapping, Sequence
@@ -224,7 +224,7 @@ def select_route(
 
 
 def _lookup_model_pricing(model: str) -> tuple[float, float]:
-    pricing = COST_TABLE.get(model) or COST_TABLE.get(model.lower())
+    pricing = lookup_model_pricing(model)
     if pricing is None:
         return 0.0, 0.0
     return (
@@ -252,7 +252,16 @@ def _build_candidate(
         base_url=base_url,
         overrides=merged_caps,
     )
-    in_cost, out_cost = _lookup_model_pricing(profile.model)
+    override_rates = pricing_override_from_per_million(
+        profile.input_cost_per_million,
+        profile.output_cost_per_million,
+        cache_read_cost_per_million=profile.cache_read_cost_per_million,
+    )
+    if override_rates is not None:
+        in_cost = override_rates["input_cost_per_token"]
+        out_cost = override_rates["output_cost_per_token"]
+    else:
+        in_cost, out_cost = _lookup_model_pricing(profile.model)
     return ModelCandidate(
         profile_name=profile_name,
         provider_name=profile.provider,
@@ -280,8 +289,8 @@ def _instantiate_candidate_provider(
             kwargs["base_url"] = cand.base_url
         if cand.provider_name in ("openai", "openai-compatible"):
             kwargs["api_mode"] = cand.api_mode
-            if cand.capability_overrides:
-                kwargs["capability_overrides"] = dict(cand.capability_overrides)
+        if cand.capability_overrides:
+            kwargs["capability_overrides"] = dict(cand.capability_overrides)
         shared_clients[client_key] = provider_factory(cand.provider_name, api_key, **kwargs)
     return shared_clients[client_key]
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -89,6 +89,7 @@ class ContextPolicy:
     max_repo_files: int = 500
     max_working_set_files: int = 12
     context_window_tokens: int = 100_000
+    auto_size_context_window: bool = False
     compaction_trigger_ratio: float = 0.75
     compaction_target_ratio: float = 0.45
     keep_recent_turns: int = 4
@@ -116,6 +117,9 @@ class ContextPolicy:
             max_repo_files=settings.max_repo_files,
             max_working_set_files=settings.max_working_set_files,
             context_window_tokens=settings.context_window_tokens,
+            auto_size_context_window=(
+                settings.auto_size_context_window and settings.context_window_tokens == 100_000
+            ),
             compaction_trigger_ratio=settings.compaction_trigger_ratio,
             compaction_target_ratio=settings.compaction_target_ratio,
             keep_recent_turns=settings.keep_recent_turns,
@@ -548,6 +552,15 @@ class ContextEngine:
         self._summary_message_text = ""
         self._pruned_tool_stubs: dict[int, str] = {}
         self._tokens_saved_total = 0
+
+    def sync_context_window(self, max_context_tokens: int) -> None:
+        """Align auto-sized context window budget with resolved model capabilities."""
+        if (
+            self.policy.auto_size_context_window
+            and max_context_tokens > 0
+            and self.policy.context_window_tokens != max_context_tokens
+        ):
+            self.policy = replace(self.policy, context_window_tokens=max_context_tokens)
 
     def prepare_initial_context(self) -> tuple[DiscoveredInstructions, RepoMap]:
         """Discover repo instructions and build the structural repository map once."""

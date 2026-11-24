@@ -41,7 +41,11 @@ from agent_forge.llm.qualification import (
     resolve_profile_capabilities,
     resolve_profile_credentials,
 )
-from agent_forge.observability.cost import COST_TABLE, _estimate_cost
+from agent_forge.observability.cost import (
+    COST_TABLE,
+    _estimate_cost,
+    pricing_override_from_per_million,
+)
 from agent_forge.sandbox.base import SandboxConfig
 from agent_forge.sandbox.factory import create_sandbox
 from agent_forge.tools import create_default_registry
@@ -221,7 +225,21 @@ def _resolve_tasks(
     return resolve_tasks(task_ids, suite=suite)
 
 
-def _estimate_attempt_cost(usage: TokenUsage, model: str, base_url: str | None) -> float:
+def _estimate_attempt_cost(
+    usage: TokenUsage,
+    model: str,
+    base_url: str | None,
+    *,
+    profile: ModelProfileSettings | None = None,
+) -> float:
+    if profile is not None:
+        rates = pricing_override_from_per_million(
+            profile.input_cost_per_million,
+            profile.output_cost_per_million,
+            cache_read_cost_per_million=profile.cache_read_cost_per_million,
+        )
+        if rates is not None:
+            return _estimate_cost(usage, model, pricing_overrides={model: rates})
     cost = _estimate_cost(usage, model)
     if cost > 0.0:
         return cost
@@ -643,6 +661,7 @@ async def _run_single_attempt(
                 llm.reported_models,
                 time.monotonic() - started,
                 reason=f"{type(exc).__name__}: {exc}",
+                profile=profile,
             )
             return maybe_save_trajectory(
                 trajectory_dir,
@@ -667,6 +686,7 @@ async def _run_single_attempt(
         base_url,
         llm.reported_models,
         time.monotonic() - started,
+        profile=profile,
     )
     return maybe_save_trajectory(
         trajectory_dir,
@@ -689,6 +709,7 @@ def _error_attempt_result(
     latency_seconds: float,
     *,
     reason: str,
+    profile: ModelProfileSettings | None = None,
 ) -> TaskAttemptResult:
     tool_calls = len(run.tool_invocations)
     tool_errors = sum(
@@ -706,7 +727,9 @@ def _error_attempt_result(
         prompt_tokens=run.total_tokens.prompt_tokens,
         completion_tokens=run.total_tokens.completion_tokens,
         total_tokens=run.total_tokens.total_tokens,
-        estimated_cost_usd=round(_estimate_attempt_cost(run.total_tokens, model, base_url), 6),
+        estimated_cost_usd=round(
+            _estimate_attempt_cost(run.total_tokens, model, base_url, profile=profile), 6
+        ),
         tool_calls=tool_calls,
         tool_errors=tool_errors,
         run_state=run.state.value,
@@ -724,6 +747,8 @@ def build_completed_result(
     base_url: str | None,
     reported_models: list[str],
     latency_seconds: float,
+    *,
+    profile: ModelProfileSettings | None = None,
 ) -> TaskAttemptResult:
     """Build a scored :class:`TaskAttemptResult` from a completed agent run."""
     verification = run.verification
@@ -755,7 +780,9 @@ def build_completed_result(
         prompt_tokens=run.total_tokens.prompt_tokens,
         completion_tokens=run.total_tokens.completion_tokens,
         total_tokens=run.total_tokens.total_tokens,
-        estimated_cost_usd=round(_estimate_attempt_cost(run.total_tokens, model, base_url), 6),
+        estimated_cost_usd=round(
+            _estimate_attempt_cost(run.total_tokens, model, base_url, profile=profile), 6
+        ),
         tool_calls=tool_calls,
         tool_errors=tool_errors,
         patch_applied=patch_applied,

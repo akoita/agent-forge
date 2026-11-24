@@ -53,9 +53,16 @@ _RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
 class GeminiProvider(LLMProvider):
     """Gemini adapter using the REST API with httpx."""
 
-    def __init__(self, api_key: str, *, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str | None = None,
+        capability_overrides: dict[str, Any] | None = None,
+    ) -> None:
         self._api_key = api_key
         self._base_url = base_url or _GEMINI_BASE_URL
+        self._capability_overrides = dict(capability_overrides or {})
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=httpx.Timeout(120.0),
@@ -63,7 +70,11 @@ class GeminiProvider(LLMProvider):
 
     def capabilities(self, model: str | None = None) -> ProviderCapabilities:
         """Return declared capabilities for Gemini generateContent API."""
-        return resolve_capabilities("gemini", model or _DEFAULT_MODEL)
+        return resolve_capabilities(
+            "gemini",
+            model or _DEFAULT_MODEL,
+            overrides=self._capability_overrides or None,
+        )
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""
@@ -128,6 +139,22 @@ class GeminiProvider(LLMProvider):
     # Request Building
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _build_thinking_config(config: LLMConfig) -> dict[str, Any] | None:
+        if config.thinking_level:
+            return {"thinkingLevel": config.thinking_level.strip().upper()}
+        if config.thinking_budget_tokens is not None:
+            return {"thinkingBudget": config.thinking_budget_tokens}
+        if config.reasoning_effort:
+            normalized = config.reasoning_effort.strip().lower()
+            if normalized == "none":
+                return {"thinkingBudget": 0}
+            if normalized in {"minimal", "low", "medium", "high"}:
+                return {"thinkingLevel": normalized.upper()}
+            if normalized in {"xhigh", "max"}:
+                return {"thinkingLevel": "HIGH"}
+        return None
+
     def _build_request_body(
         self,
         messages: list[Message],
@@ -147,8 +174,9 @@ class GeminiProvider(LLMProvider):
         if config.response_schema:
             gen_cfg["responseMimeType"] = "application/json"
             gen_cfg["responseSchema"] = config.response_schema
-        if config.thinking_budget_tokens is not None:
-            gen_cfg["thinkingConfig"] = {"thinkingBudget": config.thinking_budget_tokens}
+        thinking_cfg = self._build_thinking_config(config)
+        if thinking_cfg is not None:
+            gen_cfg["thinkingConfig"] = thinking_cfg
         body["generationConfig"] = gen_cfg
 
         # System instruction (extract from messages)
