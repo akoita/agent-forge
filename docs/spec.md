@@ -970,6 +970,14 @@ Before executing a tool call, `ApprovalGate` classifies destructive actions (`ap
 - **Workspace & session controls:** Supports `/diff [--stat]` (Git status + diff), `/undo [--force]` (conflict-guarded pre/post turn workspace snapshot rollback via `workspace_undo.py`), `/sessions [--all] [N]`, `/resume <id|latest>` (in-place session switch preserving warm same-repo sandboxes), `/compact [keep_recent]`, `/context`, `/model [spec]`, `/clear [--sandbox]`, `/help`, and `/exit` (`/quit`).
 - **Session lifecycle CLI:** `agent-forge chat --resume <id|latest> [--sessions-dir PATH] [--idle-timeout SECONDS]` continues sessions across restarts; `agent-forge session list|show|compact|delete` inspects, compacts, and prunes stored sessions (`text` or `json` output).
 
+##### Bounded Hierarchical Subagent Delegation
+
+`SubagentRunner` (`agent_forge/agent/subagent.py`) and `SpawnSubagentTool` (`agent_forge/tools/subagent.py`) let a parent run opt into bounded task delegation via `spawn_subagent` (`[subagents].enabled = true` or `--subagents`):
+
+- **`research` mode (read-only):** Runs over `build_read_only_registry()` (`read_file`, `list_directory`, `search_codebase`, `git_diff`), reuses the parent's active sandbox without closing it, and supports concurrent fan-out when multiple `spawn_subagent(mode="research")` calls appear in one assistant turn (`_can_execute_batch_in_parallel`).
+- **`worker` mode (worktree-isolated):** Requires a Git repository, leases an isolated `WorktreeManager` worktree and `<branch_prefix>/<subagent_id>` branch with a dedicated sandbox, excludes `git_push`/`create_pr`/`spawn_subagent`, commits diffs to the temporary branch, returns a bounded patch preview and branch reference, and removes temporary checkouts synchronously (aborting branches on failure).
+- **Resource limits & telemetry:** Enforces `max_depth` (`1`), `max_subagents_per_run` (`8`), `max_iterations` (`10`), `max_tokens` (`60,000`), and `max_result_chars` (`8,000`), emits `subagent.started` / `subagent.completed` events on `EventBus`, and accumulates child tokens into the parent run total.
+
 ---
 
 ### 4.6 Observability
@@ -1363,6 +1371,13 @@ Format: `AGENT_FORGE_{SECTION}_{KEY}` (uppercase, underscored).
 | `AGENT_FORGE_QUEUE_BACKEND`        | `queue.backend`        |
 | `AGENT_FORGE_QUEUE_WORKTREE_ISOLATION` | `queue.worktree_isolation` |
 | `AGENT_FORGE_QUEUE_WORKTREE_ROOT`  | `queue.worktree_root`  |
+| `AGENT_FORGE_SUBAGENTS_ENABLED` | `subagents.enabled` |
+| `AGENT_FORGE_SUBAGENTS_MAX_DEPTH` | `subagents.max_depth` |
+| `AGENT_FORGE_SUBAGENTS_MAX_SUBAGENTS_PER_RUN` | `subagents.max_subagents_per_run` |
+| `AGENT_FORGE_SUBAGENTS_MAX_ITERATIONS` | `subagents.max_iterations` |
+| `AGENT_FORGE_SUBAGENTS_MAX_TOKENS` | `subagents.max_tokens` |
+| `AGENT_FORGE_SUBAGENTS_MAX_RESULT_CHARS` | `subagents.max_result_chars` |
+| `AGENT_FORGE_SUBAGENTS_BRANCH_PREFIX` | `subagents.branch_prefix` |
 | `AGENT_FORGE_QUEUE_WORKTREE_BRANCH_PREFIX` | `queue.worktree_branch_prefix` |
 | `AGENT_FORGE_QUEUE_AUTO_REMOVE_UNCHANGED_WORKTREES` | `queue.auto_remove_unchanged_worktrees` |
 | `AGENT_FORGE_QUEUE_MERGE_STRATEGY` | `queue.merge_strategy` |

@@ -157,6 +157,10 @@ class ToolRegistry:
             raise KeyError(msg)
         return self._tools[name]
 
+    def has(self, name: str) -> bool:
+        """Return ``True`` if a tool named *name* is registered."""
+        return name in self._tools
+
     def list_definitions(self) -> list[ToolDefinition]:
         """Return LLM-facing definitions for all registered tools."""
         return [t.to_definition() for t in self._tools.values()]

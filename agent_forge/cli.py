@@ -496,6 +496,11 @@ def model_capabilities(profile: str | None, output_format: str, probe: bool) -> 
     type=click.Choice(["auto", "qa", "coding-fix"], case_sensitive=False),
     help="Completion contract mode enforced before marking the run completed.",
 )
+@click.option(
+    "--subagents/--no-subagents",
+    default=None,
+    help="Enable hierarchical subagent delegation (spawn_subagent tool).",
+)
 def run(
     task: str,
     repo: str,
@@ -530,6 +535,7 @@ def run(
     thinking_level: str | None,
     thinking_budget: int | None,
     contract: str,
+    subagents: bool | None,
 ) -> None:
     """Run an agent task on a repository."""
     # --- Resolve profile early so it can override provider/model ---
@@ -575,6 +581,7 @@ def run(
             thinking_mode=thinking_mode,
             thinking_level=thinking_level,
             thinking_budget=thinking_budget,
+            subagents=subagents,
         )
     )
 
@@ -727,6 +734,7 @@ async def _run_agent(
     from agent_forge.agent.runner import (
         _attach_mcp_tools,
         _resolve_context_engine_for_config,
+        attach_subagent_tool,
         render_task_system_prompt,
     )
     from agent_forge.orchestration.events import EventBus
@@ -746,6 +754,18 @@ async def _run_agent(
     tools = create_default_registry()
     mcp_manager = await _attach_mcp_tools(cfg, tools)
     try:
+        run_holder: list[AgentRun] = []
+        attach_subagent_tool(
+            cfg,
+            tools,
+            repo_path=repo,
+            sandbox_config=sandbox_config,
+            agent_config=agent_config,
+            run_holder=run_holder,
+            llm_factory=lambda: _create_configured_provider(cfg, provider_name, api_key),
+            event_bus=event_bus,
+            approval_gate=_build_approval_gate(cfg.agent.approval_mode),
+        )
         agent_config.system_prompt = render_task_system_prompt(
             task,
             tools,
@@ -756,6 +776,7 @@ async def _run_agent(
             discover_extensions=True,
         )
         agent_run = AgentRun(task=task, repo_path=repo, config=agent_config)
+        run_holder.append(agent_run)
         ws_kwargs: dict[str, Any] = {"verify_command": verify_command}
         if completion_contract is not None:
             ws_kwargs["completion_contract"] = completion_contract
@@ -1142,6 +1163,7 @@ def _build_cli_overrides(
     thinking_mode: str | None = None,
     thinking_level: str | None = None,
     thinking_budget: int | None = None,
+    subagents: bool | None = None,
 ) -> dict[str, Any] | None:
     """Collect non-empty CLI overrides into config dotted keys."""
     mapping = {
@@ -1158,6 +1180,7 @@ def _build_cli_overrides(
         "agent.thinking_mode": thinking_mode.lower() if thinking_mode is not None else None,
         "agent.thinking_level": thinking_level.lower() if thinking_level is not None else None,
         "agent.thinking_budget_tokens": thinking_budget,
+        "subagents.enabled": subagents,
         "sandbox.image": sandbox_image,
         "sandbox.dockerfile": sandbox_dockerfile,
         "sandbox.setup_command": setup_command,
@@ -2557,6 +2580,11 @@ def _create_chat_runtime(
     default=None,
     help="Path for persistent prompt history (default: ~/.agent-forge/chat_history).",
 )
+@click.option(
+    "--subagents/--no-subagents",
+    default=None,
+    help="Enable hierarchical subagent delegation (spawn_subagent tool).",
+)
 def chat(
     repo: str,
     resume: str | None,
@@ -2574,6 +2602,7 @@ def chat(
     idle_timeout: float,
     stream: bool,
     history_file: Path | None,
+    subagents: bool | None,
 ) -> None:
     """Start or resume an interactive multi-turn terminal session with a warm sandbox."""
     from agent_forge.agent.chat import run_chat_repl
@@ -2588,6 +2617,7 @@ def chat(
             sandbox_image=sandbox_image,
             toolchain=toolchain,
             sandbox_backend=sandbox_backend,
+            subagents=subagents,
         )
     )
     _apply_model_profile(cfg, model_profile)

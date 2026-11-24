@@ -43,6 +43,15 @@ backend = "memory"               # "memory" or "redis"
 redis_url = "redis://localhost:6379/0"
 max_concurrent_runs = 4
 
+[subagents]
+enabled = false
+max_depth = 1
+max_subagents_per_run = 8
+max_iterations = 10
+max_tokens = 60000
+max_result_chars = 8000
+branch_prefix = "agent-forge/subagent"
+
 [logging]
 level = "INFO"                   # DEBUG, INFO, WARNING, ERROR
 format = "text"                  # "text" or "json"

@@ -21,6 +21,7 @@ from agent_forge.agent.runner import (
     _create_provider_from_config,
     _prepare_agent_run_for_task,
     _sync_context_engine_window,
+    attach_subagent_tool,
     build_sandbox_config,
     execute_agent_run,
 )
@@ -292,6 +293,22 @@ class ChatSessionRuntime:
         _sync_context_engine_window(self.context_engine, self.cfg, agent_cfg)
         scope = self.prompt_scope or (self.profile.prompt_scope if self.profile else None)
 
+        run_holder: list[AgentRun] = []
+        attach_subagent_tool(
+            self.cfg,
+            tools,
+            repo_path=self.session.repo_path,
+            sandbox_config=sandbox_cfg,
+            agent_config=agent_cfg,
+            run_holder=run_holder,
+            llm_factory=lambda: self._build_llm(agent_cfg.provider),
+            sandbox_factory=self._sandbox_factory,
+            event_bus=event_bus,
+            approval_gate=self.approval_gate,
+            cancellation_token=cancellation_token,
+            react_loop_fn=self._react_loop_fn,
+        )
+
         agent_run = _prepare_agent_run_for_task(
             prompt,
             self.session.repo_path,
@@ -305,6 +322,7 @@ class ChatSessionRuntime:
             discover_extensions=True,
             dev_session=self.session,
         )
+        run_holder.append(agent_run)
         repo_dir = Path(self.session.repo_path)
         before_state = capture_workspace_state(repo_dir)
         llm = self._build_llm(agent_cfg.provider)
@@ -914,11 +932,25 @@ async def _attach_repl_event_handlers(
         verdict = "approved" if event.data.get("approved") else "denied"
         coordinator.emit_status(f"  [{verdict}] {tool_name}")
 
+    async def _on_subagent_started(event: Event) -> None:
+        sid = str(event.data.get("subagent_id", "sub"))
+        mode = str(event.data.get("mode", "research"))
+        task = _truncate_value(event.data.get("task", ""), max_len=48)
+        coordinator.emit_status(f"  [subagent {sid} started ({mode})] {task}")
+
+    async def _on_subagent_completed(event: Event) -> None:
+        sid = str(event.data.get("subagent_id", "sub"))
+        state = str(event.data.get("state", "completed"))
+        tokens = int(event.data.get("total_tokens", 0) or 0)
+        coordinator.emit_status(f"  [subagent {sid} {state}: {tokens:,} tokens]")
+
     await event_bus.subscribe(EventType.ASSISTANT_DELTA, _on_delta)
     await event_bus.subscribe(EventType.TOOL_CALLED, _on_tool_called)
     await event_bus.subscribe(EventType.TOOL_COMPLETED, _on_tool_completed)
     await event_bus.subscribe(EventType.APPROVAL_REQUESTED, _on_approval_requested)
     await event_bus.subscribe(EventType.APPROVAL_DECIDED, _on_approval_decided)
+    await event_bus.subscribe(EventType.SUBAGENT_STARTED, _on_subagent_started)
+    await event_bus.subscribe(EventType.SUBAGENT_COMPLETED, _on_subagent_completed)
 
 
 async def _read_repl_line(
