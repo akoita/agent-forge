@@ -55,13 +55,13 @@ hidden verifier tests injected only inside the independent verifier checkout:
 
 To generate or refresh a full release report and measure live models against
 those pinned tasks, compare against the checked-in
-[v0.6.0 deterministic baseline](eval/baseline-v0.6.0.md) and
+[v0.7.0 deterministic baseline](eval/baseline-v0.7.0.md) and
 [v0.4.0 live model baseline](eval/baseline-v0.4.0.md):
 
 ```sh
 python -m agent_forge.eval --suite full \
-  --output-json docs/eval/baseline-v0.6.0.json \
-  --output-md docs/eval/baseline-v0.6.0.md \
+  --output-json docs/eval/baseline-v0.7.0.json \
+  --output-md docs/eval/baseline-v0.7.0.md \
   --assert-gates
 ```
 
