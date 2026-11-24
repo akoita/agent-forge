@@ -504,6 +504,7 @@ class SandboxConfig:
     writable_cache_mounts: bool = True           # Mount writable cache tmpfs
     mount_host_toolchains: bool = True           # Bind user toolchain dirs read-only in bwrap
     extra_ro_binds: list[str] = field(default_factory=list)   # Extra RO binds (secrets rejected)
+    allowed_egress_domains: list[str] = field(default_factory=list)  # Scoped HTTP/CONNECT proxy allowlist
     published_ports: list[str] = field(default_factory=list)  # Loopback port bindings
     env_vars: dict[str, str] = field(default_factory=dict)
 

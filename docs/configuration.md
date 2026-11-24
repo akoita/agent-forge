@@ -358,6 +358,7 @@ cpu_limit = 2.0
 writable_cache_mounts = true  # Mount /cache for pip/npm/pnpm/yarn/go/cargo/gradle caches
 mount_host_toolchains = true  # Mount user toolchain dirs read-only in bwrap
 extra_ro_binds = []           # Optional extra read-only toolchain paths (credentials blocked)
+allowed_egress_domains = []   # Optional host proxy allowlist (e.g. ["pypi.org", "*.googleapis.com"])
 published_ports = ["127.0.0.1:8080:8080"]
 ```
 
