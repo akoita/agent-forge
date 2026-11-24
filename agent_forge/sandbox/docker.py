@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
+import shutil
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import docker
@@ -21,9 +23,12 @@ from agent_forge.sandbox.base import (
     Sandbox,
     SandboxConfig,
     SandboxState,
+    apply_sandbox_cache_env,
+    create_setup_cache_dir,
     parse_published_ports,
     sanitize_sandbox_env,
 )
+from agent_forge.sandbox.devcontainer import DevcontainerSpec, ensure_dockerfile_image
 from agent_forge.sandbox.docker_sessions import DockerSessionManager
 from agent_forge.sandbox.sessions import SessionLimits, SessionSnapshot
 
@@ -56,6 +61,7 @@ class DockerSandbox(Sandbox):
         self._config = SandboxConfig()
         self._sessions: DockerSessionManager | None = None
         self._repo_path: str | None = None
+        self._setup_cache_dir: str | None = None
         self._shell: str = "bash"
         self._host_uid = os.getuid()
         self._host_gid = os.getgid()
@@ -84,6 +90,63 @@ class DockerSandbox(Sandbox):
     # Lifecycle
     # ------------------------------------------------------------------
 
+    async def _prepare_image(self, cfg: SandboxConfig, repo_path: str) -> str:
+        if not cfg.dockerfile:
+            return cfg.image
+        resolved_repo = Path(repo_path).resolve()
+        raw_df = Path(cfg.dockerfile)
+        df_path = raw_df.resolve() if raw_df.is_absolute() else (resolved_repo / raw_df).resolve()
+        raw_ctx = Path(cfg.build_context) if cfg.build_context else resolved_repo
+        ctx_path = (
+            raw_ctx.resolve() if raw_ctx.is_absolute() else (resolved_repo / raw_ctx).resolve()
+        )
+        spec = DevcontainerSpec(
+            source_path=df_path,
+            dockerfile=df_path,
+            build_context=ctx_path,
+            build_args=dict(cfg.build_args),
+            build_target=cfg.build_target,
+        )
+        return await asyncio.to_thread(ensure_dockerfile_image, self._client, spec)
+
+    async def _run_setup_phase(self, repo_path: str, image: str, cfg: SandboxConfig) -> str:
+        cache_dir = create_setup_cache_dir()
+        setup_container: Container | None = None
+        run_kwargs = self._build_container_run_kwargs(
+            image=image,
+            cfg=cfg,
+            repo_path=repo_path,
+            network_enabled=True,
+            published_ports={},
+            setup_cache_dir=cache_dir,
+        )
+        try:
+            setup_container = await asyncio.to_thread(
+                lambda: self._client.containers.run(**run_kwargs)
+            )
+            assert setup_container is not None  # noqa: S101
+            result, _ = await self._exec_container_with_fallback(
+                setup_container,
+                cfg.setup_command,
+                timeout_seconds=cfg.setup_timeout_seconds,
+            )
+        except Exception as exc:
+            shutil.rmtree(cache_dir, ignore_errors=True)
+            if isinstance(exc, SandboxStartupError):
+                raise
+            msg = f"Sandbox setup_command failed: {exc}"
+            raise SandboxStartupError(msg) from exc
+        finally:
+            if setup_container is not None:
+                await self._stop_container_instance(setup_container)
+
+        if result.exit_code != 0:
+            shutil.rmtree(cache_dir, ignore_errors=True)
+            detail = (result.stderr or result.stdout).strip()
+            msg = f"Sandbox setup_command failed (exit {result.exit_code}): {detail}"
+            raise SandboxStartupError(msg)
+        return cache_dir
+
     async def start(self, repo_path: str, config: SandboxConfig | None = None) -> None:
         """Create and start the sandbox container.
 
@@ -99,46 +162,20 @@ class DockerSandbox(Sandbox):
         self._shell = "bash"
 
         published_ports = self._resolve_published_ports(cfg)
-        security_opts: list[str] = ["no-new-privileges"]
-        tmpfs = self._build_tmpfs(cfg)
-        environment = self._build_environment(cfg)
-
-        # Parse memory limit to bytes for Docker SDK
-        mem_limit = cfg.memory_limit
-
-        run_kwargs: dict[str, Any] = {
-            "image": cfg.image,
-            "entrypoint": "",
-            "command": ["sh", "-c", "while :; do sleep 3600; done"],
-            "detach": True,
-            "init": True,
-            "remove": True,
-            "read_only": True,
-            "cap_drop": ["ALL"],
-            "security_opt": security_opts,
-            "pids_limit": 256,
-            "tmpfs": tmpfs,
-            "nano_cpus": int(cfg.cpu_limit * 1e9),
-            "mem_limit": mem_limit,
-            "environment": environment,
-            "volumes": {
-                repo_path: {
-                    "bind": cfg.workspace_path,
-                    "mode": "rw",
-                }
-            },
-            "working_dir": cfg.workspace_path,
-        }
-
-        # Network isolation
-        if not cfg.network_enabled:
-            run_kwargs["network_mode"] = "none"
-        elif published_ports:
-            run_kwargs["ports"] = published_ports
-
-        # Run as the host user so files are owned by them (avoids PermissionError
-        # when the host reads workspace files after the container writes them).
-        run_kwargs["user"] = f"{self._host_uid}:{self._host_gid}"
+        image = await self._prepare_image(cfg, repo_path)
+        self._setup_cache_dir = (
+            await self._run_setup_phase(repo_path, image, cfg)
+            if cfg.setup_command.strip()
+            else None
+        )
+        run_kwargs = self._build_container_run_kwargs(
+            image=image,
+            cfg=cfg,
+            repo_path=repo_path,
+            network_enabled=cfg.network_enabled,
+            published_ports=published_ports,
+            setup_cache_dir=self._setup_cache_dir,
+        )
 
         last_exc: Exception | None = None
         for attempt in range(_START_MAX_RETRIES + 1):
@@ -159,7 +196,7 @@ class DockerSandbox(Sandbox):
                 logger.info(
                     "sandbox_started",
                     container=self._container.short_id,
-                    image=cfg.image,
+                    image=image,
                     attempt=attempt + 1,
                 )
                 return
@@ -174,35 +211,47 @@ class DockerSandbox(Sandbox):
                     )
                     await asyncio.sleep(_START_RETRY_DELAY_S)
 
+        self._cleanup_setup_cache()
         self._state = SandboxState.STOPPED
         msg = (
             f"Failed to start sandbox container after {_START_MAX_RETRIES + 1} attempts: {last_exc}"
         )
         raise SandboxStartupError(msg) from last_exc
 
+    @staticmethod
+    async def _stop_container_instance(container: Container) -> None:
+        try:
+            await asyncio.to_thread(container.stop, timeout=2)
+        except NotFound:
+            pass
+        except APIError as exc:
+            logger.warning("container_stop_error_forcing_remove", error=str(exc))
+            try:
+                await asyncio.to_thread(container.remove, force=True)
+            except NotFound:
+                pass
+            except APIError as remove_exc:
+                logger.warning("container_force_remove_error", error=str(remove_exc))
+
+    def _cleanup_setup_cache(self) -> None:
+        if self._setup_cache_dir is not None:
+            shutil.rmtree(self._setup_cache_dir, ignore_errors=True)
+            self._setup_cache_dir = None
+
     async def stop(self) -> None:
         """Stop and remove the sandbox container."""
         if self._container is None:
+            self._cleanup_setup_cache()
             self._state = SandboxState.STOPPED
             return
 
         try:
             await self.close_all_sessions()
-            await asyncio.to_thread(self._container.stop, timeout=2)
-        except NotFound:
-            # Container already removed (--rm flag)
-            pass
-        except APIError as exc:
-            logger.warning("container_stop_error_forcing_remove", error=str(exc))
-            try:
-                await asyncio.to_thread(self._container.remove, force=True)
-            except NotFound:
-                pass
-            except APIError as remove_exc:
-                logger.warning("container_force_remove_error", error=str(remove_exc))
+            await self._stop_container_instance(self._container)
         finally:
             self._container = None
             self._repo_path = None
+            self._cleanup_setup_cache()
             self._shell = "bash"
             self._state = SandboxState.STOPPED
             logger.info("sandbox_stopped")
@@ -231,13 +280,16 @@ class DockerSandbox(Sandbox):
         )
 
     async def _run_shell_command(
-        self, shell: str, command: str, timeout_seconds: int
+        self,
+        container: Container,
+        shell: str,
+        command: str,
+        timeout_seconds: int,
     ) -> tuple[ExecResult, bool]:
-        assert self._container is not None  # noqa: S101
         try:
             exit_code, output = await asyncio.wait_for(
                 asyncio.to_thread(
-                    self._container.exec_run,
+                    container.exec_run,
                     [shell, "-c", command],
                     demux=True,
                     user=f"{self._host_uid}:{self._host_gid}",
@@ -273,6 +325,21 @@ class DockerSandbox(Sandbox):
         )
         return ExecResult(normalized_exit_code, stdout_text, stderr_text), missing_bash
 
+    async def _exec_container_with_fallback(
+        self,
+        container: Container,
+        command: str,
+        *,
+        timeout_seconds: int,
+    ) -> tuple[ExecResult, bool]:
+        result, retry_with_sh = await self._run_shell_command(
+            container, self._shell, command, timeout_seconds
+        )
+        if retry_with_sh:
+            self._shell = "sh"
+            result, _ = await self._run_shell_command(container, "sh", command, timeout_seconds)
+        return result, retry_with_sh
+
     async def exec(
         self,
         command: str,
@@ -281,10 +348,12 @@ class DockerSandbox(Sandbox):
     ) -> ExecResult:
         """Execute a command inside the running sandbox."""
         self._ensure_running()
-        result, retry_with_sh = await self._run_shell_command(self._shell, command, timeout_seconds)
-        if retry_with_sh:
-            self._shell = "sh"
-            result, _ = await self._run_shell_command("sh", command, timeout_seconds)
+        assert self._container is not None  # noqa: S101
+        result, _ = await self._exec_container_with_fallback(
+            self._container,
+            command,
+            timeout_seconds=timeout_seconds,
+        )
         return result
 
     async def read_file(self, path: str) -> str:
@@ -413,34 +482,82 @@ class DockerSandbox(Sandbox):
             raise SandboxStartupError(msg)
         return ports
 
-    def _build_environment(self, cfg: SandboxConfig) -> dict[str, str]:
+    def _build_container_run_kwargs(
+        self,
+        *,
+        image: str,
+        cfg: SandboxConfig,
+        repo_path: str,
+        network_enabled: bool,
+        published_ports: dict[str, tuple[str, int]],
+        setup_cache_dir: str | None,
+    ) -> dict[str, Any]:
+        use_cache = setup_cache_dir is not None or (network_enabled and cfg.writable_cache_mounts)
+        tmpfs = self._build_tmpfs(
+            cfg,
+            network_enabled=network_enabled,
+            mount_cache_tmpfs=setup_cache_dir is None,
+        )
+        environment = self._build_environment(cfg, use_cache=use_cache)
+        volumes: dict[str, dict[str, str]] = {
+            repo_path: {"bind": cfg.workspace_path, "mode": "rw"},
+        }
+        if setup_cache_dir is not None:
+            volumes[setup_cache_dir] = {"bind": "/cache", "mode": "rw"}
+
+        run_kwargs: dict[str, Any] = {
+            "image": image,
+            "entrypoint": "",
+            "command": ["sh", "-c", "while :; do sleep 3600; done"],
+            "detach": True,
+            "init": True,
+            "remove": True,
+            "read_only": True,
+            "cap_drop": ["ALL"],
+            "security_opt": ["no-new-privileges"],
+            "pids_limit": 256,
+            "tmpfs": tmpfs,
+            "nano_cpus": int(cfg.cpu_limit * 1e9),
+            "mem_limit": cfg.memory_limit,
+            "environment": environment,
+            "volumes": volumes,
+            "working_dir": cfg.workspace_path,
+            "user": f"{self._host_uid}:{self._host_gid}",
+        }
+        if not network_enabled:
+            run_kwargs["network_mode"] = "none"
+        elif published_ports:
+            run_kwargs["ports"] = published_ports
+        return run_kwargs
+
+    def _build_environment(
+        self,
+        cfg: SandboxConfig,
+        *,
+        use_cache: bool | None = None,
+    ) -> dict[str, str]:
         environment = sanitize_sandbox_env(cfg.env_vars)
-        if cfg.network_enabled and cfg.writable_cache_mounts:
-            for key, value in (
-                ("HOME", "/cache/home"),
-                ("XDG_CACHE_HOME", "/cache/xdg"),
-                ("PIP_CACHE_DIR", "/cache/pip"),
-                ("NPM_CONFIG_CACHE", "/cache/npm"),
-                ("YARN_CACHE_FOLDER", "/cache/yarn"),
-                ("PNPM_HOME", "/cache/pnpm-home"),
-                ("PNPM_STORE_DIR", "/cache/pnpm-store"),
-                ("GOCACHE", "/cache/go-build"),
-                ("GOMODCACHE", "/cache/go-mod"),
-                ("CARGO_HOME", "/cache/cargo"),
-                ("GRADLE_USER_HOME", "/cache/gradle"),
-            ):
-                environment.setdefault(key, value)
-        else:
-            environment.setdefault("HOME", "/tmp/home")  # noqa: S108
-            environment.setdefault("XDG_CACHE_HOME", "/tmp/xdg")  # noqa: S108
+        effective_cache = (
+            use_cache
+            if use_cache is not None
+            else (cfg.network_enabled and cfg.writable_cache_mounts)
+        )
+        apply_sandbox_cache_env(environment, use_cache=effective_cache)
         return environment
 
-    def _build_tmpfs(self, cfg: SandboxConfig) -> dict[str, str]:
+    def _build_tmpfs(
+        self,
+        cfg: SandboxConfig,
+        *,
+        network_enabled: bool | None = None,
+        mount_cache_tmpfs: bool = True,
+    ) -> dict[str, str]:
         """Build tmpfs mounts for scratch space and optional package caches."""
+        net_enabled = cfg.network_enabled if network_enabled is None else network_enabled
         tmpfs = {
             "/tmp": self._tmpfs_options(size="128m", executable=False),  # noqa: S108
         }
-        if cfg.network_enabled and cfg.writable_cache_mounts:
+        if mount_cache_tmpfs and net_enabled and cfg.writable_cache_mounts:
             tmpfs["/cache"] = self._tmpfs_options(size="1g", executable=True)
         return tmpfs
 

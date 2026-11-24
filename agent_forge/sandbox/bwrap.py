@@ -18,6 +18,8 @@ from agent_forge.sandbox.base import (
     Sandbox,
     SandboxConfig,
     SandboxState,
+    apply_sandbox_cache_env,
+    create_setup_cache_dir,
     parse_published_port,
     parse_published_ports,
     sanitize_sandbox_env,
@@ -87,6 +89,7 @@ class BwrapSandbox(Sandbox):
         self._config = SandboxConfig(backend="bwrap")
         self._state = SandboxState.IDLE
         self._repo_path: str | None = None
+        self._setup_cache_dir: str | None = None
         self._bwrap_path = shutil.which("bwrap")
         self._active_processes: set[asyncio.subprocess.Process] = set()
         self._sessions: LocalPtySessionManager | None = None
@@ -150,21 +153,38 @@ class BwrapSandbox(Sandbox):
         self._validate_start_config(cfg)
         self._config = cfg
         self._repo_path = str(Path(repo_path).resolve())
+        self._setup_cache_dir = None
+        if cfg.setup_command.strip():
+            cache_dir = create_setup_cache_dir()
+            self._setup_cache_dir = cache_dir
+            try:
+                argv = self._build_bwrap_argv(cfg.setup_command, network_override=True)
+                result = await self._run_bwrap_argv(
+                    argv,
+                    timeout_seconds=cfg.setup_timeout_seconds,
+                )
+                if result.exit_code != 0:
+                    detail = (result.stderr or result.stdout).strip()
+                    msg = f"Sandbox setup_command failed (exit {result.exit_code}): {detail}"
+                    raise SandboxStartupError(msg)
+            except BaseException:
+                self._cleanup_setup_cache()
+                self._repo_path = None
+                self._state = SandboxState.STOPPED
+                raise
+
         self._sessions = LocalPtySessionManager(
             limits=SessionLimits(default_max_duration_seconds=cfg.timeout_seconds)
         )
         self._state = SandboxState.RUNNING
         logger.info("sandbox_started", backend="bwrap", repo_path=self._repo_path)
 
-    async def exec(
+    async def _run_bwrap_argv(
         self,
-        command: str,
+        argv: list[str],
         *,
-        timeout_seconds: int = 30,
+        timeout_seconds: int,
     ) -> ExecResult:
-        """Execute a command inside a fresh bubblewrap process."""
-        self._ensure_running()
-        argv = self._build_bwrap_argv(command)
         process = await asyncio.create_subprocess_exec(
             *argv,
             stdout=asyncio.subprocess.PIPE,
@@ -200,6 +220,17 @@ class BwrapSandbox(Sandbox):
             stderr=(stderr_raw or b"").decode("utf-8", errors="replace"),
         )
 
+    async def exec(
+        self,
+        command: str,
+        *,
+        timeout_seconds: int = 30,
+    ) -> ExecResult:
+        """Execute a command inside a fresh bubblewrap process."""
+        self._ensure_running()
+        argv = self._build_bwrap_argv(command)
+        return await self._run_bwrap_argv(argv, timeout_seconds=timeout_seconds)
+
     async def read_file(self, path: str) -> str:
         """Read a file from the sandbox filesystem."""
         result = await self.exec(f"cat {shlex.quote(path)}")
@@ -224,6 +255,11 @@ class BwrapSandbox(Sandbox):
             msg = f"Failed to write file: {path} — {result.stderr}"
             raise OSError(msg)
 
+    def _cleanup_setup_cache(self) -> None:
+        if self._setup_cache_dir is not None:
+            shutil.rmtree(self._setup_cache_dir, ignore_errors=True)
+            self._setup_cache_dir = None
+
     async def stop(self) -> None:
         """Kill active child processes and reset the logical sandbox state."""
         await self.close_all_sessions()
@@ -235,6 +271,7 @@ class BwrapSandbox(Sandbox):
                     await process.communicate()
         self._active_processes.clear()
         self._repo_path = None
+        self._cleanup_setup_cache()
         self._state = SandboxState.STOPPED
         logger.info("sandbox_stopped", backend="bwrap")
 
@@ -344,10 +381,16 @@ class BwrapSandbox(Sandbox):
             binds.append(resolved)
         return binds
 
-    def _build_bwrap_argv(self, command: str) -> list[str]:
+    def _build_bwrap_argv(
+        self,
+        command: str,
+        *,
+        network_override: bool | None = None,
+    ) -> list[str]:
         assert self._repo_path is not None  # noqa: S101
         assert self._bwrap_path is not None  # noqa: S101
 
+        net_enabled = self._config.network_enabled if network_override is None else network_override
         argv = [
             self._bwrap_path,
             "--clearenv",
@@ -361,9 +404,11 @@ class BwrapSandbox(Sandbox):
             "--tmpfs",
             "/tmp",  # noqa: S108
         ]
-        if not self._config.network_enabled:
+        if not net_enabled:
             argv.append("--unshare-net")
-        if self._config.network_enabled and self._config.writable_cache_mounts:
+        if self._setup_cache_dir is not None:
+            argv.extend(["--bind", self._setup_cache_dir, "/cache"])
+        elif net_enabled and self._config.writable_cache_mounts:
             argv.extend(["--tmpfs", "/cache"])
 
         for host_path in _READ_ONLY_DIRS:
@@ -385,31 +430,24 @@ class BwrapSandbox(Sandbox):
             ]
         )
 
-        for key, value in self._build_env_vars().items():
+        for key, value in self._build_env_vars(network_override=network_override).items():
             argv.extend(["--setenv", key, value])
 
         shell_path = "/bin/bash" if Path("/bin/bash").exists() else "/bin/sh"
         argv.extend([shell_path, "-lc", command])
         return argv
 
-    def _build_env_vars(self) -> dict[str, str]:
-        env_vars = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+    def _build_env_vars(self, *, network_override: bool | None = None) -> dict[str, str]:
+        net_enabled = self._config.network_enabled if network_override is None else network_override
+        use_cache = self._setup_cache_dir is not None or (
+            net_enabled and self._config.writable_cache_mounts
+        )
+        raw_path = os.environ.get("PATH", "/usr/bin:/bin")
+        if use_cache and "/cache/mise/shims" not in raw_path:
+            raw_path = f"/cache/mise/shims:/cache/home/.local/bin:{raw_path}"
+        env_vars = {"PATH": raw_path}
         env_vars.update(sanitize_sandbox_env(self._config.env_vars))
-        if self._config.network_enabled and self._config.writable_cache_mounts:
-            env_vars.setdefault("HOME", "/cache/home")
-            env_vars.setdefault("XDG_CACHE_HOME", "/cache/xdg")
-            env_vars.setdefault("PIP_CACHE_DIR", "/cache/pip")
-            env_vars.setdefault("NPM_CONFIG_CACHE", "/cache/npm")
-            env_vars.setdefault("YARN_CACHE_FOLDER", "/cache/yarn")
-            env_vars.setdefault("PNPM_HOME", "/cache/pnpm-home")
-            env_vars.setdefault("PNPM_STORE_DIR", "/cache/pnpm-store")
-            env_vars.setdefault("GOCACHE", "/cache/go-build")
-            env_vars.setdefault("GOMODCACHE", "/cache/go-mod")
-            env_vars.setdefault("CARGO_HOME", "/cache/cargo")
-            env_vars.setdefault("GRADLE_USER_HOME", "/cache/gradle")
-        else:
-            env_vars.setdefault("HOME", "/tmp/home")  # noqa: S108
-            env_vars.setdefault("XDG_CACHE_HOME", "/tmp/xdg")  # noqa: S108
+        apply_sandbox_cache_env(env_vars, use_cache=use_cache)
         return env_vars
 
     def _ensure_running(self) -> None:

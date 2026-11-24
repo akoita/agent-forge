@@ -399,10 +399,21 @@ def model_capabilities(profile: str | None, output_format: str, probe: bool) -> 
 )
 @click.option("--sandbox-image", default=None, help="Sandbox image to run")
 @click.option(
+    "--sandbox-dockerfile",
+    default=None,
+    help="Repo-relative Dockerfile path to build for the sandbox.",
+)
+@click.option(
+    "--setup-command",
+    default=None,
+    help="Online setup command run in Phase 1 before offline agent execution.",
+)
+@click.option(
     "--toolchain",
     default=None,
     type=click.Choice(
-        ["auto", "python", "node", "go", "rust", "jvm", "full"], case_sensitive=False
+        ["auto", "python", "node", "go", "rust", "jvm", "full", "universal"],
+        case_sensitive=False,
     ),
     help="Sandbox toolchain preset or auto-detection.",
 )
@@ -488,6 +499,8 @@ def run(
     budget_action: str | None,
     approval_mode: str | None,
     sandbox_image: str | None,
+    sandbox_dockerfile: str | None,
+    setup_command: str | None,
     toolchain: str | None,
     publish_port: tuple[str, ...],
     sandbox_backend: str | None,
@@ -540,6 +553,8 @@ def run(
             budget_action=budget_action,
             approval_mode=approval_mode,
             sandbox_image=sandbox_image,
+            sandbox_dockerfile=sandbox_dockerfile,
+            setup_command=setup_command,
             toolchain=toolchain,
             publish_port=publish_port,
             sandbox_backend=sandbox_backend,
@@ -1116,6 +1131,8 @@ def _build_cli_overrides(
     budget_action: str | None = None,
     approval_mode: str | None = None,
     sandbox_image: str | None = None,
+    sandbox_dockerfile: str | None = None,
+    setup_command: str | None = None,
     toolchain: str | None = None,
     publish_port: tuple[str, ...] = (),
     sandbox_backend: str | None = None,
@@ -1142,6 +1159,8 @@ def _build_cli_overrides(
         "agent.thinking_level": thinking_level.lower() if thinking_level is not None else None,
         "agent.thinking_budget_tokens": thinking_budget,
         "sandbox.image": sandbox_image,
+        "sandbox.dockerfile": sandbox_dockerfile,
+        "sandbox.setup_command": setup_command,
         "sandbox.toolchain": toolchain.lower() if toolchain is not None else None,
         "sandbox.published_ports": list(publish_port) if publish_port else None,
         "sandbox.backend": sandbox_backend,

@@ -7,6 +7,7 @@ plus SandboxConfig and SandboxState.
 from __future__ import annotations
 
 import ipaddress
+import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -88,6 +89,44 @@ def sanitize_sandbox_env(env_vars: dict[str, str]) -> dict[str, str]:
             continue
         sanitized[key] = value
     return sanitized
+
+
+_CACHE_ENV_DEFAULTS: tuple[tuple[str, str], ...] = (
+    ("HOME", "/cache/home"),
+    ("XDG_CACHE_HOME", "/cache/xdg"),
+    ("PIP_CACHE_DIR", "/cache/pip"),
+    ("NPM_CONFIG_CACHE", "/cache/npm"),
+    ("YARN_CACHE_FOLDER", "/cache/yarn"),
+    ("PNPM_HOME", "/cache/pnpm-home"),
+    ("PNPM_STORE_DIR", "/cache/pnpm-store"),
+    ("GOCACHE", "/cache/go-build"),
+    ("GOMODCACHE", "/cache/go-mod"),
+    ("CARGO_HOME", "/cache/cargo"),
+    ("GRADLE_USER_HOME", "/cache/gradle"),
+    ("MISE_DATA_DIR", "/cache/mise"),
+    ("MISE_CACHE_DIR", "/cache/mise-cache"),
+    ("MISE_CONFIG_DIR", "/cache/mise-config"),
+)
+
+_SETUP_CACHE_SUBDIRS: tuple[str, ...] = ("home", "xdg", "mise", "mise-cache", "mise-config")
+
+
+def apply_sandbox_cache_env(env: dict[str, str], *, use_cache: bool) -> None:
+    """Populate default cache or offline writable ``HOME`` environment variables."""
+    if use_cache:
+        for key, value in _CACHE_ENV_DEFAULTS:
+            env.setdefault(key, value)
+    else:
+        env.setdefault("HOME", "/tmp/home")  # noqa: S108
+        env.setdefault("XDG_CACHE_HOME", "/tmp/xdg")  # noqa: S108
+
+
+def create_setup_cache_dir() -> str:
+    """Create a temporary host directory mounted at ``/cache`` across setup and agent phases."""
+    cache_dir = Path(tempfile.mkdtemp(prefix="agent-forge-cache-"))
+    for subdir in _SETUP_CACHE_SUBDIRS:
+        (cache_dir / subdir).mkdir(parents=True, exist_ok=True)
+    return str(cache_dir)
 
 
 class SandboxState(Enum):
@@ -196,6 +235,12 @@ class SandboxConfig:
     backend: str = "docker"
     image: str = "agent-forge-sandbox:latest"
     toolchain: str = "auto"
+    dockerfile: str = ""
+    build_context: str = ""
+    build_args: dict[str, str] = field(default_factory=dict)
+    build_target: str | None = None
+    setup_command: str = ""
+    setup_timeout_seconds: int = 300
     workspace_path: str = "/workspace"
     cpu_limit: float = 1.0
     memory_limit: str = "512m"

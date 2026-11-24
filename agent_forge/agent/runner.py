@@ -15,8 +15,13 @@ from agent_forge.agent.models import AgentConfig, AgentRun
 from agent_forge.agent.prompts import build_hosted_system_prompt, build_system_prompt
 from agent_forge.config import ContextSettings
 from agent_forge.extensions.discovery import discover_extension_prompt_fragments
-from agent_forge.sandbox.base import SandboxConfig
-from agent_forge.sandbox.toolchain import resolve_sandbox_image
+from agent_forge.sandbox.base import SandboxConfig, sanitize_sandbox_env
+from agent_forge.sandbox.devcontainer import (
+    compute_dockerfile_image_tag,
+    discover_devcontainer,
+    resolve_dockerfile_spec,
+)
+from agent_forge.sandbox.toolchain import DEFAULT_SANDBOX_IMAGE, resolve_sandbox_image
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -28,6 +33,60 @@ if TYPE_CHECKING:
     from agent_forge.tools.base import ToolRegistry
 
 PostRunHook = Callable[["AgentRun", "LLMProvider", "ToolRegistry", "Sandbox"], Awaitable[None]]
+
+
+def _resolve_sandbox_source(
+    *,
+    raw_image: str,
+    toolchain: str,
+    dockerfile: str,
+    repo_path: str | Path | None,
+) -> tuple[str, str, str, str, dict[str, str], str | None, dict[str, str]]:
+    """Resolve runtime image/toolchain/dockerfile with explicit-over-devcontainer precedence."""
+    if dockerfile and repo_path is not None:
+        spec = resolve_dockerfile_spec(repo_path, dockerfile)
+        return (
+            compute_dockerfile_image_tag(spec),
+            "dockerfile",
+            str(spec.dockerfile),
+            str(spec.build_context),
+            dict(spec.build_args),
+            spec.build_target,
+            {},
+        )
+
+    if (raw_image and raw_image != DEFAULT_SANDBOX_IMAGE) or toolchain != "auto":
+        resolved_image, resolved_toolchain = resolve_sandbox_image(
+            raw_image,
+            toolchain=toolchain,
+            repo_path=repo_path,
+        )
+        return resolved_image, resolved_toolchain, dockerfile, "", {}, None, {}
+
+    if repo_path is not None:
+        dc_spec = discover_devcontainer(repo_path)
+        if dc_spec is not None:
+            env_vars = sanitize_sandbox_env(dc_spec.container_env)
+            if dc_spec.dockerfile is not None:
+                ctx = dc_spec.build_context or dc_spec.source_path.parent
+                return (
+                    compute_dockerfile_image_tag(dc_spec),
+                    "devcontainer",
+                    str(dc_spec.dockerfile),
+                    str(ctx),
+                    dict(dc_spec.build_args),
+                    dc_spec.build_target,
+                    env_vars,
+                )
+            if dc_spec.image:
+                return dc_spec.image, "devcontainer", "", "", {}, None, env_vars
+
+    resolved_image, resolved_toolchain = resolve_sandbox_image(
+        raw_image,
+        toolchain=toolchain,
+        repo_path=repo_path,
+    )
+    return resolved_image, resolved_toolchain, dockerfile, "", {}, None, {}
 
 
 def build_sandbox_config(
@@ -44,15 +103,43 @@ def build_sandbox_config(
     mount_host_toolchains = raw_mount if isinstance(raw_mount, bool) else True
     raw_binds = getattr(cfg.sandbox, "extra_ro_binds", None)
     extra_ro_binds = list(raw_binds) if isinstance(raw_binds, (list, tuple)) else []
-    resolved_image, resolved_toolchain = resolve_sandbox_image(
-        cfg.sandbox.image,
+    raw_dockerfile = getattr(cfg.sandbox, "dockerfile", None)
+    dockerfile = raw_dockerfile.strip() if isinstance(raw_dockerfile, str) else ""
+    raw_setup = getattr(cfg.sandbox, "setup_command", None)
+    setup_command = raw_setup.strip() if isinstance(raw_setup, str) else ""
+    raw_setup_timeout = getattr(cfg.sandbox, "setup_timeout_seconds", None)
+    setup_timeout = (
+        raw_setup_timeout
+        if isinstance(raw_setup_timeout, int)
+        and not isinstance(raw_setup_timeout, bool)
+        and raw_setup_timeout > 0
+        else 300
+    )
+
+    (
+        resolved_image,
+        resolved_toolchain,
+        resolved_dockerfile,
+        build_context,
+        build_args,
+        build_target,
+        env_vars,
+    ) = _resolve_sandbox_source(
+        raw_image=cfg.sandbox.image,
         toolchain=toolchain,
+        dockerfile=dockerfile,
         repo_path=repo_path,
     )
     return SandboxConfig(
         backend=cfg.sandbox.backend,
         image=resolved_image,
         toolchain=resolved_toolchain,
+        dockerfile=resolved_dockerfile,
+        build_context=build_context,
+        build_args=build_args,
+        build_target=build_target,
+        setup_command=setup_command,
+        setup_timeout_seconds=setup_timeout,
         cpu_limit=cfg.sandbox.cpu_limit,
         memory_limit=cfg.sandbox.memory_limit,
         timeout_seconds=cfg.sandbox.timeout_seconds,
@@ -61,6 +148,7 @@ def build_sandbox_config(
         mount_host_toolchains=mount_host_toolchains,
         extra_ro_binds=extra_ro_binds,
         published_ports=published_ports,
+        env_vars=env_vars,
     )
 
 

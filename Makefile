@@ -1,4 +1,4 @@
-.PHONY: setup build-sandbox build-sandbox-node build-sandbox-go build-sandbox-rust build-sandbox-jvm build-sandbox-full test test-unit test-integration test-e2e eval lint format quality run clean update-prices
+.PHONY: setup build-sandbox build-sandbox-node build-sandbox-go build-sandbox-rust build-sandbox-jvm build-sandbox-full build-sandbox-universal test test-unit test-integration test-e2e eval lint format quality run clean update-prices
 
 update-prices:             ## Refresh vendored model pricing from LiteLLM
 	python scripts/update_prices.py
@@ -23,6 +23,9 @@ build-sandbox-jvm:         ## Build the JVM-focused sandbox image
 
 build-sandbox-full:        ## Build the full Python+Node sandbox image
 	docker build -t agent-forge-sandbox:full -f agent_forge/sandbox/Dockerfile.full .
+
+build-sandbox-universal:   ## Build the universal mise-based sandbox image
+	docker build -t agent-forge-sandbox:universal -f agent_forge/sandbox/Dockerfile.universal .
 
 test:                      ## Run all tests (excludes integration + e2e)
 	pytest --cov=agent_forge --cov-report=term-missing -m "not integration and not e2e"

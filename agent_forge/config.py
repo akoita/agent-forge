@@ -73,7 +73,10 @@ class SandboxSettings(BaseModel):
 
     backend: str = "docker"
     image: str = DEFAULT_SANDBOX_IMAGE
-    toolchain: Literal["auto", "python", "node", "go", "rust", "jvm", "full"] = "auto"
+    toolchain: Literal["auto", "python", "node", "go", "rust", "jvm", "full", "universal"] = "auto"
+    dockerfile: str = ""
+    setup_command: str = ""
+    setup_timeout_seconds: int = Field(default=300, gt=0)
     cpu_limit: float = 1.0
     memory_limit: str = "512m"
     timeout_seconds: int = 300
