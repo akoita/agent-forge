@@ -1666,3 +1666,107 @@ async def test_host_brokered_git_push_from_offline_sandbox_with_approval_gate(
         check=True,
     ).stdout.strip()
     assert pushed_sha == local_sha
+
+
+@pytest.mark.asyncio
+async def test_greenfield_empty_directory_scaffolds_and_verifies_end_to_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exit criterion: empty directory scaffolds and passes VerificationWorkspace cleanly."""
+    from agent_forge.agent.models import AgentConfig, RunState
+    from agent_forge.agent.runner import run_agent_task
+    from agent_forge.agent.verification import VerificationWorkspace
+    from agent_forge.config import load_config
+    from agent_forge.eval.deterministic import SubprocessEvalSandbox
+    from agent_forge.llm.base import LLMProvider, LLMResponse, Message, TokenUsage, ToolCall
+    from agent_forge.sandbox.base import SandboxConfig
+
+    monkeypatch.setattr("agent_forge.agent.persistence.USER_CONFIG_DIR", tmp_path / "home")
+    monkeypatch.setattr("agent_forge.config.USER_CONFIG_DIR", tmp_path / "home")
+    monkeypatch.setattr("agent_forge.agent.core.save_summary", lambda *_a: tmp_path / "s.json")
+
+    greenfield_dir = tmp_path / "greenfield_app"
+    greenfield_dir.mkdir()
+
+    class _GreenfieldLLM(LLMProvider):
+        def __init__(self) -> None:
+            self._turn = 0
+            self._turns = [
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="g1",
+                            name="write_file",
+                            arguments={
+                                "path": "calc.py",
+                                "content": "def add(a: int, b: int) -> int:\n    return a + b\n",
+                            },
+                        ),
+                        ToolCall(
+                            id="g2",
+                            name="write_file",
+                            arguments={
+                                "path": "test_calc.py",
+                                "content": (
+                                    "import unittest\n"
+                                    "from calc import add\n\n\n"
+                                    "class TestCalc(unittest.TestCase):\n"
+                                    "    def test_add(self) -> None:\n"
+                                    "        self.assertEqual(add(2, 3), 5)\n"
+                                ),
+                            },
+                        ),
+                    ],
+                    finish_reason="tool_calls",
+                    usage=TokenUsage(20, 15, 35),
+                ),
+                LLMResponse(
+                    content="Scaffolded calc.py and test_calc.py.",
+                    finish_reason="stop",
+                    usage=TokenUsage(10, 8, 18),
+                ),
+            ]
+
+        async def complete(
+            self, messages: list[Message], tools: object = None, config: object = None
+        ) -> LLMResponse:
+            del messages, tools, config
+            resp = self._turns[min(self._turn, len(self._turns) - 1)]
+            self._turn += 1
+            return resp
+
+        async def stream(self, messages: list[Message], **kwargs: object) -> object:
+            del kwargs
+            yield await self.complete(messages)
+
+    cfg = load_config(project_path=tmp_path / "none.toml", user_path=tmp_path / "none.toml")
+    verify_cmd = f"{sys.executable} -m unittest discover -s . -v"
+    sandbox = SubprocessEvalSandbox()
+
+    with VerificationWorkspace(str(greenfield_dir), verify_cmd) as workspace:
+        result = await run_agent_task(
+            "Create calc module with unit test",
+            str(workspace.workspace),
+            cfg,
+            AgentConfig(model="eval-mock", provider="deterministic", max_iterations=6),
+            "deterministic",
+            "",
+            discover_extensions=False,
+            sandbox_factory=lambda _c: sandbox,
+            provider_factory=lambda _p, _k: _GreenfieldLLM(),
+        )
+        verification = await workspace.verify(
+            SandboxConfig(backend="subprocess-eval"),
+            sandbox,
+            sandbox_factory=lambda _cfg: SubprocessEvalSandbox(),
+        )
+
+    assert result.state == RunState.COMPLETED
+    assert verification.passed is True
+    assert verification.reason == "verified"
+    assert verification.exit_code == 0
+    assert "calc.py" in verification.patch
+    assert "test_calc.py" in verification.patch
+    assert list(greenfield_dir.iterdir()) == []
