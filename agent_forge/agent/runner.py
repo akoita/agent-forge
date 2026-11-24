@@ -404,6 +404,80 @@ def _create_provider_from_config(
     return default_provider_factory(provider_name, api_key, **kwargs)
 
 
+def _build_llm_instance(
+    cfg: ForgeConfig,
+    provider_name: str,
+    api_key: str,
+    provider_factory: Callable[[str, str], LLMProvider] | None = None,
+) -> LLMProvider:
+    if provider_factory is not None:
+        return provider_factory(provider_name, api_key)
+    from agent_forge.config import RoutingSettings
+    from agent_forge.llm.router import RoutingLLMProvider
+
+    routing_cfg = getattr(cfg, "routing", None)
+    if isinstance(routing_cfg, RoutingSettings) and routing_cfg.enabled:
+        return RoutingLLMProvider.from_config(cfg)
+    return _create_provider_from_config(cfg, provider_name, api_key)
+
+
+def attach_subagent_tool(
+    cfg: Any,
+    tools: ToolRegistry,
+    *,
+    repo_path: str,
+    sandbox_config: SandboxConfig,
+    agent_config: AgentConfig,
+    run_holder: list[AgentRun],
+    llm_factory: Callable[[], LLMProvider],
+    sandbox_factory: Callable[[SandboxConfig], Sandbox] | None = None,
+    event_bus: EventBus | None = None,
+    approval_gate: Any = None,
+    cancellation_token: Any = None,
+    react_loop_fn: Any = None,
+) -> Any:
+    """Register or rebind ``spawn_subagent`` when ``cfg.subagents.enabled`` is True."""
+    from agent_forge.config import SubagentSettings
+
+    sub_cfg = getattr(cfg, "subagents", None)
+    if not isinstance(sub_cfg, SubagentSettings) or not sub_cfg.enabled:
+        return None
+
+    from agent_forge.agent.subagent import SubagentLimits, SubagentRunner
+    from agent_forge.tools.subagent import SpawnSubagentTool
+
+    def _default_sandbox_factory(sb_cfg: SandboxConfig) -> Sandbox:
+        from agent_forge.sandbox.factory import create_sandbox
+
+        return create_sandbox(sb_cfg)
+
+    def _on_tokens(usage: Any) -> None:
+        if run_holder:
+            run_holder[0].total_tokens = run_holder[0].total_tokens + usage
+
+    runner = SubagentRunner(
+        repo_path=repo_path,
+        parent_config=agent_config,
+        sandbox_config=sandbox_config,
+        llm_factory=llm_factory,
+        sandbox_factory=sandbox_factory or _default_sandbox_factory,
+        parent_tools=tools,
+        limits=SubagentLimits.from_settings(sub_cfg),
+        parent_run_id=run_holder[0].id if run_holder else "",
+        event_bus=event_bus,
+        approval_gate=approval_gate,
+        cancellation_token=cancellation_token,
+        on_tokens=_on_tokens,
+        react_loop_fn=react_loop_fn,
+    )
+    existing = tools.get("spawn_subagent") if tools.has("spawn_subagent") else None
+    if isinstance(existing, SpawnSubagentTool):
+        existing.set_runner(runner)
+    else:
+        tools.register(SpawnSubagentTool(runner))
+    return runner
+
+
 async def _attach_mcp_tools(cfg: Any, tools: ToolRegistry) -> Any:
     """Connect configured MCP servers and register their tools into *tools*."""
     from agent_forge.config import MCPSettings
@@ -507,6 +581,21 @@ async def run_agent_task(
             )
         )
         sandbox_config = build_sandbox_config(cfg, repo_path=repo_path)
+        run_holder: list[AgentRun] = []
+        attach_subagent_tool(
+            cfg,
+            tools,
+            repo_path=repo_path,
+            sandbox_config=sandbox_config,
+            agent_config=agent_config,
+            run_holder=run_holder,
+            llm_factory=lambda: _build_llm_instance(cfg, provider_name, api_key, provider_factory),
+            sandbox_factory=sandbox_factory,
+            event_bus=event_bus,
+            approval_gate=approval_gate,
+            cancellation_token=cancellation_token,
+            react_loop_fn=react_loop_fn,
+        )
         agent_run = _prepare_agent_run_for_task(
             task,
             repo_path,
@@ -520,6 +609,7 @@ async def run_agent_task(
             discover_extensions=discover_extensions,
             dev_session=dev_session,
         )
+        run_holder.append(agent_run)
 
         if sandbox_factory is None:
             from agent_forge.sandbox.factory import create_sandbox as default_sandbox_factory
@@ -528,17 +618,7 @@ async def run_agent_task(
         else:
             sandbox = sandbox_factory(sandbox_config)
 
-        if provider_factory is None:
-            from agent_forge.config import RoutingSettings
-            from agent_forge.llm.router import RoutingLLMProvider
-
-            routing_cfg = getattr(cfg, "routing", None)
-            if isinstance(routing_cfg, RoutingSettings) and routing_cfg.enabled:
-                llm: LLMProvider = RoutingLLMProvider.from_config(cfg)
-            else:
-                llm = _create_provider_from_config(cfg, provider_name, api_key)
-        else:
-            llm = provider_factory(provider_name, api_key)
+        llm = _build_llm_instance(cfg, provider_name, api_key, provider_factory)
 
         result_run = await execute_agent_run(
             agent_run,

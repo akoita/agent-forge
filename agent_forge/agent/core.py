@@ -953,6 +953,10 @@ def _can_execute_batch_in_parallel(
             return False
         if getattr(tool_obj, "requires_approval", False) is True:
             return False
+        if tool_call.name == "spawn_subagent" and (
+            str(tool_call.arguments.get("mode", "research")).strip().lower() == "research"
+        ):
+            continue
         if is_side_effecting_tool(tool_call.name, tool_obj):
             return False
     return True

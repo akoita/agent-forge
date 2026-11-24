@@ -39,6 +39,7 @@ from agent_forge.tools.plugins import (
 from agent_forge.tools.read_file import ReadFileTool
 from agent_forge.tools.run_shell import RunShellTool
 from agent_forge.tools.search_codebase import SearchCodebaseTool
+from agent_forge.tools.subagent import SpawnSubagentTool
 from agent_forge.tools.terminal import (
     ShellCancelTool,
     ShellPollTool,
@@ -77,6 +78,7 @@ __all__ = [
     "ShellPollTool",
     "ShellStartTool",
     "ShellWriteTool",
+    "SpawnSubagentTool",
     "StdioMCPTransport",
     "Tool",
     "ToolPluginError",

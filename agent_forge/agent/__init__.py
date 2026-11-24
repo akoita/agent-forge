@@ -34,6 +34,7 @@ from agent_forge.agent.prompts import build_system_prompt
 from agent_forge.agent.repo_map import build_repo_map
 from agent_forge.agent.session import DevSession, SessionStore, SessionSummary, SessionTurn
 from agent_forge.agent.state import InvalidStateTransitionError, transition
+from agent_forge.agent.subagent import SubagentLimits, SubagentResult, SubagentRunner
 
 __all__ = [
     "AgentConfig",
@@ -58,6 +59,9 @@ __all__ = [
     "SessionSummary",
     "SessionTurn",
     "SlashCommandResult",
+    "SubagentLimits",
+    "SubagentResult",
+    "SubagentRunner",
     "ToolInvocation",
     "WorkingSet",
     "artifact_report_contract",

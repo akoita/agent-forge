@@ -270,6 +270,18 @@ def _default_providers() -> dict[str, ProviderSettings]:
     }
 
 
+class SubagentSettings(BaseModel):
+    """Settings governing bounded hierarchical subagent delegation."""
+
+    enabled: bool = False
+    max_depth: int = Field(default=1, ge=1, le=3)
+    max_subagents_per_run: int = Field(default=8, ge=1, le=32)
+    max_iterations: int = Field(default=10, ge=1, le=50)
+    max_tokens: int = Field(default=60_000, ge=1_000)
+    max_result_chars: int = Field(default=8_000, ge=500)
+    branch_prefix: str = "agent-forge/subagent"
+
+
 class ForgeConfig(BaseModel):
     """Top-level configuration composing all sections."""
 
@@ -279,6 +291,7 @@ class ForgeConfig(BaseModel):
     mcp: MCPSettings = Field(default_factory=MCPSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     queue: QueueSettings = Field(default_factory=QueueSettings)
+    subagents: SubagentSettings = Field(default_factory=SubagentSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     service: ServiceSettings = Field(default_factory=ServiceSettings)
     model_profiles: dict[str, ModelProfileSettings] = Field(default_factory=dict)
@@ -335,6 +348,7 @@ _SECTION_MODELS: dict[str, type[BaseModel]] = {
     "mcp": MCPSettings,
     "sandbox": SandboxSettings,
     "queue": QueueSettings,
+    "subagents": SubagentSettings,
     "logging": LoggingSettings,
     "service": ServiceSettings,
 }
