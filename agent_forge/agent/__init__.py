@@ -1,5 +1,6 @@
 """Agent core — ReAct loop and agent lifecycle."""
 
+from agent_forge.agent.chat import ChatSessionRuntime, SlashCommandResult, run_chat_repl
 from agent_forge.agent.context import (
     ContextAssembly,
     ContextEngine,
@@ -37,6 +38,7 @@ from agent_forge.agent.state import InvalidStateTransitionError, transition
 __all__ = [
     "AgentConfig",
     "AgentRun",
+    "ChatSessionRuntime",
     "ClauseResult",
     "CompletionContract",
     "ContextAssembly",
@@ -55,6 +57,7 @@ __all__ = [
     "SessionStore",
     "SessionSummary",
     "SessionTurn",
+    "SlashCommandResult",
     "ToolInvocation",
     "WorkingSet",
     "artifact_report_contract",
@@ -68,6 +71,7 @@ __all__ = [
     "react_loop",
     "replay_journal",
     "resolve_completion_contract",
+    "run_chat_repl",
     "save_run",
     "transition",
 ]

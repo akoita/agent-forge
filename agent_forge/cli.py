@@ -2430,5 +2430,412 @@ def auth_import_gh() -> None:
     console.print(f"[green]Imported GitHub token[/green] ({mask_token(record.token)})")
 
 
+# ---------------------------------------------------------------------------
+# chat & session (ADE interactive terminal sessions)
+# ---------------------------------------------------------------------------
+
+
+def _load_or_create_chat_session(
+    store: Any,
+    cfg: Any,
+    *,
+    repo: str,
+    resume: str | None,
+    session_id: str | None,
+    provider: str | None,
+    model: str | None,
+    model_profile: str | None,
+) -> Any:
+    from agent_forge.agent.session import DevSession, validate_session_id
+
+    resolved_repo = str(Path(repo).resolve())
+    if resume is not None:
+        if resume.strip().lower() == "latest":
+            loaded = store.latest_for_repo(resolved_repo)
+            if loaded is None:
+                err_console.print(f"[red]No saved sessions found for repo:[/red] {resolved_repo}")
+                sys.exit(1)
+        else:
+            try:
+                loaded = store.load(resume)
+            except (FileNotFoundError, ValueError) as exc:
+                err_console.print(f"[red]{exc}[/red]")
+                sys.exit(1)
+        if provider is not None or model_profile is not None:
+            loaded.provider = cfg.agent.default_provider
+        else:
+            cfg.agent.default_provider = loaded.provider
+        if model is not None or model_profile is not None:
+            loaded.model = cfg.agent.default_model
+        else:
+            cfg.agent.default_model = loaded.model
+        loaded.approval_mode = cfg.agent.approval_mode
+        return loaded
+
+    create_kwargs: dict[str, Any] = {
+        "repo_path": resolved_repo,
+        "provider": cfg.agent.default_provider,
+        "model": cfg.agent.default_model,
+        "profile_id": model_profile,
+        "approval_mode": cfg.agent.approval_mode,
+        "sandbox_backend": cfg.sandbox.backend,
+        "sandbox_image": cfg.sandbox.image,
+    }
+    if session_id is not None:
+        try:
+            create_kwargs["id"] = validate_session_id(session_id)
+        except ValueError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            sys.exit(1)
+    return DevSession(**create_kwargs)
+
+
+def _create_chat_runtime(
+    cfg: Any,
+    dev_session: Any,
+    store: Any,
+    *,
+    approval_gate: Any,
+    idle_timeout: float,
+) -> Any:
+    from agent_forge.agent.chat import ChatSessionRuntime
+
+    return ChatSessionRuntime(
+        cfg,
+        dev_session,
+        store,
+        approval_mode=cfg.agent.approval_mode,
+        approval_gate=approval_gate,
+        idle_timeout_seconds=idle_timeout,
+    )
+
+
+@main.command("chat")
+@click.option(
+    "--repo",
+    default=".",
+    type=click.Path(exists=True, file_okay=False),
+    help="Path to target repository (default: current directory).",
+)
+@click.option(
+    "--resume",
+    default=None,
+    help="Resume an existing session by ID or 'latest' for the current repository.",
+)
+@click.option(
+    "--session-id",
+    default=None,
+    help="Explicit session ID when starting a new session.",
+)
+@click.option(
+    "--sessions-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory for durable session storage (default: ~/.agent-forge/sessions).",
+)
+@click.option("--provider", default=None, help="LLM provider override.")
+@click.option("--model", default=None, help="LLM model override.")
+@click.option("--base-url", default=None, help="Override provider OpenAI-compatible base URL.")
+@click.option("--model-profile", default=None, help="Named model profile from config.")
+@click.option(
+    "--approval-mode",
+    default=None,
+    type=click.Choice(["auto", "prompt", "readonly"], case_sensitive=False),
+    help="Approval policy for destructive host/tool operations.",
+)
+@click.option(
+    "--sandbox-backend",
+    default=None,
+    type=click.Choice(["docker", "bwrap", "auto"], case_sensitive=False),
+    help="Sandbox backend override.",
+)
+@click.option("--sandbox-image", default=None, help="Docker image override for the sandbox.")
+@click.option("--toolchain", default=None, help="Toolchain preset override.")
+@click.option("--max-iterations", default=None, type=int, help="Maximum iterations per turn.")
+@click.option(
+    "--idle-timeout",
+    default=1800.0,
+    type=float,
+    help="Seconds of idle time before restarting the warm sandbox (<=0 disables).",
+)
+def chat(
+    repo: str,
+    resume: str | None,
+    session_id: str | None,
+    sessions_dir: Path | None,
+    provider: str | None,
+    model: str | None,
+    base_url: str | None,
+    model_profile: str | None,
+    approval_mode: str | None,
+    sandbox_backend: str | None,
+    sandbox_image: str | None,
+    toolchain: str | None,
+    max_iterations: int | None,
+    idle_timeout: float,
+) -> None:
+    """Start or resume an interactive multi-turn terminal session with a warm sandbox."""
+    from agent_forge.agent.chat import run_chat_repl
+    from agent_forge.agent.session import SessionStore
+
+    cfg = load_config(
+        cli_overrides=_build_cli_overrides(
+            model=model,
+            provider=provider,
+            max_iterations=max_iterations,
+            approval_mode=approval_mode,
+            sandbox_image=sandbox_image,
+            toolchain=toolchain,
+            sandbox_backend=sandbox_backend,
+        )
+    )
+    _apply_model_profile(cfg, model_profile)
+
+    store = SessionStore(base_dir=sessions_dir)
+    dev_session = _load_or_create_chat_session(
+        store,
+        cfg,
+        repo=repo,
+        resume=resume,
+        session_id=session_id,
+        provider=provider,
+        model=model,
+        model_profile=model_profile,
+    )
+    active_provider = dev_session.provider
+    if base_url is not None and active_provider in cfg.providers:
+        cfg.providers[active_provider].base_url = base_url.strip()
+    _require_provider_key(cfg, active_provider)
+
+    runtime = _create_chat_runtime(
+        cfg,
+        dev_session,
+        store,
+        approval_gate=_build_approval_gate(cfg.agent.approval_mode),
+        idle_timeout=idle_timeout,
+    )
+    asyncio.run(run_chat_repl(runtime, output_fn=click.echo))
+
+
+@main.group("session")
+def session_group() -> None:
+    """Inspect, compact, and manage durable multi-turn development sessions."""
+
+
+def _serialize_session_summary(item: Any) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "repo_path": item.repo_path,
+        "title": item.title,
+        "provider": item.provider,
+        "model": item.model,
+        "turns": item.turn_count,
+        "messages": item.message_count,
+        "total_tokens": item.total_tokens.total_tokens,
+        "created_at": item.created_at.isoformat(),
+        "updated_at": item.updated_at.isoformat(),
+    }
+
+
+@session_group.command("list")
+@click.option(
+    "--repo",
+    default=None,
+    type=click.Path(exists=True, file_okay=False),
+    help="Filter sessions by repository path.",
+)
+@click.option("--limit", default=None, type=int, help="Maximum number of sessions to show.")
+@click.option(
+    "--sessions-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory holding stored sessions.",
+)
+@click.option(
+    "--output-format",
+    default="text",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    help="Output format.",
+)
+def session_list(
+    repo: str | None,
+    limit: int | None,
+    sessions_dir: Path | None,
+    output_format: str,
+) -> None:
+    """List saved interactive and ACP development sessions."""
+    from agent_forge.agent.session import SessionStore
+
+    store = SessionStore(base_dir=sessions_dir)
+    summaries = store.list_sessions(repo_path=repo, limit=limit)
+    if output_format.lower() == "json":
+        click.echo(json.dumps([_serialize_session_summary(s) for s in summaries], indent=2))
+        return
+
+    if not summaries:
+        console.print("[dim]No stored sessions found.[/dim]")
+        return
+
+    table = Table(title="Development Sessions")
+    table.add_column("ID", style="bold")
+    table.add_column("Title")
+    table.add_column("Model")
+    table.add_column("Turns", justify="right")
+    table.add_column("Tokens", justify="right")
+    table.add_column("Updated")
+    for s in summaries:
+        table.add_row(
+            s.id,
+            (s.title[:36] + "...") if len(s.title) > 39 else (s.title or "(empty)"),
+            f"{s.provider}/{s.model}",
+            str(s.turn_count),
+            f"{s.total_tokens.total_tokens:,}",
+            s.updated_at.strftime("%Y-%m-%d %H:%M"),
+        )
+    console.print(table)
+
+
+@session_group.command("show")
+@click.argument("session_id")
+@click.option(
+    "--sessions-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory holding stored sessions.",
+)
+@click.option(
+    "--output-format",
+    default="text",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    help="Output format.",
+)
+def session_show(session_id: str, sessions_dir: Path | None, output_format: str) -> None:
+    """Show metadata, turns, and context budget stats for a stored session."""
+    from agent_forge.agent.session import SessionStore
+
+    store = SessionStore(base_dir=sessions_dir)
+    try:
+        dev_session = store.load(session_id)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+
+    engine = dev_session.build_context_engine()
+    stats = engine.stats_dict()
+    if output_format.lower() == "json":
+        payload = {
+            **_serialize_session_summary(dev_session.to_summary()),
+            "turns_detail": [t.to_dict() for t in dev_session.turns],
+            "context_stats": stats,
+        }
+        click.echo(json.dumps(payload, indent=2))
+        return
+
+    table = Table(show_header=False, padding=(0, 2))
+    table.add_column("Key", style="bold")
+    table.add_column("Value")
+    table.add_row("Session ID", dev_session.id)
+    table.add_row("Repo", dev_session.repo_path)
+    table.add_row("Model", f"{dev_session.provider}/{dev_session.model}")
+    table.add_row("Turns", str(len(dev_session.turns)))
+    table.add_row("Messages", str(len(dev_session.messages)))
+    table.add_row("Compactions", str(stats["compactions"]))
+    table.add_row("Working Set Files", str(len(stats["working_set_files"])))
+    table.add_row("Total Tokens", f"{dev_session.total_tokens.total_tokens:,}")
+    console.print(Panel(table, title=f"Session {dev_session.id}"))
+
+
+@session_group.command("compact")
+@click.argument("session_id")
+@click.option(
+    "--keep-recent",
+    default=None,
+    type=int,
+    help="Recent turns to keep uncompacted (default: context policy keep_recent_turns).",
+)
+@click.option(
+    "--sessions-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory holding stored sessions.",
+)
+@click.option(
+    "--output-format",
+    default="text",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    help="Output format.",
+)
+def session_compact(
+    session_id: str,
+    keep_recent: int | None,
+    sessions_dir: Path | None,
+    output_format: str,
+) -> None:
+    """Compact an existing stored session offline and persist the snapshot."""
+    from agent_forge.agent.chat import ChatSessionRuntime
+    from agent_forge.agent.session import SessionStore
+
+    store = SessionStore(base_dir=sessions_dir)
+    try:
+        dev_session = store.load(session_id)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+
+    cfg = load_config()
+    runtime = ChatSessionRuntime(cfg, dev_session, store, approval_mode=dev_session.approval_mode)
+    assembly = runtime.compact(keep_recent_turns=keep_recent)
+    payload = {
+        "session_id": dev_session.id,
+        "compaction_epoch": assembly.compaction_epoch,
+        "raw_prompt_tokens": assembly.raw_prompt_tokens,
+        "assembled_prompt_tokens": assembly.assembled_prompt_tokens,
+        "tokens_saved": assembly.tokens_saved,
+    }
+    if output_format.lower() == "json":
+        click.echo(json.dumps(payload, indent=2))
+        return
+    console.print(
+        f"[green]Compacted {dev_session.id}[/green] (epoch {assembly.compaction_epoch}): "
+        f"{assembly.raw_prompt_tokens:,} -> {assembly.assembled_prompt_tokens:,} tokens "
+        f"(saved {assembly.tokens_saved:,})."
+    )
+
+
+@session_group.command("delete")
+@click.argument("session_id")
+@click.option(
+    "--sessions-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory holding stored sessions.",
+)
+@click.option(
+    "--output-format",
+    default="text",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    help="Output format.",
+)
+def session_delete(session_id: str, sessions_dir: Path | None, output_format: str) -> None:
+    """Delete a stored development session from disk."""
+    from agent_forge.agent.session import SessionStore
+
+    store = SessionStore(base_dir=sessions_dir)
+    try:
+        deleted = store.delete(session_id)
+    except ValueError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+
+    if output_format.lower() == "json":
+        click.echo(json.dumps({"session_id": session_id, "deleted": deleted}, indent=2))
+    elif deleted:
+        console.print(f"[green]Deleted session {session_id}[/green]")
+    else:
+        err_console.print(f"[red]Session not found:[/red] {session_id}")
+    if not deleted:
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     main()

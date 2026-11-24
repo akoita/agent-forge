@@ -1177,6 +1177,17 @@ class ContextEngine:
         engine.restore_state(state, keep_policy=policy is not None)
         return engine
 
+    def assembled_token_estimate(self, messages: Sequence[Message]) -> int:
+        """Estimate rendered prompt tokens under the current compaction view without mutating."""
+        header, groups = _partition_turn_groups(messages)
+        rendered = self._render_view(
+            header,
+            groups,
+            cutoff=self._compacted_group_cutoff,
+            summary_text=self._summary_message_text,
+        )
+        return estimate_messages_tokens(rendered)
+
     def stats_dict(self, assembly: ContextAssembly | None = None) -> dict[str, Any]:
         """Return JSON-serializable telemetry describing assembled context state."""
         stats: dict[str, Any] = {

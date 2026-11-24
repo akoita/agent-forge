@@ -343,8 +343,9 @@ async def execute_agent_run(
     on_sandbox_started: Callable[[Sandbox], None] | None = None,
     post_run_hook: PostRunHook | None = None,
     react_loop_fn: Any = None,
+    manage_sandbox: bool = True,
 ) -> AgentRun:
-    """Start the sandbox, execute ``react_loop``, run an optional hook, and clean up."""
+    """Start the sandbox if managed, run ``react_loop``, run post-hook, and clean up."""
     if react_loop_fn is None:
         from agent_forge.agent.core import react_loop as default_react_loop
 
@@ -368,7 +369,8 @@ async def execute_agent_run(
     )
 
     try:
-        await sandbox.start(repo_path=repo_path or agent_run.repo_path, config=sandbox_config)
+        if manage_sandbox:
+            await sandbox.start(repo_path=repo_path or agent_run.repo_path, config=sandbox_config)
         if on_sandbox_started is not None:
             on_sandbox_started(sandbox)
         result: AgentRun = await loop_fn(agent_run, llm, tools, sandbox, **loop_kwargs)
@@ -377,7 +379,8 @@ async def execute_agent_run(
         return result
     finally:
         try:
-            await sandbox.stop()
+            if manage_sandbox:
+                await sandbox.stop()
         finally:
             await llm.close()
 
