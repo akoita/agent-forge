@@ -488,8 +488,14 @@ from dataclasses import dataclass
 @dataclass
 class SandboxConfig:
     backend: str = "docker"                      # "docker" | "bwrap" | "auto"
-    image: str = "agent-forge-sandbox:latest"    # Resolved polyglot image tag
-    toolchain: str = "auto"                      # "auto" | "python" | "node" | "go" | "rust" | "jvm" | "full"
+    image: str = "agent-forge-sandbox:latest"    # Resolved polyglot or devcontainer image tag
+    toolchain: str = "auto"                      # "auto" | "python" | "node" | "go" | "rust" | "jvm" | "full" | "universal"
+    dockerfile: str = ""                         # Repo-relative Dockerfile built via content hash
+    build_context: str = ""                      # Build context path when dockerfile is set
+    build_args: dict[str, str] = field(default_factory=dict)
+    build_target: str | None = None
+    setup_command: str = ""                      # Phase 1 online setup before offline Phase 2
+    setup_timeout_seconds: int = 300             # Phase 1 setup command timeout
     workspace_path: str = "/workspace"           # Mount point inside container
     cpu_limit: float = 1.0                       # CPU cores
     memory_limit: str = "512m"                   # Memory limit
@@ -537,7 +543,7 @@ class Sandbox(ABC):
 
 #### Sandbox Docker Image
 
-Agent Forge ships polyglot sandbox Dockerfiles (`Dockerfile`, `Dockerfile.node`, `Dockerfile.go`, `Dockerfile.rust`, `Dockerfile.jvm`, `Dockerfile.full`) selected explicitly or automatically via `sandbox.toolchain`, while host loopback preview ports bind only when `published_ports` and `network_enabled=True` are set.
+Agent Forge ships polyglot sandbox Dockerfiles (`Dockerfile`, `Dockerfile.node`, `Dockerfile.go`, `Dockerfile.rust`, `Dockerfile.jvm`, `Dockerfile.full`, `Dockerfile.universal`) selected explicitly or automatically via `sandbox.toolchain`, plus `.devcontainer/devcontainer.json` / `sandbox.dockerfile` resolution and two-phase `sandbox.setup_command` online-to-offline bootstrap, while host loopback preview ports bind only when `published_ports` and `network_enabled=True` are set.
 
 The Python base image includes common development tools pre-installed:
 
