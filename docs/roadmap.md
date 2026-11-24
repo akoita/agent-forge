@@ -19,18 +19,20 @@ Agent Forge will deliver a verified local coding workflow, measure its quality, 
 | [9. Agentic Development Environment (ADE) Sessions](https://github.com/akoita/agent-forge/milestone/9) | Durable `DevSession` snapshots, stateful `ACP` replay, and interactive `agent-forge chat`/`session` CLI with warm sandboxes. |
 | [10. Daily-Driver ADE UX & v0.7.0 Release](https://github.com/akoita/agent-forge/milestone/10) | OpenRouter gateway, live streaming & prompt history, `/diff`/`/undo`/`/sessions`/`/resume`, warm Docker integration tests, and `v0.7.0`. |
 | [11. SOTA Agent Loop: Subagents & Code Mode](https://github.com/akoita/agent-forge/milestone/11) | Bounded hierarchical subagent delegation ([#32](https://github.com/akoita/agent-forge/issues/32)) and benchmarked Code Mode execution ([#193](https://github.com/akoita/agent-forge/issues/193)). |
+| [12. SOTA Harness Hardening, Real-Sandbox Verification & v0.8.0](https://github.com/akoita/agent-forge/milestone/12) | Real Docker integration + chat/ACP UX ([#223](https://github.com/akoita/agent-forge/issues/223)), polyglot tree-sitter symbol/diagnostics loop ([#224](https://github.com/akoita/agent-forge/issues/224)), and `v0.8.0` paired baseline ([#225](https://github.com/akoita/agent-forge/issues/225)). |
+| [13. Extension Packs, Safe Cloud/On-Chain Deployments & Repo Memory](https://github.com/akoita/agent-forge/milestone/13) | Domain-isolated GCP/AWS/Terraform ([#226](https://github.com/akoita/agent-forge/issues/226)) and EVM/Foundry ([#227](https://github.com/akoita/agent-forge/issues/227)) plugin packs plus deterministic `.agent-forge/memory.md` ([#25](https://github.com/akoita/agent-forge/issues/25)). |
 
 The [delivery plan](delivery-plan.md) records prerequisites, issue order, and exit criteria. GitHub tracks current assignments. Use the documented criteria and observed evidence to close a milestone.
 
 ## Product and engineering boundaries
 
 - The core owns the agent loop, tools, configuration, policies, context, events, sandbox interface, and runner contract. Keep it portable and enforce the extension boundary with `scripts/check_boundaries.py`.
-- Extensions own domain profiles, prompts, tools, and schemas. Extract the remaining legacy report behavior through [#140](https://github.com/akoita/agent-forge/issues/140) and [#141](https://github.com/akoita/agent-forge/issues/141).
+- Extensions own domain profiles, prompts, tools, and schemas. Deliver cloud/blockchain workflows via extension packs (`plugins/cloud-deploy/`, `plugins/evm-foundry/`).
 - The hosted application owns identity, tenancy, queues, artifacts, deployment, and UI. Its release work is tracked in [#142](https://github.com/akoita/agent-forge/issues/142).
 - Measure the effect of harness changes on task success, cost, latency, and tool failures. Add complexity when evidence shows it solves a user problem.
 
 ## Later work
 
-Next harness-capability milestones prioritize hierarchical [subagent delegation](https://github.com/akoita/agent-forge/issues/32) and opt-in [Code Mode](https://github.com/akoita/agent-forge/issues/193) backed by paired `make eval` benchmarks.
+Active engineering prioritizes Milestone 12 hardening ([#223](https://github.com/akoita/agent-forge/issues/223)–[#225](https://github.com/akoita/agent-forge/issues/225)), Milestone 13 extension packs + deterministic repo memory ([#226](https://github.com/akoita/agent-forge/issues/226), [#227](https://github.com/akoita/agent-forge/issues/227), [#25](https://github.com/akoita/agent-forge/issues/25)), and the Milestone 6 hosted pilot ([#142](https://github.com/akoita/agent-forge/issues/142)).
 
 Fund fleet scaling, warm pools, and capacity dashboards when pilot measurements identify a bottleneck. The planned interfaces are the CLI, API, and ACP/pilot UI. Custom agent protocols, orchestration DSLs, vector memory by default, bespoke IDE plugins, and a tool marketplace remain outside the current roadmap.
