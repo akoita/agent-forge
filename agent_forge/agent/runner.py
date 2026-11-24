@@ -296,6 +296,7 @@ def _build_react_loop_kwargs(
     verify_command: str | None,
     completion_contract: Any = None,
     context_engine: ContextEngine | None = None,
+    stream_tokens: bool = False,
 ) -> dict[str, Any]:
     optional = {
         "verify": verify,
@@ -317,6 +318,8 @@ def _build_react_loop_kwargs(
         loop_kwargs["raise_on_cancel"] = False
     if base_revision:
         loop_kwargs["base_revision"] = base_revision
+    if stream_tokens:
+        loop_kwargs["stream_tokens"] = True
     return loop_kwargs
 
 
@@ -344,6 +347,7 @@ async def execute_agent_run(
     post_run_hook: PostRunHook | None = None,
     react_loop_fn: Any = None,
     manage_sandbox: bool = True,
+    stream_tokens: bool = False,
 ) -> AgentRun:
     """Start the sandbox if managed, run ``react_loop``, run post-hook, and clean up."""
     if react_loop_fn is None:
@@ -366,6 +370,7 @@ async def execute_agent_run(
         verify_command=verify_command,
         completion_contract=completion_contract,
         context_engine=context_engine,
+        stream_tokens=stream_tokens,
     )
 
     try:

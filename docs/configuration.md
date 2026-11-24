@@ -439,8 +439,11 @@ agent-forge auth logout github
 Start an interactive multi-turn ADE terminal session with a warm session-scoped sandbox and resume it across restarts:
 
 ```bash
-# Start a new interactive session
+# Start a new interactive session with live streaming and persistent history
 agent-forge chat --repo . --idle-timeout 1800
+
+# Disable streaming or customize prompt history / approval mode
+agent-forge chat --repo . --no-stream --history-file ~/.agent-forge/chat_history --approval-mode prompt
 
 # Resume the latest session for this repository (or pass a specific session ID)
 agent-forge chat --repo . --resume latest
@@ -452,4 +455,4 @@ agent-forge session compact <session-id> --keep-recent 2
 agent-forge session delete <session-id>
 ```
 
-Inside `agent-forge chat`, use `/compact [keep_recent]`, `/context`, `/model [spec]`, `/clear [--sandbox]`, `/help`, or `/exit`.
+Inside `agent-forge chat`, use `/compact [keep_recent]`, `/context`, `/model [spec]`, `/clear [--sandbox]`, `/help`, or `/exit`. Enter multiline prompts using trailing `\` continuation or `"""..."""` blocks.

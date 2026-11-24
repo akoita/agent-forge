@@ -28,7 +28,7 @@ from agent_forge.agent.models import AgentRun, RunState, ToolInvocation
 from agent_forge.agent.persistence import save_run
 from agent_forge.agent.prompts import build_system_prompt
 from agent_forge.agent.state import transition
-from agent_forge.llm.base import LLMConfig, LLMResponse, Message, Role, ToolCall
+from agent_forge.llm.base import LLMConfig, LLMResponse, Message, Role, TokenUsage, ToolCall
 from agent_forge.llm.capabilities import ProviderCapabilities, query_provider_capabilities
 from agent_forge.llm.errors import ToolExecutionError
 from agent_forge.llm.router import RoutingDecision, TurnRoutingContext
@@ -165,6 +165,7 @@ async def react_loop(
     verify_command: str | None = None,
     completion_contract: CompletionContract | None = None,
     context_engine: ContextEngine | None = None,
+    stream_tokens: bool = False,
 ) -> AgentRun:
     """Execute the ReAct loop: Observe → Reason (LLM) → Act (Tool) → Repeat.
 
@@ -246,6 +247,7 @@ async def react_loop(
                 cancellation_token=cancellation_token,
                 completion_contract=completion_contract,
                 context_engine=active_context,
+                stream_tokens=stream_tokens,
             )
 
     except asyncio.CancelledError:
@@ -375,6 +377,139 @@ def _sync_turn_context_window(
         context_engine.sync_context_window(provider_caps.max_context_tokens)
 
 
+def _merge_stream_tool_call(acc: list[ToolCall], tc: ToolCall) -> None:
+    target = next((item for item in acc if tc.id and item.id == tc.id), None)
+    if target is None and not tc.name and acc:
+        target = acc[-1]
+    if target is None:
+        if tc.name:
+            acc.append(
+                ToolCall(
+                    id=tc.id,
+                    name=tc.name,
+                    arguments=dict(tc.arguments),
+                    thought_signature=tc.thought_signature,
+                )
+            )
+        return
+    if tc.name:
+        target.name = tc.name
+    if tc.arguments:
+        target.arguments.update(tc.arguments)
+    if tc.thought_signature is not None:
+        target.thought_signature = tc.thought_signature
+
+
+def _has_usage(usage: TokenUsage) -> bool:
+    return bool(
+        usage.total_tokens
+        or usage.prompt_tokens
+        or usage.completion_tokens
+        or usage.reported_cost_usd is not None
+    )
+
+
+class _StreamAccumulator:
+    """Assemble streamed :class:`LLMResponse` chunks into a single turn response."""
+
+    def __init__(self, default_model: str) -> None:
+        self.model = default_model
+        self.content_parts: list[str] = []
+        self.tool_calls: list[ToolCall] = []
+        self.reasoning_blocks: list[dict[str, Any]] = []
+        self.usage = TokenUsage(0, 0, 0)
+        self.finish_reason = ""
+        self.reported_model: str | None = None
+        self.upstream_provider: str | None = None
+        self.native_finish_reason: str | None = None
+        self.response_id: str | None = None
+        self.saw_chunk = False
+
+    def ingest(self, chunk: LLMResponse) -> str | None:
+        self.saw_chunk = True
+        self.model = chunk.model or self.model
+        self.reported_model = chunk.reported_model or self.reported_model
+        self.upstream_provider = chunk.upstream_provider or self.upstream_provider
+        self.native_finish_reason = chunk.native_finish_reason or self.native_finish_reason
+        self.response_id = chunk.response_id or self.response_id
+        self.finish_reason = chunk.finish_reason or self.finish_reason
+        for tc in chunk.tool_calls:
+            _merge_stream_tool_call(self.tool_calls, tc)
+        if chunk.reasoning_blocks:
+            self.reasoning_blocks.extend(chunk.reasoning_blocks)
+        if _has_usage(chunk.usage):
+            self.usage = chunk.usage
+        if chunk.content:
+            self.content_parts.append(chunk.content)
+            return chunk.content
+        return None
+
+    def build(self) -> LLMResponse:
+        resolved_finish = "tool_calls" if self.tool_calls else (self.finish_reason or "stop")
+        return LLMResponse(
+            content="".join(self.content_parts) if self.content_parts else None,
+            tool_calls=self.tool_calls,
+            usage=self.usage,
+            model=self.model,
+            finish_reason=resolved_finish,
+            reported_model=self.reported_model,
+            upstream_provider=self.upstream_provider,
+            native_finish_reason=self.native_finish_reason,
+            response_id=self.response_id,
+            reasoning_blocks=self.reasoning_blocks,
+        )
+
+
+async def _invoke_llm(
+    llm: LLMProvider,
+    prompt_messages: list[Message],
+    tool_definitions: list[Any],
+    llm_config: LLMConfig,
+    *,
+    stream_tokens: bool,
+    event_bus: EventBus | None,
+    run_id: str,
+    iteration: int,
+) -> LLMResponse:
+    if not stream_tokens:
+        return await llm.complete(
+            messages=prompt_messages,
+            tools=tool_definitions,
+            config=llm_config,
+        )
+
+    acc = _StreamAccumulator(llm_config.model)
+    try:
+        async for chunk in llm.stream(prompt_messages, tools=tool_definitions, config=llm_config):
+            delta = acc.ingest(chunk)
+            if delta:
+                await _emit(
+                    event_bus,
+                    EventType.ASSISTANT_DELTA,
+                    run_id,
+                    {"delta": delta, "iteration": iteration},
+                )
+    except NotImplementedError:
+        acc.saw_chunk = False
+
+    if not acc.saw_chunk:
+        fallback = await llm.complete(
+            messages=prompt_messages,
+            tools=tool_definitions,
+            config=llm_config,
+        )
+        if fallback.content:
+            await _emit(
+                event_bus,
+                EventType.ASSISTANT_DELTA,
+                run_id,
+                {"delta": fallback.content, "iteration": iteration},
+            )
+        return fallback
+
+    return acc.build()
+
+
 async def _run_loop_iterations(
     run: AgentRun,
     llm: LLMProvider,
@@ -396,6 +531,7 @@ async def _run_loop_iterations(
     cancellation_token: CancellationToken | None,
     completion_contract: CompletionContract | None = None,
     context_engine: ContextEngine | None = None,
+    stream_tokens: bool = False,
 ) -> None:
     remediation_attempts = 0
     consecutive_failures = 0
@@ -451,10 +587,15 @@ async def _run_loop_iterations(
         llm_config.previous_response_id = (
             last_response_id if provider_caps.stateful_response_ids else None
         )
-        response = await llm.complete(
-            messages=prompt_messages,
-            tools=tool_definitions,
-            config=llm_config,
+        response = await _invoke_llm(
+            llm,
+            prompt_messages,
+            tool_definitions,
+            llm_config,
+            stream_tokens=stream_tokens,
+            event_bus=event_bus,
+            run_id=run.id,
+            iteration=run.iterations,
         )
         run.total_tokens = run.total_tokens + response.usage
         tracker.record(

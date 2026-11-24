@@ -2528,7 +2528,7 @@ def _create_chat_runtime(
 @click.option(
     "--approval-mode",
     default=None,
-    type=click.Choice(["auto", "prompt", "readonly"], case_sensitive=False),
+    type=click.Choice(["auto", "prompt", "deny"], case_sensitive=False),
     help="Approval policy for destructive host/tool operations.",
 )
 @click.option(
@@ -2546,6 +2546,17 @@ def _create_chat_runtime(
     type=float,
     help="Seconds of idle time before restarting the warm sandbox (<=0 disables).",
 )
+@click.option(
+    "--stream/--no-stream",
+    default=True,
+    help="Stream assistant tokens live during interactive turns.",
+)
+@click.option(
+    "--history-file",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Path for persistent prompt history (default: ~/.agent-forge/chat_history).",
+)
 def chat(
     repo: str,
     resume: str | None,
@@ -2561,6 +2572,8 @@ def chat(
     toolchain: str | None,
     max_iterations: int | None,
     idle_timeout: float,
+    stream: bool,
+    history_file: Path | None,
 ) -> None:
     """Start or resume an interactive multi-turn terminal session with a warm sandbox."""
     from agent_forge.agent.chat import run_chat_repl
@@ -2602,7 +2615,24 @@ def chat(
         approval_gate=_build_approval_gate(cfg.agent.approval_mode),
         idle_timeout=idle_timeout,
     )
-    asyncio.run(run_chat_repl(runtime, output_fn=click.echo))
+
+    def _write_stream_chunk(chunk: str) -> None:
+        sys.stdout.write(chunk)
+        sys.stdout.flush()
+
+    def _emit_status_line(line: str) -> None:
+        console.print(f"[dim]{line}[/dim]")
+
+    asyncio.run(
+        run_chat_repl(
+            runtime,
+            output_fn=click.echo,
+            stream_fn=_write_stream_chunk if stream else None,
+            status_fn=_emit_status_line,
+            history_path=history_file,
+            stream_tokens=stream,
+        )
+    )
 
 
 @main.group("session")
