@@ -6,6 +6,7 @@ default_model = "gemini-3.1-flash-lite-preview"
 temperature = 0.0
 system_prompt_path = ""          # Optional custom system prompt file
 approval_mode = "auto"           # "auto", "prompt", or "deny"
+execution_mode = "tool_calling"  # "tool_calling" or opt-in "code_mode"
 budget_action = "timeout"        # "timeout" or "pause"
 
 [context]

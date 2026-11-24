@@ -2727,3 +2727,304 @@ async def test_subagent_delegation_bounds_parent_context_and_isolates_worker(
         EventType.SUBAGENT_COMPLETED,
     ]
     assert parent_run.total_tokens.total_tokens == 134
+
+
+class _AbEvalSandbox(Sandbox):
+    """Local subprocess sandbox enforcing sanitized env for paired Code Mode A/B evals."""
+
+    def __init__(self) -> None:
+        self.root: Path | None = None
+
+    async def start(self, repo_path: str, config: SandboxConfig) -> None:
+        del config
+        self.root = Path(repo_path)
+
+    async def exec(self, command: str, *, timeout_seconds: int = 30) -> ExecResult:
+        import asyncio
+
+        from agent_forge.sandbox.base import sanitize_sandbox_env
+
+        assert self.root is not None
+        mapped_cmd = command.replace("/workspace", str(self.root))
+        proc = await asyncio.create_subprocess_exec(
+            "/bin/sh",
+            "-c",
+            mapped_cmd,
+            cwd=str(self.root),
+            env=sanitize_sandbox_env(dict(os.environ)),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=float(timeout_seconds))
+        return ExecResult(
+            exit_code=int(proc.returncode or 0),
+            stdout=out_b.decode("utf-8", errors="replace"),
+            stderr=err_b.decode("utf-8", errors="replace"),
+        )
+
+    async def read_file(self, path: str) -> str:
+        assert self.root is not None
+        return (self.root / path.removeprefix("/workspace/").lstrip("/")).read_text(
+            encoding="utf-8"
+        )
+
+    async def write_file(self, path: str, content: str) -> None:
+        assert self.root is not None
+        target = self.root / path.removeprefix("/workspace/").lstrip("/")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    async def list_files(self, path: str = "/workspace") -> list[str]:
+        del path
+        assert self.root is not None
+        return [p.relative_to(self.root).as_posix() for p in self.root.rglob("*") if p.is_file()]
+
+    async def stop(self) -> None:
+        return None
+
+    async def is_alive(self) -> bool:
+        return self.root is not None
+
+
+def _build_eval_25_tool_catalog():
+    from agent_forge.tools import Tool, ToolResult, create_default_registry
+
+    class _ExtraMcpTool(Tool):
+        def __init__(self, idx: int) -> None:
+            self._idx = idx
+            self.is_mcp_tool = True
+
+        @property
+        def name(self) -> str:
+            return f"mcp__catalog{self._idx}__inspect_record"
+
+        @property
+        def description(self) -> str:
+            return f"Inspect catalog record {self._idx} with metadata filter parameters"
+
+        @property
+        def parameters(self) -> dict[str, object]:
+            return {
+                "type": "object",
+                "properties": {
+                    "record_id": {"type": "string", "description": "Record identifier"},
+                    "verbose": {"type": "boolean", "description": "Include raw metadata"},
+                },
+                "required": ["record_id"],
+            }
+
+        @property
+        def side_effecting(self) -> bool:
+            return False
+
+        async def execute(self, arguments: dict[str, object], sandbox: Sandbox) -> ToolResult:
+            del sandbox
+            return ToolResult(output=f"record-{self._idx}:{arguments.get('record_id', '')}")
+
+    reg = create_default_registry(load_plugins=False)
+    for i in range(10):
+        reg.register(_ExtraMcpTool(i))
+    assert len(reg) >= 25
+    return reg
+
+
+def _setup_ab_eval_repo(repo: Path) -> None:
+    repo.mkdir(parents=True, exist_ok=True)
+    for i in range(4):
+        (repo / f"cfg_{i}.txt").write_text(f"TARGET_THRESHOLD={10 + i}\n", encoding="utf-8")
+    (repo / "calc.py").write_text(
+        "def threshold() -> int:\n    return 1\n",
+        encoding="utf-8",
+    )
+    (repo / "tests").mkdir(exist_ok=True)
+    (repo / "tests" / "test_calc.py").write_text(
+        "import unittest\n"
+        "from calc import threshold\n\n"
+        "class TestCalc(unittest.TestCase):\n"
+        "    def test_threshold(self) -> None:\n"
+        "        self.assertEqual(threshold(), 13)\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.asyncio
+async def test_code_mode_ab_benchmark_vs_tool_calling(tmp_path: Path) -> None:
+    """Paired A/B eval (#193): Code Mode cuts schema bloat & turns with full safety parity."""
+    from agent_forge.agent.core import react_loop
+    from agent_forge.agent.journal import RunJournal, replay_journal
+    from agent_forge.agent.models import AgentConfig, AgentRun, RunState
+    from agent_forge.llm.base import (
+        LLMConfig,
+        LLMProvider,
+        LLMResponse,
+        Message,
+        TokenUsage,
+        ToolCall,
+        ToolDefinition,
+    )
+
+    class _AbSchemaLLM(LLMProvider):
+        def __init__(self, turns: list[LLMResponse]) -> None:
+            self._turns = turns
+            self._idx = 0
+            self.schema_bytes_per_turn: list[int] = []
+
+        @property
+        def model_name(self) -> str:
+            return "ab-eval-model"
+
+        async def complete(
+            self,
+            messages: list[Message],
+            tools: list[ToolDefinition] | None = None,
+            config: LLMConfig | None = None,
+        ) -> LLMResponse:
+            del messages, config
+            serialized = json.dumps(
+                [
+                    {"name": td.name, "desc": td.description, "p": td.parameters}
+                    for td in (tools or [])
+                ]
+            )
+            self.schema_bytes_per_turn.append(len(serialized))
+            resp = self._turns[min(self._idx, len(self._turns) - 1)]
+            self._idx += 1
+            return resp
+
+        async def stream(
+            self,
+            messages: list[Message],
+            tools: list[ToolDefinition] | None = None,
+            config: LLMConfig | None = None,
+        ):
+            del messages, tools, config
+            if False:  # pragma: no cover
+                yield None
+
+    # Arm A: classic tool_calling across 4 reads + 1 denied rm + 1 write + 1 final answer = 7 turns
+    repo_a = tmp_path / "arm_a"
+    _setup_ab_eval_repo(repo_a)
+    sb_a = _AbEvalSandbox()
+    await sb_a.start(str(repo_a), SandboxConfig())
+    turns_a = [
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCall(
+                    id=f"a-r{i}", name="read_file", arguments={"path": f"/workspace/cfg_{i}.txt"}
+                )
+            ],
+            usage=TokenUsage(220, 20, 240),
+            model="ab-eval-model",
+        )
+        for i in range(4)
+    ] + [
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCall(id="a-deny", name="run_shell", arguments={"command": "rm -rf /tmp/x"})
+            ],
+            usage=TokenUsage(230, 20, 250),
+            model="ab-eval-model",
+        ),
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCall(
+                    id="a-write",
+                    name="write_file",
+                    arguments={
+                        "path": "/workspace/calc.py",
+                        "content": "def threshold() -> int:\n    return 13\n",
+                    },
+                )
+            ],
+            usage=TokenUsage(240, 20, 260),
+            model="ab-eval-model",
+        ),
+        LLMResponse(
+            content="Updated calc.py to 13.",
+            usage=TokenUsage(240, 15, 255),
+            model="ab-eval-model",
+            finish_reason="stop",
+        ),
+    ]
+    llm_a = _AbSchemaLLM(turns_a)
+    run_a = AgentRun(
+        task="Read configs and fix threshold",
+        repo_path=str(repo_a),
+        config=AgentConfig(
+            execution_mode="tool_calling",
+            approval_mode="deny",
+            context_enabled=False,
+        ),
+    )
+    journal_a = RunJournal(run_a.id, path=tmp_path / "journal_a.jsonl", fsync=False)
+    await react_loop(
+        run_a, llm_a, _build_eval_25_tool_catalog(), sb_a, emit_lifecycle=False, journal=journal_a
+    )
+    assert run_a.state == RunState.COMPLETED
+    assert _run_unittest(repo_a).returncode == 0
+
+    # Arm B: code_mode finishes in 2 LLM turns via single orchestrated script + approval check
+    repo_b = tmp_path / "arm_b"
+    _setup_ab_eval_repo(repo_b)
+    sb_b = _AbEvalSandbox()
+    await sb_b.start(str(repo_b), SandboxConfig())
+    code_script = (
+        "vals = []\n"
+        "for i in range(4):\n"
+        "    r = call_tool('read_file', {'path': f'/workspace/cfg_{i}.txt'})\n"
+        "    vals.append(int(r['output'].strip().split('=')[1]))\n"
+        "denied = call_tool('run_shell', {'command': 'rm -rf /tmp/x'})\n"
+        "assert denied['metadata']['approval_denied'] is True\n"
+        "w = call_tool('write_file', {\n"
+        "    'path': '/workspace/calc.py',\n"
+        "    'content': f'def threshold() -> int:\\n    return {max(vals)}\\n',\n"
+        "})\n"
+        "assert w['exit_code'] == 0\n"
+        "print(f'threshold={max(vals)}')\n"
+    )
+    llm_b = _AbSchemaLLM(
+        [
+            LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(id="b-exec", name="execute_code", arguments={"code": code_script})
+                ],
+                usage=TokenUsage(90, 45, 135),
+                model="ab-eval-model",
+            ),
+            LLMResponse(
+                content="Updated calc.py to 13 via Code Mode.",
+                usage=TokenUsage(95, 15, 110),
+                model="ab-eval-model",
+                finish_reason="stop",
+            ),
+        ]
+    )
+    run_b = AgentRun(
+        task="Read configs and fix threshold",
+        repo_path=str(repo_b),
+        config=AgentConfig(
+            execution_mode="code_mode",
+            approval_mode="deny",
+            context_enabled=False,
+        ),
+    )
+    journal_b = RunJournal(run_b.id, path=tmp_path / "journal_b.jsonl", fsync=False)
+    await react_loop(
+        run_b, llm_b, _build_eval_25_tool_catalog(), sb_b, emit_lifecycle=False, journal=journal_b
+    )
+    assert run_b.state == RunState.COMPLETED
+    assert _run_unittest(repo_b).returncode == 0
+    assert list(repo_b.glob(".agent_forge_rpc_*")) == []
+
+    # Verify measurable efficiency wins & full journal/approval parity
+    assert llm_b.schema_bytes_per_turn[0] < llm_a.schema_bytes_per_turn[0]
+    assert run_b.iterations < run_a.iterations
+    assert run_b.total_tokens.total_tokens < run_a.total_tokens.total_tokens
+    replay_b = replay_journal(tmp_path / "journal_b.jsonl")
+    assert replay_b.valid is True
+    assert replay_b.anomalies == []
+    assert replay_b.duplicate_side_effects == []

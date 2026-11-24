@@ -501,6 +501,12 @@ def model_capabilities(profile: str | None, output_format: str, probe: bool) -> 
     default=None,
     help="Enable hierarchical subagent delegation (spawn_subagent tool).",
 )
+@click.option(
+    "--execution-mode",
+    default=None,
+    type=click.Choice(["tool_calling", "code_mode"], case_sensitive=False),
+    help="Tool execution mode ('tool_calling' or opt-in 'code_mode').",
+)
 def run(
     task: str,
     repo: str,
@@ -536,6 +542,7 @@ def run(
     thinking_budget: int | None,
     contract: str,
     subagents: bool | None,
+    execution_mode: str | None,
 ) -> None:
     """Run an agent task on a repository."""
     # --- Resolve profile early so it can override provider/model ---
@@ -582,6 +589,7 @@ def run(
             thinking_level=thinking_level,
             thinking_budget=thinking_budget,
             subagents=subagents,
+            execution_mode=execution_mode,
         )
     )
 
@@ -1120,6 +1128,7 @@ def _build_agent_config(
     raw_mode = getattr(cfg.agent, "thinking_mode", None)
     raw_budget = getattr(cfg.agent, "thinking_budget_tokens", None)
     raw_level = getattr(cfg.agent, "thinking_level", None)
+    raw_exec = getattr(cfg.agent, "execution_mode", None)
     return AgentConfig(
         model=cfg.agent.default_model,
         provider=provider_name,
@@ -1128,6 +1137,7 @@ def _build_agent_config(
         temperature=cfg.agent.temperature,
         profile_id=profile.id if profile else None,
         approval_mode=approval,
+        execution_mode=raw_exec if isinstance(raw_exec, str) else "tool_calling",
         max_cost_usd=float(max_cost) if max_cost is not None else None,
         max_duration_seconds=float(max_duration) if max_duration is not None else None,
         budget_action=budget_action,
@@ -1164,6 +1174,7 @@ def _build_cli_overrides(
     thinking_level: str | None = None,
     thinking_budget: int | None = None,
     subagents: bool | None = None,
+    execution_mode: str | None = None,
 ) -> dict[str, Any] | None:
     """Collect non-empty CLI overrides into config dotted keys."""
     mapping = {
@@ -1174,6 +1185,7 @@ def _build_cli_overrides(
         "agent.max_duration_seconds": max_duration,
         "agent.budget_action": budget_action.lower() if budget_action is not None else None,
         "agent.approval_mode": approval_mode.lower() if approval_mode is not None else None,
+        "agent.execution_mode": (execution_mode.lower() if execution_mode is not None else None),
         "agent.reasoning_effort": (
             reasoning_effort.lower() if reasoning_effort is not None else None
         ),
@@ -2585,6 +2597,12 @@ def _create_chat_runtime(
     default=None,
     help="Enable hierarchical subagent delegation (spawn_subagent tool).",
 )
+@click.option(
+    "--execution-mode",
+    default=None,
+    type=click.Choice(["tool_calling", "code_mode"], case_sensitive=False),
+    help="Tool execution mode ('tool_calling' or opt-in 'code_mode').",
+)
 def chat(
     repo: str,
     resume: str | None,
@@ -2603,6 +2621,7 @@ def chat(
     stream: bool,
     history_file: Path | None,
     subagents: bool | None,
+    execution_mode: str | None,
 ) -> None:
     """Start or resume an interactive multi-turn terminal session with a warm sandbox."""
     from agent_forge.agent.chat import run_chat_repl
@@ -2618,6 +2637,7 @@ def chat(
             toolchain=toolchain,
             sandbox_backend=sandbox_backend,
             subagents=subagents,
+            execution_mode=execution_mode,
         )
     )
     _apply_model_profile(cfg, model_profile)

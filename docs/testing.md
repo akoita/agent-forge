@@ -136,6 +136,8 @@ Interactive ADE chat sessions (warm sandbox reuse, `/compact`, `/context`, `/mod
 
 Bounded hierarchical subagent delegation (read-only research fan-out sharing the parent sandbox, isolated Git worktree workers with orphan cleanup, depth/budget guards, token accumulation, and config/CLI flags) is covered in `tests/unit/test_subagent_delegation.py` and `tests/eval/test_benchmark_corpus.py`.
 
+Opt-in Code Mode programmatic execution (`search_tools` progressive discovery, sandboxed Python host RPC bridge, secret isolation, `ApprovalGate` & `RunJournal` replay parity, and paired A/B benchmark evaluation vs classic `tool_calling`) is covered in `tests/unit/test_code_mode.py` and `tests/eval/test_benchmark_corpus.py`.
+
 ## Running Tests
 
 ```bash

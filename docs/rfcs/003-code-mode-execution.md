@@ -1,7 +1,7 @@
 # RFC 003 — Code Mode programmatic tool execution in sandboxed code
 
-**Status:** Proposed · 2026-11-23  
-**Issue:** [#193](https://github.com/akoita/agent-forge/issues/193) · Related: [#40](https://github.com/akoita/agent-forge/issues/40), [ADR-012](../adr/012-mcp-client-tool-integration.md), [strategy](../strategy.md#measure-the-harness-with-the-model)
+**Status:** Accepted (Experimental Opt-In · [ADR-027](../adr/027-code-mode-programmatic-tool-execution.md)) · 2026-11-24  
+**Issue:** [#193](https://github.com/akoita/agent-forge/issues/193) · Related: [#40](https://github.com/akoita/agent-forge/issues/40), [ADR-012](../adr/012-mcp-client-tool-integration.md), [ADR-027](../adr/027-code-mode-programmatic-tool-execution.md), [strategy](../strategy.md#measure-the-harness-with-the-model)
 
 > Design proposal only — no runtime code changes accompany this RFC. Implementation awaits review and M6 completion.
 

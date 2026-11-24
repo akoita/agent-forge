@@ -978,6 +978,13 @@ Before executing a tool call, `ApprovalGate` classifies destructive actions (`ap
 - **`worker` mode (worktree-isolated):** Requires a Git repository, leases an isolated `WorktreeManager` worktree and `<branch_prefix>/<subagent_id>` branch with a dedicated sandbox, excludes `git_push`/`create_pr`/`spawn_subagent`, commits diffs to the temporary branch, returns a bounded patch preview and branch reference, and removes temporary checkouts synchronously (aborting branches on failure).
 - **Resource limits & telemetry:** Enforces `max_depth` (`1`), `max_subagents_per_run` (`8`), `max_iterations` (`10`), `max_tokens` (`60,000`), and `max_result_chars` (`8,000`), emits `subagent.started` / `subagent.completed` events on `EventBus`, and accumulates child tokens into the parent run total.
 
+##### Code Mode Programmatic Tool Execution
+
+When `[agent].execution_mode = "code_mode"` (or `--execution-mode code_mode`; default `"tool_calling"`), `build_code_mode_registry()` (`agent_forge/agent/code_mode.py`) wraps `ToolRegistry` into a 2-tool surface (`search_tools` for progressive schema lookup + `execute_code` for sandboxed Python orchestration):
+
+- **Host RPC bridge (`HostToolBridge`):** Scripts inside the `--network none` sandbox call `call_tool(name, arguments)` and `list_tools()`, routed back to the host while keeping all LLM/MCP credentials outside the sandbox.
+- **Harness invariant parity:** Every bridged call enforces `ApprovalGate` (`auto`, interactive `prompt`, `deny`), underlying MCP circuit breakers/timeouts, recursive-call blocking, `max_bridged_calls` (`50`), and deterministic `RunJournal` (`run-journal-v1`) idempotent replay.
+
 ---
 
 ### 4.6 Observability
@@ -1348,6 +1355,7 @@ Format: `AGENT_FORGE_{SECTION}_{KEY}` (uppercase, underscored).
 
 | Env Var                            | Config Path            |
 | ---------------------------------- | ---------------------- |
+| `AGENT_FORGE_AGENT_EXECUTION_MODE` | `agent.execution_mode` |
 | `AGENT_FORGE_AGENT_MAX_ITERATIONS` | `agent.max_iterations` |
 | `AGENT_FORGE_CONTEXT_ENABLED` | `context.enabled` |
 | `AGENT_FORGE_CONTEXT_MAX_INSTRUCTION_TOKENS` | `context.max_instruction_tokens` |
