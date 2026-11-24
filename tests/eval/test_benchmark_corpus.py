@@ -18,6 +18,7 @@ from agent_forge.eval import (
     materialize_task_repo,
     run_deterministic_eval,
 )
+from agent_forge.sandbox.base import ExecResult, Sandbox, SandboxConfig
 
 
 def _run_unittest(repo: Path) -> subprocess.CompletedProcess[str]:
@@ -2331,3 +2332,164 @@ async def test_acp_multi_turn_stateful_session_and_disk_reload_replay(tmp_path: 
         "Prompt two",
         "Second turn done.",
     ]
+
+
+class _EvalWarmSandbox(Sandbox):
+    def __init__(self) -> None:
+        self.alive = False
+        self.starts = 0
+        self.stops = 0
+        self.files: dict[str, str] = {}
+
+    async def start(self, repo_path: str, config: SandboxConfig | None = None) -> None:
+        del repo_path, config
+        self.starts += 1
+        self.alive = True
+
+    async def exec(self, command: str, *, timeout_seconds: int = 30) -> ExecResult:
+        del command, timeout_seconds
+        return ExecResult(exit_code=0, stdout="", stderr="")
+
+    async def read_file(self, path: str) -> str:
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+    async def write_file(self, path: str, content: str) -> None:
+        self.files[path] = content
+
+    async def stop(self) -> None:
+        self.stops += 1
+        self.alive = False
+
+    async def is_alive(self) -> bool:
+        return self.alive
+
+
+def _make_eval_chat_llm_factory(seen_turn4: list[str]):
+    from agent_forge.llm.base import LLMResponse, Message, Role, TokenUsage, ToolCall
+
+    padding = " ".join(f"ctx{i}" for i in range(45))
+    turn_idx = 0
+
+    def _factory(_c: object, _p: str, _k: str):
+        nonlocal turn_idx
+        turn_idx += 1
+        cur = turn_idx
+        step = 0
+
+        class _LLM:
+            async def complete(
+                self, messages: list[Message], *_a: object, **_kw: object
+            ) -> LLMResponse:
+                nonlocal step
+                step += 1
+                if cur == 1 and step == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[
+                            ToolCall(
+                                id="eval-c1",
+                                name="write_file",
+                                arguments={
+                                    "path": "/workspace/dev_note.txt",
+                                    "content": "persisted",
+                                },
+                            )
+                        ],
+                        usage=TokenUsage(20, 10, 30),
+                        finish_reason="tool_calls",
+                    )
+                if cur == 2 and step == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[
+                            ToolCall(
+                                id="eval-r2",
+                                name="read_file",
+                                arguments={"path": "/workspace/dev_note.txt"},
+                            )
+                        ],
+                        usage=TokenUsage(20, 10, 30),
+                        finish_reason="tool_calls",
+                    )
+                if cur == 4:
+                    seen_turn4.extend(m.content for m in messages if m.role != Role.SYSTEM)
+                return LLMResponse(
+                    content=f"Turn {cur} ok {padding}",
+                    tool_calls=[],
+                    usage=TokenUsage(20, 15, 35),
+                    finish_reason="stop",
+                )
+
+            async def close(self) -> None:
+                pass
+
+        return _LLM()
+
+    return _factory
+
+
+@pytest.mark.asyncio
+async def test_chat_warm_sandbox_compact_and_resume_across_restart(tmp_path: Path) -> None:
+    """Verify warm sandbox survives turns, /compact folds history, and --resume works."""
+    from agent_forge.agent.chat import ChatSessionRuntime, run_chat_repl
+    from agent_forge.agent.session import DevSession, SessionStore
+    from agent_forge.config import ForgeConfig
+    from agent_forge.tools import create_default_registry
+
+    repo = tmp_path / "chat_repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("x = 1\n", encoding="utf-8")
+    store = SessionStore(base_dir=tmp_path / "chat_store")
+    cfg = ForgeConfig()
+
+    sandboxes: list[_EvalWarmSandbox] = []
+
+    def _sb_factory(_c: SandboxConfig) -> Sandbox:
+        sb = _EvalWarmSandbox()
+        sandboxes.append(sb)
+        return sb
+
+    seen_turn4_contents: list[str] = []
+    llm_factory = _make_eval_chat_llm_factory(seen_turn4_contents)
+
+    session = DevSession(
+        repo_path=str(repo.resolve()),
+        provider=cfg.agent.default_provider,
+        model=cfg.agent.default_model,
+    )
+    rt1 = ChatSessionRuntime(
+        cfg,
+        session,
+        store,
+        sandbox_factory=_sb_factory,
+        provider_factory=llm_factory,
+        tools_factory=lambda: create_default_registry(load_plugins=False),
+        api_key_resolver=lambda _c, _p: "test-key",
+    )
+    prompts1 = iter(["Write note", "Read note", "Summarize changes", "/compact 1", "/exit"])
+    out1: list[str] = []
+    await run_chat_repl(rt1, input_fn=lambda _p: next(prompts1), output_fn=out1.append)
+    assert len(sandboxes) == 1
+    assert sandboxes[0].starts == 1
+    assert sandboxes[0].stops == 1
+    assert sandboxes[0].files["/workspace/dev_note.txt"] == "persisted"
+    assert any("Compacted context (epoch 1)" in line for line in out1)
+
+    resumed = store.latest_for_repo(repo)
+    assert resumed is not None
+    assert resumed.id == session.id
+    rt2 = ChatSessionRuntime(
+        cfg,
+        resumed,
+        store,
+        sandbox_factory=_sb_factory,
+        provider_factory=llm_factory,
+        tools_factory=lambda: create_default_registry(load_plugins=False),
+        api_key_resolver=lambda _c, _p: "test-key",
+    )
+    await rt2.run_turn("Final verification")
+    assert any("[CONTEXT SUMMARY" in text for text in seen_turn4_contents)
+    assert "dev_note.txt" in rt2.context_engine.working_set.modified_files
+    await rt2.close()

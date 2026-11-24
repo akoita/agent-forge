@@ -423,3 +423,23 @@ agent-forge auth logout github
 ```
 
 `git_push`, `create_pr`, and HTTP MCP transports (`auth_env`) resolve environment variables first and fall back to the host credential store when absent.
+
+## Interactive Chat & Session Management (`agent-forge chat` / `session`)
+
+Start an interactive multi-turn ADE terminal session with a warm session-scoped sandbox and resume it across restarts:
+
+```bash
+# Start a new interactive session
+agent-forge chat --repo . --idle-timeout 1800
+
+# Resume the latest session for this repository (or pass a specific session ID)
+agent-forge chat --repo . --resume latest
+
+# Inspect, manually compact, or delete saved sessions offline
+agent-forge session list --repo .
+agent-forge session show <session-id>
+agent-forge session compact <session-id> --keep-recent 2
+agent-forge session delete <session-id>
+```
+
+Inside `agent-forge chat`, use `/compact [keep_recent]`, `/context`, `/model [spec]`, `/clear [--sandbox]`, `/help`, or `/exit`.
