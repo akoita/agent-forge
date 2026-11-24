@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, replace
@@ -37,17 +38,25 @@ class VerificationResult:
         return self.reason == "verified"
 
 
-def _git(directory: Path, *args: str, patch: bytes | None = None) -> bytes:
+def _git(
+    directory: Path,
+    *args: str,
+    patch: bytes | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> bytes:
+    env = {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    if extra_env:
+        env.update(extra_env)
     result = subprocess.run(  # noqa: S603
         ["git", "-c", "core.hooksPath=" + os.devnull, *args],  # noqa: S607
         cwd=directory,
         input=patch,
-        env={
-            "PATH": os.environ.get("PATH", os.defpath),
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_TERMINAL_PROMPT": "0",
-        },
+        env=env,
         capture_output=True,
         timeout=30,
         check=False,
@@ -57,6 +66,25 @@ def _git(directory: Path, *args: str, patch: bytes | None = None) -> bytes:
         msg = f"Git {args[0]} failed: {detail}"
         raise ValueError(msg)
     return result.stdout
+
+
+def _has_committed_head(directory: Path) -> bool:
+    try:
+        _git(directory, "rev-parse", "--verify", "HEAD")
+    except ValueError:
+        return False
+    return True
+
+
+def _copy_greenfield_seed_files(source: Path, destination: Path) -> None:
+    for entry in source.iterdir():
+        if entry.name == ".git":
+            continue
+        target = destination / entry.name
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.copytree(entry, target, symlinks=True)
+        else:
+            shutil.copy2(entry, target, follow_symlinks=False)
 
 
 class VerificationWorkspace:
@@ -82,23 +110,63 @@ class VerificationWorkspace:
         self.base_revision: str
         self._verifier: Path
 
+    def _bootstrap_greenfield_repo(self, root: Path) -> tuple[Path, str]:
+        bootstrap = root / "bootstrap"
+        bootstrap.mkdir()
+        _copy_greenfield_seed_files(self._repository, bootstrap)
+        _git(bootstrap, "init", "-q")
+        _git(bootstrap, "add", "--all")
+        _git(
+            bootstrap,
+            "-c",
+            "user.name=Agent Forge",
+            "-c",
+            "user.email=agent-forge@local",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "Initial greenfield workspace",
+            extra_env={
+                "GIT_AUTHOR_DATE": "1970-01-01T00:00:00Z",
+                "GIT_COMMITTER_DATE": "1970-01-01T00:00:00Z",
+            },
+        )
+        rev = _git(bootstrap, "rev-parse", "--verify", "HEAD").decode().strip()
+        return bootstrap, rev
+
     def __enter__(self) -> VerificationWorkspace:
         """Prepare both workspaces at the same committed revision."""
+        if not self._repository.is_dir():
+            msg = f"Repository path does not exist or is not a directory: {self._repository}"
+            raise ValueError(msg)
         temporary = tempfile.TemporaryDirectory(prefix="agent-forge-verify-")
         root = Path(temporary.name)
         self.workspace = root / "candidate"
         self._verifier = root / "verifier"
         try:
-            self.base_revision = (
-                _git(
-                    self._repository,
-                    "rev-parse",
-                    "--verify",
-                    self._requested_base_revision or "HEAD",
+            if _has_committed_head(self._repository):
+                source_repo = self._repository
+                self.base_revision = (
+                    _git(
+                        self._repository,
+                        "rev-parse",
+                        "--verify",
+                        self._requested_base_revision or "HEAD",
+                    )
+                    .decode()
+                    .strip()
                 )
-                .decode()
-                .strip()
-            )
+            else:
+                source_repo, bootstrap_rev = self._bootstrap_greenfield_repo(root)
+                if self._requested_base_revision and self._requested_base_revision != bootstrap_rev:
+                    msg = (
+                        f"Requested base revision '{self._requested_base_revision}' not found "
+                        "in uninitialized greenfield workspace"
+                    )
+                    raise ValueError(msg)
+                self.base_revision = bootstrap_rev
             for destination in (self.workspace, self._verifier):
                 _git(
                     root,
@@ -107,7 +175,7 @@ class VerificationWorkspace:
                     "--no-checkout",
                     "--template=",
                     "--",
-                    str(self._repository),
+                    str(source_repo),
                     str(destination),
                 )
                 _git(destination, "checkout", "--detach", self.base_revision)
@@ -197,7 +265,10 @@ class VerificationWorkspace:
             _git(self._verifier, "apply", "-", patch=patch)
             self._write_extra_verifier_files()
             verification_config = replace(
-                config, network_enabled=False, writable_cache_mounts=False
+                config,
+                network_enabled=False,
+                writable_cache_mounts=False,
+                published_ports=[],
             )
             sandbox = (sandbox_factory or create_sandbox)(verification_config)
             try:

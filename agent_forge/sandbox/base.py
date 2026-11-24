@@ -6,12 +6,15 @@ plus SandboxConfig and SandboxState.
 
 from __future__ import annotations
 
+import ipaddress
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from agent_forge.sandbox.sessions import SessionSnapshot
 
 _SENSITIVE_ENV_SUFFIXES: tuple[str, ...] = (
@@ -51,18 +54,111 @@ class SandboxState(Enum):
     STOPPED = "stopped"
 
 
+@dataclass(frozen=True)
+class PortMapping:
+    """Validated host-to-container loopback port publication mapping."""
+
+    host_ip: str
+    host_port: int
+    container_port: int
+    protocol: str = "tcp"
+
+
+def _parse_port_number(raw: str) -> int:
+    stripped = raw.strip()
+    if not stripped.isdigit():
+        msg = f"Invalid port number: '{raw}'"
+        raise ValueError(msg)
+    port = int(stripped)
+    if not 1 <= port <= 65535:
+        msg = f"Port out of range (1-65535): {port}"
+        raise ValueError(msg)
+    return port
+
+
+def _split_port_spec_host(address_part: str) -> tuple[str, int, int]:
+    if address_part.startswith("["):
+        end_idx = address_part.find("]")
+        if end_idx == -1 or len(address_part) <= end_idx + 2 or address_part[end_idx + 1] != ":":
+            msg = f"Invalid bracketed IPv6 port mapping: '{address_part}'"
+            raise ValueError(msg)
+        host_ip = address_part[1:end_idx]
+        ipaddress.ip_address(host_ip)
+        port_parts = address_part[end_idx + 2 :].split(":")
+        if len(port_parts) != 2:
+            msg = f"Expected [host_ip]:host_port:container_port in '{address_part}'"
+            raise ValueError(msg)
+        return host_ip, _parse_port_number(port_parts[0]), _parse_port_number(port_parts[1])
+
+    parts = address_part.split(":")
+    if len(parts) == 1:
+        port = _parse_port_number(parts[0])
+        return "127.0.0.1", port, port
+    if len(parts) == 2:
+        return "127.0.0.1", _parse_port_number(parts[0]), _parse_port_number(parts[1])
+    if len(parts) == 3:
+        host_ip = parts[0].strip()
+        ipaddress.ip_address(host_ip)
+        return host_ip, _parse_port_number(parts[1]), _parse_port_number(parts[2])
+    msg = f"Invalid port mapping format: '{address_part}'"
+    raise ValueError(msg)
+
+
+def parse_published_port(spec: str) -> PortMapping:
+    """Parse a port publication string such as ``8080:3000`` or ``127.0.0.1:8080:3000/tcp``."""
+    cleaned = spec.strip()
+    if not cleaned:
+        msg = "Port mapping specification cannot be empty"
+        raise ValueError(msg)
+
+    protocol = "tcp"
+    address_part = cleaned
+    if "/" in cleaned:
+        if cleaned.count("/") > 1:
+            msg = f"Invalid port protocol suffix in '{spec}'"
+            raise ValueError(msg)
+        address_part, raw_proto = cleaned.split("/", 1)
+        protocol = raw_proto.strip().lower()
+        if protocol not in {"tcp", "udp"}:
+            msg = f"Unsupported port protocol '{raw_proto}' (expected tcp or udp)"
+            raise ValueError(msg)
+
+    host_ip, host_port, container_port = _split_port_spec_host(address_part)
+    return PortMapping(
+        host_ip=host_ip,
+        host_port=host_port,
+        container_port=container_port,
+        protocol=protocol,
+    )
+
+
+def parse_published_ports(specs: Sequence[str]) -> dict[str, tuple[str, int]]:
+    """Parse published port specs into Docker SDK ``ports`` bindings."""
+    bindings: dict[str, tuple[str, int]] = {}
+    for spec in specs:
+        mapping = parse_published_port(spec)
+        key = f"{mapping.container_port}/{mapping.protocol}"
+        if key in bindings:
+            msg = f"Duplicate published container port binding: {key}"
+            raise ValueError(msg)
+        bindings[key] = (mapping.host_ip, mapping.host_port)
+    return bindings
+
+
 @dataclass
 class SandboxConfig:
     """Configuration for a sandbox container."""
 
     backend: str = "docker"
     image: str = "agent-forge-sandbox:latest"
+    toolchain: str = "auto"
     workspace_path: str = "/workspace"
     cpu_limit: float = 1.0
     memory_limit: str = "512m"
     timeout_seconds: int = 300
     network_enabled: bool = False
     writable_cache_mounts: bool = False
+    published_ports: list[str] = field(default_factory=list)
     env_vars: dict[str, str] = field(default_factory=dict)
 
 

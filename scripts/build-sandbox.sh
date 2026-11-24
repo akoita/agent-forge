@@ -16,13 +16,25 @@ case "$variant" in
     dockerfile="$PROJECT_ROOT/agent_forge/sandbox/Dockerfile.node"
     image_tag="agent-forge-sandbox:node"
     ;;
+  go)
+    dockerfile="$PROJECT_ROOT/agent_forge/sandbox/Dockerfile.go"
+    image_tag="agent-forge-sandbox:go"
+    ;;
+  rust)
+    dockerfile="$PROJECT_ROOT/agent_forge/sandbox/Dockerfile.rust"
+    image_tag="agent-forge-sandbox:rust"
+    ;;
+  jvm)
+    dockerfile="$PROJECT_ROOT/agent_forge/sandbox/Dockerfile.jvm"
+    image_tag="agent-forge-sandbox:jvm"
+    ;;
   full)
     dockerfile="$PROJECT_ROOT/agent_forge/sandbox/Dockerfile.full"
     image_tag="agent-forge-sandbox:full"
     ;;
   *)
     echo "Unknown sandbox variant: $variant" >&2
-    echo "Usage: $0 [python|node|full]" >&2
+    echo "Usage: $0 [python|node|go|rust|jvm|full]" >&2
     exit 1
     ;;
 esac

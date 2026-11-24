@@ -16,6 +16,7 @@ from agent_forge.agent.prompts import build_hosted_system_prompt, build_system_p
 from agent_forge.config import ContextSettings
 from agent_forge.extensions.discovery import discover_extension_prompt_fragments
 from agent_forge.sandbox.base import SandboxConfig
+from agent_forge.sandbox.toolchain import resolve_sandbox_image
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -29,16 +30,31 @@ if TYPE_CHECKING:
 PostRunHook = Callable[["AgentRun", "LLMProvider", "ToolRegistry", "Sandbox"], Awaitable[None]]
 
 
-def build_sandbox_config(cfg: ForgeConfig) -> SandboxConfig:
+def build_sandbox_config(
+    cfg: ForgeConfig,
+    *,
+    repo_path: str | Path | None = None,
+) -> SandboxConfig:
     """Convert resolved application settings into a :class:`SandboxConfig`."""
+    raw_toolchain = getattr(cfg.sandbox, "toolchain", None)
+    toolchain = raw_toolchain if isinstance(raw_toolchain, str) and raw_toolchain else "auto"
+    raw_ports = getattr(cfg.sandbox, "published_ports", None)
+    published_ports = list(raw_ports) if isinstance(raw_ports, (list, tuple)) else []
+    resolved_image, resolved_toolchain = resolve_sandbox_image(
+        cfg.sandbox.image,
+        toolchain=toolchain,
+        repo_path=repo_path,
+    )
     return SandboxConfig(
         backend=cfg.sandbox.backend,
-        image=cfg.sandbox.image,
+        image=resolved_image,
+        toolchain=resolved_toolchain,
         cpu_limit=cfg.sandbox.cpu_limit,
         memory_limit=cfg.sandbox.memory_limit,
         timeout_seconds=cfg.sandbox.timeout_seconds,
         network_enabled=cfg.sandbox.network_enabled,
         writable_cache_mounts=cfg.sandbox.writable_cache_mounts,
+        published_ports=published_ports,
     )
 
 
@@ -99,6 +115,7 @@ def render_task_system_prompt(
             sandbox_image=sandbox_config.image,
             network_enabled=sandbox_config.network_enabled,
             command_timeout_seconds=sandbox_config.timeout_seconds,
+            published_ports=sandbox_config.published_ports or None,
             repo_instructions=repo_instructions,
             repo_map=repo_map,
             scoped_instructions=scoped_instructions,
@@ -112,6 +129,7 @@ def render_task_system_prompt(
         sandbox_image=sandbox_config.image,
         network_enabled=sandbox_config.network_enabled,
         command_timeout_seconds=sandbox_config.timeout_seconds,
+        published_ports=sandbox_config.published_ports or None,
         repo_instructions=repo_instructions,
         repo_map=repo_map,
         scoped_instructions=scoped_instructions,
@@ -294,7 +312,7 @@ async def run_agent_task(
             if context_engine is not None
             else _resolve_context_engine_for_config(repo_path, task, cfg, agent_config)
         )
-        sandbox_config = build_sandbox_config(cfg)
+        sandbox_config = build_sandbox_config(cfg, repo_path=repo_path)
         agent_config.system_prompt = render_task_system_prompt(
             task,
             tools,
