@@ -129,6 +129,8 @@ Polyglot toolchain detection (`go.mod`, `Cargo.toml`, `pom.xml`/`build.gradle*`,
 
 Per-profile pricing overrides (`--max-cost` budget enforcement on unlisted frontier models), generalized long-context heuristics + `ContextEngine` window auto-sizing, and Anthropic/Gemini/OpenAI reasoning payloads are covered in `tests/unit/test_frontier_models_and_reasoning.py` and `tests/eval/test_benchmark_corpus.py`.
 
+Zero-wrapper stock Docker images (overridden entrypoint, `bash`->`sh` fallback, offline `HOME`), `search_codebase` non-ripgrep fallbacks, and `bwrap` read-only host toolchain passthrough with credential-path rejection are covered in `tests/unit/test_stock_images_and_bwrap_toolchains.py` and `tests/eval/test_benchmark_corpus.py`.
+
 ## Running Tests
 
 ```bash

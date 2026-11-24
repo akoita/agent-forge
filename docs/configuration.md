@@ -353,8 +353,12 @@ timeout_seconds = 600
 network_enabled = true        # Allow network access (e.g. package installs / port publishing)
 cpu_limit = 2.0
 writable_cache_mounts = true  # Mount /cache for pip/npm/pnpm/yarn/go/cargo/gradle caches
+mount_host_toolchains = true  # Mount user toolchain dirs read-only in bwrap
+extra_ro_binds = []           # Optional extra read-only toolchain paths (credentials blocked)
 published_ports = ["127.0.0.1:8080:8080"]
 ```
+
+Any stock upstream image (such as `mcr.microsoft.com/dotnet/sdk:9.0`, `haskell:9.8`, `php:8.4-cli`, `ghcr.io/foundry-rs/foundry`, `gcc:14`, or `alpine`) works directly via `--sandbox-image` without wrapper Dockerfiles (`entrypoint` is overridden, POSIX `sh` fallback handles images without `bash`, offline `HOME=/tmp/home` stays writable, and `search_codebase` falls back to host search or POSIX `grep` when `rg` is absent).
 
 ### Sandbox Images & Toolchains
 
