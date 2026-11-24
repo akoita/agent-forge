@@ -10,12 +10,56 @@ import ipaddress
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from agent_forge.sandbox.sessions import SessionSnapshot
+
+_SENSITIVE_BIND_SEGMENTS: frozenset[str] = frozenset(
+    {
+        ".ssh",
+        ".aws",
+        ".gnupg",
+        ".kube",
+        ".agent-forge",
+        ".netrc",
+        ".git-credentials",
+    }
+)
+_SENSITIVE_BIND_SUFFIXES: tuple[tuple[str, ...], ...] = (
+    (".config", "gcloud"),
+    (".docker", "config.json"),
+)
+
+
+def validate_ro_bind_path(raw_path: str) -> str:
+    """Validate an extra read-only bind path and reject credential directories."""
+    cleaned = raw_path.strip()
+    if not cleaned:
+        msg = "Read-only bind path cannot be empty"
+        raise ValueError(msg)
+    if not cleaned.startswith(("/", "~")):
+        msg = f"Read-only bind path must be absolute or '~'-prefixed: '{raw_path}'"
+        raise ValueError(msg)
+    resolved = Path(cleaned).expanduser().resolve()
+    home_dir = Path.home().resolve()
+    if resolved == home_dir:
+        msg = "Refusing to mount entire user home directory into sandbox"
+        raise ValueError(msg)
+    parts = resolved.parts
+    if any(seg in parts for seg in _SENSITIVE_BIND_SEGMENTS):
+        msg = f"Refusing to mount sensitive credential path: '{raw_path}'"
+        raise ValueError(msg)
+    for suffix in _SENSITIVE_BIND_SUFFIXES:
+        for idx in range(len(parts) - len(suffix) + 1):
+            if parts[idx : idx + len(suffix)] == suffix:
+                msg = f"Refusing to mount sensitive credential path: '{raw_path}'"
+                raise ValueError(msg)
+    return str(resolved)
+
 
 _SENSITIVE_ENV_SUFFIXES: tuple[str, ...] = (
     "_API_KEY",
@@ -158,6 +202,8 @@ class SandboxConfig:
     timeout_seconds: int = 300
     network_enabled: bool = False
     writable_cache_mounts: bool = False
+    mount_host_toolchains: bool = True
+    extra_ro_binds: list[str] = field(default_factory=list)
     published_ports: list[str] = field(default_factory=list)
     env_vars: dict[str, str] = field(default_factory=dict)
 

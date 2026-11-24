@@ -56,6 +56,7 @@ class DockerSandbox(Sandbox):
         self._config = SandboxConfig()
         self._sessions: DockerSessionManager | None = None
         self._repo_path: str | None = None
+        self._shell: str = "bash"
         self._host_uid = os.getuid()
         self._host_gid = os.getgid()
 
@@ -95,6 +96,7 @@ class DockerSandbox(Sandbox):
 
         cfg = config or SandboxConfig()
         self._config = cfg
+        self._shell = "bash"
 
         published_ports = self._resolve_published_ports(cfg)
         security_opts: list[str] = ["no-new-privileges"]
@@ -106,7 +108,8 @@ class DockerSandbox(Sandbox):
 
         run_kwargs: dict[str, Any] = {
             "image": cfg.image,
-            "command": "sleep infinity",
+            "entrypoint": "",
+            "command": ["sh", "-c", "while :; do sleep 3600; done"],
             "detach": True,
             "init": True,
             "remove": True,
@@ -200,6 +203,7 @@ class DockerSandbox(Sandbox):
         finally:
             self._container = None
             self._repo_path = None
+            self._shell = "bash"
             self._state = SandboxState.STOPPED
             logger.info("sandbox_stopped")
 
@@ -219,6 +223,56 @@ class DockerSandbox(Sandbox):
     # Execution
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _is_missing_bash(message: str) -> bool:
+        lower = message.lower()
+        return "bash" in lower and any(
+            marker in lower for marker in ("not found", "no such file", "executable file not found")
+        )
+
+    async def _run_shell_command(
+        self, shell: str, command: str, timeout_seconds: int
+    ) -> tuple[ExecResult, bool]:
+        assert self._container is not None  # noqa: S101
+        try:
+            exit_code, output = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._container.exec_run,
+                    [shell, "-c", command],
+                    demux=True,
+                    user=f"{self._host_uid}:{self._host_gid}",
+                ),
+                timeout=timeout_seconds,
+            )
+        except TimeoutError:
+            return (
+                ExecResult(
+                    exit_code=124,
+                    stdout="",
+                    stderr=f"Command timed out after {timeout_seconds}s",
+                ),
+                False,
+            )
+        except APIError as exc:
+            err_msg = str(exc)
+            return (
+                ExecResult(exit_code=1, stdout="", stderr=f"Docker exec error: {err_msg}"),
+                shell == "bash" and self._is_missing_bash(err_msg),
+            )
+
+        output_tuple = cast("tuple[bytes | None, bytes | None] | None", output)
+        stdout_raw, stderr_raw = output_tuple or (None, None)
+        normalized_exit_code = int(exit_code) if exit_code is not None else 1
+        stdout_text = (stdout_raw or b"").decode("utf-8", errors="replace")
+        stderr_text = (stderr_raw or b"").decode("utf-8", errors="replace")
+        missing_bash = (
+            shell == "bash"
+            and normalized_exit_code in (126, 127)
+            and not stdout_text
+            and self._is_missing_bash(stderr_text)
+        )
+        return ExecResult(normalized_exit_code, stdout_text, stderr_text), missing_bash
+
     async def exec(
         self,
         command: str,
@@ -227,39 +281,11 @@ class DockerSandbox(Sandbox):
     ) -> ExecResult:
         """Execute a command inside the running sandbox."""
         self._ensure_running()
-        assert self._container is not None  # noqa: S101
-
-        try:
-            exit_code, output = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._container.exec_run,
-                    ["bash", "-c", command],
-                    demux=True,
-                    user=f"{self._host_uid}:{self._host_gid}",
-                ),
-                timeout=timeout_seconds,
-            )
-        except TimeoutError:
-            return ExecResult(
-                exit_code=124,
-                stdout="",
-                stderr=f"Command timed out after {timeout_seconds}s",
-            )
-        except APIError as exc:
-            return ExecResult(
-                exit_code=1,
-                stdout="",
-                stderr=f"Docker exec error: {exc}",
-            )
-
-        output_tuple = cast("tuple[bytes | None, bytes | None] | None", output)
-        stdout_raw, stderr_raw = output_tuple or (None, None)
-        normalized_exit_code = int(exit_code) if exit_code is not None else 1
-        return ExecResult(
-            exit_code=normalized_exit_code,
-            stdout=(stdout_raw or b"").decode("utf-8", errors="replace"),
-            stderr=(stderr_raw or b"").decode("utf-8", errors="replace"),
-        )
+        result, retry_with_sh = await self._run_shell_command(self._shell, command, timeout_seconds)
+        if retry_with_sh:
+            self._shell = "sh"
+            result, _ = await self._run_shell_command("sh", command, timeout_seconds)
+        return result
 
     async def read_file(self, path: str) -> str:
         """Read a file from the sandbox filesystem."""
@@ -404,6 +430,9 @@ class DockerSandbox(Sandbox):
                 ("GRADLE_USER_HOME", "/cache/gradle"),
             ):
                 environment.setdefault(key, value)
+        else:
+            environment.setdefault("HOME", "/tmp/home")  # noqa: S108
+            environment.setdefault("XDG_CACHE_HOME", "/tmp/xdg")  # noqa: S108
         return environment
 
     def _build_tmpfs(self, cfg: SandboxConfig) -> dict[str, str]:

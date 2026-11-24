@@ -40,6 +40,10 @@ def build_sandbox_config(
     toolchain = raw_toolchain if isinstance(raw_toolchain, str) and raw_toolchain else "auto"
     raw_ports = getattr(cfg.sandbox, "published_ports", None)
     published_ports = list(raw_ports) if isinstance(raw_ports, (list, tuple)) else []
+    raw_mount = getattr(cfg.sandbox, "mount_host_toolchains", None)
+    mount_host_toolchains = raw_mount if isinstance(raw_mount, bool) else True
+    raw_binds = getattr(cfg.sandbox, "extra_ro_binds", None)
+    extra_ro_binds = list(raw_binds) if isinstance(raw_binds, (list, tuple)) else []
     resolved_image, resolved_toolchain = resolve_sandbox_image(
         cfg.sandbox.image,
         toolchain=toolchain,
@@ -54,6 +58,8 @@ def build_sandbox_config(
         timeout_seconds=cfg.sandbox.timeout_seconds,
         network_enabled=cfg.sandbox.network_enabled,
         writable_cache_mounts=cfg.sandbox.writable_cache_mounts,
+        mount_host_toolchains=mount_host_toolchains,
+        extra_ro_binds=extra_ro_binds,
         published_ports=published_ports,
     )
 

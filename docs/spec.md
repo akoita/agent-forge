@@ -496,6 +496,8 @@ class SandboxConfig:
     timeout_seconds: int = 300                   # Max container lifetime
     network_enabled: bool = False                # Network access (default: isolated)
     writable_cache_mounts: bool = True           # Mount writable cache tmpfs
+    mount_host_toolchains: bool = True           # Bind user toolchain dirs read-only in bwrap
+    extra_ro_binds: list[str] = field(default_factory=list)   # Extra RO binds (secrets rejected)
     published_ports: list[str] = field(default_factory=list)  # Loopback port bindings
     env_vars: dict[str, str] = field(default_factory=dict)
 

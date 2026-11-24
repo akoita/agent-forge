@@ -21,6 +21,7 @@ from agent_forge.sandbox.base import (
     parse_published_port,
     parse_published_ports,
     sanitize_sandbox_env,
+    validate_ro_bind_path,
 )
 from agent_forge.sandbox.sessions import LocalPtySessionManager, SessionLimits, SessionSnapshot
 
@@ -34,6 +35,44 @@ _READ_ONLY_DIRS: Final[tuple[str, ...]] = (
     "/opt",
     "/sbin",
     "/usr",
+)
+_SYSTEM_TOOLCHAIN_DIRS: Final[tuple[str, ...]] = ("/nix",)
+_USER_TOOLCHAIN_SUBDIRS: Final[tuple[str, ...]] = (
+    ".pyenv",
+    ".nvm",
+    ".fnm",
+    ".volta",
+    ".asdf",
+    ".mise",
+    ".local/share/mise",
+    ".local/bin",
+    ".cargo",
+    ".rustup",
+    ".go",
+    "go",
+    ".sdkman",
+    ".jenv",
+    ".rbenv",
+    ".phpenv",
+    ".dotnet",
+    ".ghcup",
+    ".cabal",
+    ".stack",
+    ".foundry",
+    ".solcx",
+    ".elixir",
+    ".mix",
+    ".opam",
+    ".juliaup",
+    ".deno",
+    ".bun",
+    ".zig",
+    ".nimble",
+    ".swiftly",
+    "quicklisp",
+    "miniconda3",
+    "mambaforge",
+    "anaconda3",
 )
 
 
@@ -67,20 +106,8 @@ class BwrapSandbox(Sandbox):
         """Return the resolved host workspace path while running, if any."""
         return self._repo_path
 
-    async def start(self, repo_path: str, config: SandboxConfig | None = None) -> None:
-        """Validate availability and cache the sandbox configuration."""
-        if self._state == SandboxState.RUNNING:
-            msg = "Sandbox is already running"
-            raise RuntimeError(msg)
-
-        if platform.system() != "Linux":
-            msg = "bubblewrap sandbox is only available on Linux"
-            raise SandboxStartupError(msg)
-        if self._bwrap_path is None:
-            msg = "bubblewrap sandbox requires the 'bwrap' executable"
-            raise SandboxStartupError(msg)
-
-        cfg = config or SandboxConfig(backend="bwrap")
+    @staticmethod
+    def _validate_start_config(cfg: SandboxConfig) -> None:
         if cfg.published_ports:
             try:
                 parse_published_ports(cfg.published_ports)
@@ -100,6 +127,27 @@ class BwrapSandbox(Sandbox):
                     ports=remapped,
                     detail="bubblewrap shares host networking directly when network_enabled=True",
                 )
+        for raw_bind in cfg.extra_ro_binds:
+            try:
+                validate_ro_bind_path(raw_bind)
+            except ValueError as exc:
+                raise SandboxStartupError(str(exc)) from exc
+
+    async def start(self, repo_path: str, config: SandboxConfig | None = None) -> None:
+        """Validate availability and cache the sandbox configuration."""
+        if self._state == SandboxState.RUNNING:
+            msg = "Sandbox is already running"
+            raise RuntimeError(msg)
+
+        if platform.system() != "Linux":
+            msg = "bubblewrap sandbox is only available on Linux"
+            raise SandboxStartupError(msg)
+        if self._bwrap_path is None:
+            msg = "bubblewrap sandbox requires the 'bwrap' executable"
+            raise SandboxStartupError(msg)
+
+        cfg = config or SandboxConfig(backend="bwrap")
+        self._validate_start_config(cfg)
         self._config = cfg
         self._repo_path = str(Path(repo_path).resolve())
         self._sessions = LocalPtySessionManager(
@@ -273,6 +321,29 @@ class BwrapSandbox(Sandbox):
             finally:
                 self._sessions = None
 
+    def _collect_toolchain_ro_binds(self) -> list[str]:
+        candidates: list[Path] = []
+        if self._config.mount_host_toolchains:
+            for sys_dir in _SYSTEM_TOOLCHAIN_DIRS:
+                candidates.append(Path(sys_dir))
+            home_dir = Path.home()
+            for subdir in _USER_TOOLCHAIN_SUBDIRS:
+                candidates.append(home_dir / subdir)
+        for extra in self._config.extra_ro_binds:
+            candidates.append(Path(validate_ro_bind_path(extra)))
+
+        seen = set(_READ_ONLY_DIRS)
+        binds: list[str] = []
+        for path in candidates:
+            if not path.exists():
+                continue
+            resolved = str(path.resolve())
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            binds.append(resolved)
+        return binds
+
     def _build_bwrap_argv(self, command: str) -> list[str]:
         assert self._repo_path is not None  # noqa: S101
         assert self._bwrap_path is not None  # noqa: S101
@@ -298,6 +369,9 @@ class BwrapSandbox(Sandbox):
         for host_path in _READ_ONLY_DIRS:
             if Path(host_path).exists():
                 argv.extend(["--ro-bind", host_path, host_path])
+
+        for toolchain_path in self._collect_toolchain_ro_binds():
+            argv.extend(["--ro-bind", toolchain_path, toolchain_path])
 
         argv.extend(
             [
@@ -333,6 +407,9 @@ class BwrapSandbox(Sandbox):
             env_vars.setdefault("GOMODCACHE", "/cache/go-mod")
             env_vars.setdefault("CARGO_HOME", "/cache/cargo")
             env_vars.setdefault("GRADLE_USER_HOME", "/cache/gradle")
+        else:
+            env_vars.setdefault("HOME", "/tmp/home")  # noqa: S108
+            env_vars.setdefault("XDG_CACHE_HOME", "/tmp/xdg")  # noqa: S108
         return env_vars
 
     def _ensure_running(self) -> None:

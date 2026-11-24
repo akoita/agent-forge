@@ -79,6 +79,8 @@ class SandboxSettings(BaseModel):
     timeout_seconds: int = 300
     network_enabled: bool = False
     writable_cache_mounts: bool = True
+    mount_host_toolchains: bool = True
+    extra_ro_binds: list[str] = Field(default_factory=list)
     published_ports: list[str] = Field(default_factory=list)
 
     @field_validator("published_ports")
@@ -89,6 +91,15 @@ class SandboxSettings(BaseModel):
 
             parse_published_ports(value)
         return [item.strip() for item in value]
+
+    @field_validator("extra_ro_binds")
+    @classmethod
+    def _validate_extra_ro_binds(cls, value: list[str]) -> list[str]:
+        if value:
+            from agent_forge.sandbox.base import validate_ro_bind_path
+
+            return [validate_ro_bind_path(item) for item in value]
+        return value
 
 
 class QueueSettings(BaseModel):
