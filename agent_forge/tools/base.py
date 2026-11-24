@@ -103,6 +103,21 @@ class Tool(ABC):
         """Whether this tool can mutate workspace/external state (safe default: True)."""
         return True
 
+    @property
+    def requires_approval(self) -> bool:
+        """Whether invoking this tool always requires an explicit ``ApprovalGate`` check."""
+        return False
+
+    @property
+    def approval_category(self) -> str:
+        """Approval category label surfaced when ``requires_approval`` is True."""
+        return "tool_action"
+
+    def approval_summary(self, arguments: dict[str, Any]) -> str:
+        """Render a human-readable approval prompt summary for *arguments*."""
+        keys = ", ".join(sorted(arguments)) if arguments else "none"
+        return f"Invoke tool '{self.name}' with arguments: {keys}."
+
     @abstractmethod
     async def execute(self, arguments: dict[str, Any], sandbox: Sandbox) -> ToolResult:
         """Execute the tool inside the given sandbox."""

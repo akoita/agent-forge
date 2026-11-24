@@ -125,6 +125,34 @@ def _classify_mcp_tool(
     )
 
 
+def _classify_declarative_tool(
+    tool_name: str,
+    arguments: dict[str, Any],
+    tool: Any,
+) -> ApprovalRequest | None:
+    if getattr(tool, "requires_approval", False) is not True:
+        return None
+    raw_category = getattr(tool, "approval_category", "tool_action")
+    category = (
+        raw_category.strip()
+        if isinstance(raw_category, str) and raw_category.strip()
+        else "tool_action"
+    )
+    summary_fn = getattr(tool, "approval_summary", None)
+    raw_reason = summary_fn(arguments) if callable(summary_fn) else None
+    reason = (
+        raw_reason.strip()
+        if isinstance(raw_reason, str) and raw_reason.strip()
+        else f"Tool '{tool_name}' requires approval."
+    )
+    return ApprovalRequest(
+        tool_name=tool_name,
+        arguments=arguments,
+        category=category,
+        reason=reason,
+    )
+
+
 def classify_destructive_tool_call(
     tool_name: str,
     arguments: dict[str, Any],
@@ -136,6 +164,9 @@ def classify_destructive_tool_call(
         mcp_req = _classify_mcp_tool(tool_name, arguments, tool)
         if mcp_req is not None:
             return mcp_req
+        declarative_req = _classify_declarative_tool(tool_name, arguments, tool)
+        if declarative_req is not None:
+            return declarative_req
     if tool_name == "apply_patch":
         return _classify_apply_patch(arguments)
     if tool_name == "git_push":

@@ -103,6 +103,8 @@ def build_sandbox_config(
     mount_host_toolchains = raw_mount if isinstance(raw_mount, bool) else True
     raw_binds = getattr(cfg.sandbox, "extra_ro_binds", None)
     extra_ro_binds = list(raw_binds) if isinstance(raw_binds, (list, tuple)) else []
+    raw_egress = getattr(cfg.sandbox, "allowed_egress_domains", None)
+    allowed_egress_domains = list(raw_egress) if isinstance(raw_egress, (list, tuple)) else []
     raw_dockerfile = getattr(cfg.sandbox, "dockerfile", None)
     dockerfile = raw_dockerfile.strip() if isinstance(raw_dockerfile, str) else ""
     raw_setup = getattr(cfg.sandbox, "setup_command", None)
@@ -147,6 +149,7 @@ def build_sandbox_config(
         writable_cache_mounts=cfg.sandbox.writable_cache_mounts,
         mount_host_toolchains=mount_host_toolchains,
         extra_ro_binds=extra_ro_binds,
+        allowed_egress_domains=allowed_egress_domains,
         published_ports=published_ports,
         env_vars=env_vars,
     )

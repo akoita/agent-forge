@@ -786,6 +786,8 @@ def _can_execute_batch_in_parallel(
             return False
         if getattr(tool_obj, "is_mcp_tool", False) is True:
             return False
+        if getattr(tool_obj, "requires_approval", False) is True:
+            return False
         if is_side_effecting_tool(tool_call.name, tool_obj):
             return False
     return True

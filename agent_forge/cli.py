@@ -424,6 +424,15 @@ def model_capabilities(profile: str | None, output_format: str, probe: bool) -> 
     help="Publish sandbox port to host loopback (e.g. 8080:3000). Repeatable; requires --network.",
 )
 @click.option(
+    "--allow-domain",
+    multiple=True,
+    type=str,
+    help=(
+        "Allow outbound HTTP/HTTPS egress to this domain via host proxy "
+        "(repeatable, e.g. pypi.org)."
+    ),
+)
+@click.option(
     "--sandbox-backend",
     default=None,
     type=click.Choice(["docker", "bwrap", "auto"], case_sensitive=False),
@@ -503,6 +512,7 @@ def run(
     setup_command: str | None,
     toolchain: str | None,
     publish_port: tuple[str, ...],
+    allow_domain: tuple[str, ...],
     sandbox_backend: str | None,
     network: bool | None,
     command_timeout: int | None,
@@ -557,6 +567,7 @@ def run(
             setup_command=setup_command,
             toolchain=toolchain,
             publish_port=publish_port,
+            allow_domain=allow_domain,
             sandbox_backend=sandbox_backend,
             network=network,
             command_timeout=command_timeout,
@@ -1135,6 +1146,7 @@ def _build_cli_overrides(
     setup_command: str | None = None,
     toolchain: str | None = None,
     publish_port: tuple[str, ...] = (),
+    allow_domain: tuple[str, ...] = (),
     sandbox_backend: str | None = None,
     network: bool | None = None,
     command_timeout: int | None = None,
@@ -1163,6 +1175,7 @@ def _build_cli_overrides(
         "sandbox.setup_command": setup_command,
         "sandbox.toolchain": toolchain.lower() if toolchain is not None else None,
         "sandbox.published_ports": list(publish_port) if publish_port else None,
+        "sandbox.allowed_egress_domains": list(allow_domain) if allow_domain else None,
         "sandbox.backend": sandbox_backend,
         "sandbox.network_enabled": network,
         "sandbox.timeout_seconds": command_timeout,

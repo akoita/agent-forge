@@ -19,6 +19,11 @@ from agent_forge.sandbox.devcontainer import (
     resolve_dockerfile_spec,
 )
 from agent_forge.sandbox.docker import DockerSandbox
+from agent_forge.sandbox.egress_proxy import (
+    EgressProxyServer,
+    is_domain_allowed,
+    validate_egress_domain,
+)
 from agent_forge.sandbox.factory import create_sandbox
 from agent_forge.sandbox.toolchain import (
     TOOLCHAIN_IMAGES,
@@ -33,6 +38,7 @@ __all__ = [
     "BwrapSandbox",
     "DevcontainerSpec",
     "DockerSandbox",
+    "EgressProxyServer",
     "ExecResult",
     "PortMapping",
     "Sandbox",
@@ -43,9 +49,11 @@ __all__ = [
     "detect_toolchain",
     "discover_devcontainer",
     "ensure_dockerfile_image",
+    "is_domain_allowed",
     "parse_published_port",
     "parse_published_ports",
     "resolve_dockerfile_spec",
     "resolve_sandbox_image",
+    "validate_egress_domain",
     "validate_ro_bind_path",
 ]
