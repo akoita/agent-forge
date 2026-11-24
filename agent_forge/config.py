@@ -84,6 +84,7 @@ class SandboxSettings(BaseModel):
     writable_cache_mounts: bool = True
     mount_host_toolchains: bool = True
     extra_ro_binds: list[str] = Field(default_factory=list)
+    allowed_egress_domains: list[str] = Field(default_factory=list)
     published_ports: list[str] = Field(default_factory=list)
 
     @field_validator("published_ports")
@@ -102,6 +103,15 @@ class SandboxSettings(BaseModel):
             from agent_forge.sandbox.base import validate_ro_bind_path
 
             return [validate_ro_bind_path(item) for item in value]
+        return value
+
+    @field_validator("allowed_egress_domains")
+    @classmethod
+    def _validate_allowed_egress_domains(cls, value: list[str]) -> list[str]:
+        if value:
+            from agent_forge.sandbox.egress_proxy import validate_egress_domain
+
+            return [validate_egress_domain(item) for item in value]
         return value
 
 

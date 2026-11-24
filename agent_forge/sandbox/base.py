@@ -249,6 +249,7 @@ class SandboxConfig:
     writable_cache_mounts: bool = False
     mount_host_toolchains: bool = True
     extra_ro_binds: list[str] = field(default_factory=list)
+    allowed_egress_domains: list[str] = field(default_factory=list)
     published_ports: list[str] = field(default_factory=list)
     env_vars: dict[str, str] = field(default_factory=dict)
 

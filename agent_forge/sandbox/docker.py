@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
 import shlex
 import shutil
 from pathlib import Path
@@ -30,6 +31,11 @@ from agent_forge.sandbox.base import (
 )
 from agent_forge.sandbox.devcontainer import DevcontainerSpec, ensure_dockerfile_image
 from agent_forge.sandbox.docker_sessions import DockerSessionManager
+from agent_forge.sandbox.egress_proxy import (
+    EgressProxyServer,
+    build_proxy_env_vars,
+    validate_egress_domain,
+)
 from agent_forge.sandbox.sessions import SessionLimits, SessionSnapshot
 
 if TYPE_CHECKING:
@@ -62,6 +68,7 @@ class DockerSandbox(Sandbox):
         self._sessions: DockerSessionManager | None = None
         self._repo_path: str | None = None
         self._setup_cache_dir: str | None = None
+        self._egress_proxy: EgressProxyServer | None = None
         self._shell: str = "bash"
         self._host_uid = os.getuid()
         self._host_gid = os.getgid()
@@ -162,12 +169,19 @@ class DockerSandbox(Sandbox):
         self._shell = "bash"
 
         published_ports = self._resolve_published_ports(cfg)
-        image = await self._prepare_image(cfg, repo_path)
-        self._setup_cache_dir = (
-            await self._run_setup_phase(repo_path, image, cfg)
-            if cfg.setup_command.strip()
-            else None
-        )
+        await self._start_egress_proxy(cfg)
+        try:
+            image = await self._prepare_image(cfg, repo_path)
+            self._setup_cache_dir = (
+                await self._run_setup_phase(repo_path, image, cfg)
+                if cfg.setup_command.strip()
+                else None
+            )
+        except BaseException:
+            await self._stop_egress_proxy()
+            self._cleanup_setup_cache()
+            raise
+
         run_kwargs = self._build_container_run_kwargs(
             image=image,
             cfg=cfg,
@@ -211,12 +225,37 @@ class DockerSandbox(Sandbox):
                     )
                     await asyncio.sleep(_START_RETRY_DELAY_S)
 
+        await self._stop_egress_proxy()
         self._cleanup_setup_cache()
         self._state = SandboxState.STOPPED
         msg = (
             f"Failed to start sandbox container after {_START_MAX_RETRIES + 1} attempts: {last_exc}"
         )
         raise SandboxStartupError(msg) from last_exc
+
+    async def _start_egress_proxy(self, cfg: SandboxConfig) -> None:
+        if not cfg.allowed_egress_domains:
+            return
+        try:
+            validated = [validate_egress_domain(domain) for domain in cfg.allowed_egress_domains]
+            # Protected by mandatory per-run Proxy-Authorization token + strict domain allowlist.
+            proxy = EgressProxyServer(
+                validated,
+                bind_host="0.0.0.0",  # noqa: S104
+                advertise_host="host.docker.internal",
+                auth_token=secrets.token_urlsafe(24),
+            )
+            await proxy.start()
+        except (ValueError, OSError) as exc:
+            msg = f"Failed to start sandbox egress proxy: {exc}"
+            raise SandboxStartupError(msg) from exc
+        self._egress_proxy = proxy
+
+    async def _stop_egress_proxy(self) -> None:
+        if self._egress_proxy is not None:
+            proxy = self._egress_proxy
+            self._egress_proxy = None
+            await proxy.stop()
 
     @staticmethod
     async def _stop_container_instance(container: Container) -> None:
@@ -241,6 +280,7 @@ class DockerSandbox(Sandbox):
     async def stop(self) -> None:
         """Stop and remove the sandbox container."""
         if self._container is None:
+            await self._stop_egress_proxy()
             self._cleanup_setup_cache()
             self._state = SandboxState.STOPPED
             return
@@ -251,6 +291,7 @@ class DockerSandbox(Sandbox):
         finally:
             self._container = None
             self._repo_path = None
+            await self._stop_egress_proxy()
             self._cleanup_setup_cache()
             self._shell = "bash"
             self._state = SandboxState.STOPPED
@@ -492,6 +533,8 @@ class DockerSandbox(Sandbox):
         published_ports: dict[str, tuple[str, int]],
         setup_cache_dir: str | None,
     ) -> dict[str, Any]:
+        proxy_active = self._egress_proxy is not None and self._egress_proxy.bound_port is not None
+        effective_network = network_enabled or proxy_active
         use_cache = setup_cache_dir is not None or (network_enabled and cfg.writable_cache_mounts)
         tmpfs = self._build_tmpfs(
             cfg,
@@ -524,10 +567,13 @@ class DockerSandbox(Sandbox):
             "working_dir": cfg.workspace_path,
             "user": f"{self._host_uid}:{self._host_gid}",
         }
-        if not network_enabled:
+        if not effective_network:
             run_kwargs["network_mode"] = "none"
-        elif published_ports:
-            run_kwargs["ports"] = published_ports
+        else:
+            if proxy_active:
+                run_kwargs["extra_hosts"] = {"host.docker.internal": "host-gateway"}
+            if published_ports:
+                run_kwargs["ports"] = published_ports
         return run_kwargs
 
     def _build_environment(
@@ -543,6 +589,8 @@ class DockerSandbox(Sandbox):
             else (cfg.network_enabled and cfg.writable_cache_mounts)
         )
         apply_sandbox_cache_env(environment, use_cache=effective_cache)
+        if self._egress_proxy is not None and self._egress_proxy.bound_port is not None:
+            environment.update(build_proxy_env_vars(self._egress_proxy.proxy_url))
         return environment
 
     def _build_tmpfs(

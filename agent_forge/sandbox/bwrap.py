@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import os
 import platform
+import secrets
 import shlex
 import shutil
 from pathlib import Path
@@ -24,6 +25,11 @@ from agent_forge.sandbox.base import (
     parse_published_ports,
     sanitize_sandbox_env,
     validate_ro_bind_path,
+)
+from agent_forge.sandbox.egress_proxy import (
+    EgressProxyServer,
+    build_proxy_env_vars,
+    validate_egress_domain,
 )
 from agent_forge.sandbox.sessions import LocalPtySessionManager, SessionLimits, SessionSnapshot
 
@@ -90,6 +96,7 @@ class BwrapSandbox(Sandbox):
         self._state = SandboxState.IDLE
         self._repo_path: str | None = None
         self._setup_cache_dir: str | None = None
+        self._egress_proxy: EgressProxyServer | None = None
         self._bwrap_path = shutil.which("bwrap")
         self._active_processes: set[asyncio.subprocess.Process] = set()
         self._sessions: LocalPtySessionManager | None = None
@@ -135,6 +142,33 @@ class BwrapSandbox(Sandbox):
                 validate_ro_bind_path(raw_bind)
             except ValueError as exc:
                 raise SandboxStartupError(str(exc)) from exc
+        for domain in cfg.allowed_egress_domains:
+            try:
+                validate_egress_domain(domain)
+            except ValueError as exc:
+                raise SandboxStartupError(str(exc)) from exc
+
+    async def _start_egress_proxy(self, cfg: SandboxConfig) -> None:
+        if not cfg.allowed_egress_domains:
+            return
+        try:
+            proxy = EgressProxyServer(
+                cfg.allowed_egress_domains,
+                bind_host="127.0.0.1",
+                advertise_host="127.0.0.1",
+                auth_token=secrets.token_urlsafe(24),
+            )
+            await proxy.start()
+        except (ValueError, OSError) as exc:
+            msg = f"Failed to start sandbox egress proxy: {exc}"
+            raise SandboxStartupError(msg) from exc
+        self._egress_proxy = proxy
+
+    async def _stop_egress_proxy(self) -> None:
+        if self._egress_proxy is not None:
+            proxy = self._egress_proxy
+            self._egress_proxy = None
+            await proxy.stop()
 
     async def start(self, repo_path: str, config: SandboxConfig | None = None) -> None:
         """Validate availability and cache the sandbox configuration."""
@@ -154,6 +188,7 @@ class BwrapSandbox(Sandbox):
         self._config = cfg
         self._repo_path = str(Path(repo_path).resolve())
         self._setup_cache_dir = None
+        await self._start_egress_proxy(cfg)
         if cfg.setup_command.strip():
             cache_dir = create_setup_cache_dir()
             self._setup_cache_dir = cache_dir
@@ -168,6 +203,7 @@ class BwrapSandbox(Sandbox):
                     msg = f"Sandbox setup_command failed (exit {result.exit_code}): {detail}"
                     raise SandboxStartupError(msg)
             except BaseException:
+                await self._stop_egress_proxy()
                 self._cleanup_setup_cache()
                 self._repo_path = None
                 self._state = SandboxState.STOPPED
@@ -271,6 +307,7 @@ class BwrapSandbox(Sandbox):
                     await process.communicate()
         self._active_processes.clear()
         self._repo_path = None
+        await self._stop_egress_proxy()
         self._cleanup_setup_cache()
         self._state = SandboxState.STOPPED
         logger.info("sandbox_stopped", backend="bwrap")
@@ -390,7 +427,13 @@ class BwrapSandbox(Sandbox):
         assert self._repo_path is not None  # noqa: S101
         assert self._bwrap_path is not None  # noqa: S101
 
-        net_enabled = self._config.network_enabled if network_override is None else network_override
+        proxy_active = self._egress_proxy is not None and self._egress_proxy.bound_port is not None
+        net_enabled = (
+            (self._config.network_enabled or proxy_active)
+            if network_override is None
+            else network_override
+        )
+        raw_net = self._config.network_enabled if network_override is None else network_override
         argv = [
             self._bwrap_path,
             "--clearenv",
@@ -408,7 +451,7 @@ class BwrapSandbox(Sandbox):
             argv.append("--unshare-net")
         if self._setup_cache_dir is not None:
             argv.extend(["--bind", self._setup_cache_dir, "/cache"])
-        elif net_enabled and self._config.writable_cache_mounts:
+        elif raw_net and self._config.writable_cache_mounts:
             argv.extend(["--tmpfs", "/cache"])
 
         for host_path in _READ_ONLY_DIRS:
@@ -438,9 +481,9 @@ class BwrapSandbox(Sandbox):
         return argv
 
     def _build_env_vars(self, *, network_override: bool | None = None) -> dict[str, str]:
-        net_enabled = self._config.network_enabled if network_override is None else network_override
+        raw_net = self._config.network_enabled if network_override is None else network_override
         use_cache = self._setup_cache_dir is not None or (
-            net_enabled and self._config.writable_cache_mounts
+            raw_net and self._config.writable_cache_mounts
         )
         raw_path = os.environ.get("PATH", "/usr/bin:/bin")
         if use_cache and "/cache/mise/shims" not in raw_path:
@@ -448,6 +491,8 @@ class BwrapSandbox(Sandbox):
         env_vars = {"PATH": raw_path}
         env_vars.update(sanitize_sandbox_env(self._config.env_vars))
         apply_sandbox_cache_env(env_vars, use_cache=use_cache)
+        if self._egress_proxy is not None and self._egress_proxy.bound_port is not None:
+            env_vars.update(build_proxy_env_vars(self._egress_proxy.proxy_url))
         return env_vars
 
     def _ensure_running(self) -> None:
