@@ -1943,3 +1943,149 @@ async def test_devcontainer_and_two_phase_setup_transitions_to_offline_execution
     assert phase2_kwargs["network_mode"] == "none"
     assert phase2_kwargs["environment"]["MISE_YES"] == "1"
     assert phase2_kwargs["environment"]["MISE_DATA_DIR"] == "/cache/mise"
+
+
+async def _verify_eval_proxy_allowlist() -> None:
+    import asyncio
+    import base64
+    import secrets
+
+    from agent_forge.sandbox.egress_proxy import EgressProxyServer
+
+    async def _ok_upstream(r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
+        await r.readuntil(b"\r\n\r\n")
+        w.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+        await w.drain()
+        w.close()
+
+    server = await asyncio.start_server(_ok_upstream, host="127.0.0.1", port=0)
+    up_port = int(server.sockets[0].getsockname()[1])
+
+    async def _dial(_h: str, _p: int) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        return await asyncio.open_connection("127.0.0.1", up_port)
+
+    token = secrets.token_hex(8)
+    proxy = EgressProxyServer(["registry.npmjs.org"], auth_token=token, connector=_dial)
+    await proxy.start()
+    try:
+        assert proxy.bound_port is not None
+        auth = base64.b64encode(f"af:{token}".encode()).decode()
+        r1, w1 = await asyncio.open_connection("127.0.0.1", proxy.bound_port)
+        w1.write(
+            (
+                "GET http://registry.npmjs.org/pkg HTTP/1.1\r\n"
+                "Host: registry.npmjs.org\r\n"
+                f"Proxy-Authorization: Basic {auth}\r\n\r\n"
+            ).encode()
+        )
+        await w1.drain()
+        assert b"200 OK" in await r1.read()
+        w1.close()
+
+        r2, w2 = await asyncio.open_connection("127.0.0.1", proxy.bound_port)
+        w2.write(
+            (
+                "GET http://blocked.example.com/ HTTP/1.1\r\n"
+                "Host: blocked.example.com\r\n"
+                f"Proxy-Authorization: Basic {auth}\r\n\r\n"
+            ).encode()
+        )
+        await w2.drain()
+        assert b"403 Forbidden" in await r2.read()
+        w2.close()
+    finally:
+        await proxy.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_declarative_approval_plugin_tool_and_egress_proxy_policy(
+    tmp_path: Path,
+) -> None:
+    """Exit criterion: declarative tools gate on ApprovalGate and proxy checks domains."""
+    from typing import Any
+    from unittest.mock import AsyncMock
+
+    from agent_forge.agent.approvals import ApprovalGate, ApprovalRequest
+    from agent_forge.agent.core import react_loop
+    from agent_forge.agent.models import AgentConfig, AgentRun, RunState
+    from agent_forge.llm.base import LLMResponse, TokenUsage, ToolCall
+    from agent_forge.tools.base import Tool, ToolRegistry, ToolResult
+
+    class _PluginDeployTool(Tool):
+        def __init__(self) -> None:
+            self.executed = 0
+
+        @property
+        def name(self) -> str:
+            return "plugin_deploy"
+
+        @property
+        def description(self) -> str:
+            return "Deploy plugin workload"
+
+        @property
+        def parameters(self) -> dict[str, Any]:
+            return {"type": "object", "properties": {"target": {"type": "string"}}}
+
+        @property
+        def requires_approval(self) -> bool:
+            return True
+
+        @property
+        def approval_category(self) -> str:
+            return "external_deploy"
+
+        def approval_summary(self, arguments: dict[str, Any]) -> str:
+            return f"Deploy target={arguments.get('target')}"
+
+        async def execute(self, arguments: dict[str, Any], sandbox: Any) -> ToolResult:
+            del arguments, sandbox
+            self.executed += 1
+            return ToolResult(output="deployed")
+
+    tool = _PluginDeployTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    llm = AsyncMock()
+    llm.complete.side_effect = [
+        LLMResponse(
+            content="",
+            tool_calls=[ToolCall(id="t1", name="plugin_deploy", arguments={"target": "staging"})],
+            usage=TokenUsage(10, 5, 15),
+            finish_reason="tool_calls",
+        ),
+        LLMResponse(
+            content="done",
+            tool_calls=[],
+            usage=TokenUsage(10, 5, 15),
+            finish_reason="stop",
+        ),
+    ]
+
+    seen: list[ApprovalRequest] = []
+
+    async def _prompt_cb(req: ApprovalRequest) -> bool:
+        seen.append(req)
+        return True
+
+    run = await react_loop(
+        AgentRun(
+            task="Deploy",
+            repo_path=str(tmp_path),
+            config=AgentConfig(max_iterations=3, context_enabled=False),
+        ),
+        llm,
+        registry,
+        AsyncMock(),
+        approval_gate=ApprovalGate(mode="prompt", callback=_prompt_cb),
+    )
+    assert run.state == RunState.COMPLETED
+    assert len(seen) == 1
+    assert seen[0].category == "external_deploy"
+    assert seen[0].reason == "Deploy target=staging"
+    assert tool.executed == 1
+
+    await _verify_eval_proxy_allowlist()
