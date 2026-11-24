@@ -2493,3 +2493,237 @@ async def test_chat_warm_sandbox_compact_and_resume_across_restart(tmp_path: Pat
     assert any("[CONTEXT SUMMARY" in text for text in seen_turn4_contents)
     assert "dev_note.txt" in rt2.context_engine.working_set.modified_files
     await rt2.close()
+
+
+class _EvalWorkspaceSandbox(Sandbox):
+    def __init__(self) -> None:
+        self.root: Path | None = None
+
+    async def start(self, repo_path: str, config: SandboxConfig) -> None:
+        self.root = Path(repo_path)
+
+    async def exec(self, command: str, timeout: int = 30) -> ExecResult:
+        return ExecResult(exit_code=0, stdout="", stderr="")
+
+    async def read_file(self, path: str) -> str:
+        assert self.root is not None
+        return (self.root / path.removeprefix("/workspace/").lstrip("/")).read_text(
+            encoding="utf-8"
+        )
+
+    async def write_file(self, path: str, content: str) -> None:
+        assert self.root is not None
+        target = self.root / path.removeprefix("/workspace/").lstrip("/")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    async def list_files(self, path: str = "/workspace") -> list[str]:
+        assert self.root is not None
+        return [p.relative_to(self.root).as_posix() for p in self.root.rglob("*") if p.is_file()]
+
+    async def stop(self) -> None:
+        return None
+
+    async def is_alive(self) -> bool:
+        return self.root is not None
+
+
+def _init_eval_subagent_repo(repo: Path) -> None:
+    repo.mkdir()
+    git_env = {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "GIT_AUTHOR_NAME": "Eval",
+        "GIT_AUTHOR_EMAIL": "eval@example.com",
+        "GIT_COMMITTER_NAME": "Eval",
+        "GIT_COMMITTER_EMAIL": "eval@example.com",
+    }
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=git_env, check=True)  # noqa: S607
+    (repo / "src.py").write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, env=git_env, check=True)  # noqa: S607
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, env=git_env, check=True)  # noqa: S607
+
+
+def _make_seq_eval_llm(turns: list[object]) -> object:
+    from agent_forge.llm.base import LLMConfig, LLMProvider, LLMResponse, Message, ToolDefinition
+
+    class _SeqLLM(LLMProvider):
+        def __init__(self, items: list[LLMResponse]) -> None:
+            self._turns = items
+            self._idx = 0
+
+        @property
+        def model_name(self) -> str:
+            return "eval-subagent"
+
+        async def complete(
+            self,
+            messages: list[Message],
+            tools: list[ToolDefinition] | None = None,
+            config: LLMConfig | None = None,
+        ) -> LLMResponse:
+            del messages, tools, config
+            resp = self._turns[min(self._idx, len(self._turns) - 1)]
+            self._idx += 1
+            return resp
+
+        async def stream(
+            self,
+            messages: list[Message],
+            tools: list[ToolDefinition] | None = None,
+            config: LLMConfig | None = None,
+        ):
+            del messages, tools, config
+            if False:  # pragma: no cover
+                yield None
+
+    typed_turns = [t for t in turns if isinstance(t, LLMResponse)]
+    return _SeqLLM(typed_turns)
+
+
+@pytest.mark.asyncio
+async def test_subagent_delegation_bounds_parent_context_and_isolates_worker(
+    tmp_path: Path,
+) -> None:
+    """Verify #32: research reads stay concise & isolated worker keeps parent repo clean."""
+    from agent_forge.agent.core import react_loop
+    from agent_forge.agent.models import AgentConfig, AgentRun, RunState
+    from agent_forge.agent.subagent import SubagentLimits, SubagentRunner
+    from agent_forge.llm.base import LLMResponse, TokenUsage, ToolCall
+    from agent_forge.orchestration.events import Event, EventBus, EventType
+    from agent_forge.tools import create_default_registry
+    from agent_forge.tools.subagent import SpawnSubagentTool
+
+    repo = tmp_path / "eval_subagent_repo"
+    _init_eval_subagent_repo(repo)
+    llms = iter(
+        [
+            _make_seq_eval_llm(
+                [
+                    LLMResponse(
+                        content=None,
+                        tool_calls=[
+                            ToolCall(
+                                id="sub-r",
+                                name="spawn_subagent",
+                                arguments={"task": "Inspect src.py", "mode": "research"},
+                            )
+                        ],
+                        usage=TokenUsage(10, 5, 15),
+                        model="eval-subagent",
+                    ),
+                    LLMResponse(
+                        content=None,
+                        tool_calls=[
+                            ToolCall(
+                                id="sub-w",
+                                name="spawn_subagent",
+                                arguments={"task": "Update VALUE to 2", "mode": "worker"},
+                            )
+                        ],
+                        usage=TokenUsage(15, 5, 20),
+                        model="eval-subagent",
+                    ),
+                    LLMResponse(
+                        content="Delegated research and isolated worker patch cleanly.",
+                        usage=TokenUsage(10, 5, 15),
+                        model="eval-subagent",
+                        finish_reason="stop",
+                    ),
+                ]
+            ),
+            _make_seq_eval_llm(
+                [
+                    LLMResponse(
+                        content=None,
+                        tool_calls=[
+                            ToolCall(
+                                id="rf-1",
+                                name="read_file",
+                                arguments={"path": "/workspace/src.py"},
+                            )
+                        ],
+                        usage=TokenUsage(12, 6, 18),
+                        model="eval-subagent",
+                    ),
+                    LLMResponse(
+                        content="src.py defines VALUE = 1.",
+                        usage=TokenUsage(12, 6, 18),
+                        model="eval-subagent",
+                        finish_reason="stop",
+                    ),
+                ]
+            ),
+            _make_seq_eval_llm(
+                [
+                    LLMResponse(
+                        content=None,
+                        tool_calls=[
+                            ToolCall(
+                                id="wf-1",
+                                name="write_file",
+                                arguments={"path": "/workspace/src.py", "content": "VALUE = 2\n"},
+                            )
+                        ],
+                        usage=TokenUsage(20, 8, 28),
+                        model="eval-subagent",
+                    ),
+                    LLMResponse(
+                        content="Updated src.py to VALUE = 2.",
+                        usage=TokenUsage(15, 5, 20),
+                        model="eval-subagent",
+                        finish_reason="stop",
+                    ),
+                ]
+            ),
+        ]
+    )
+
+    bus = EventBus()
+    sub_events: list[Event] = []
+
+    async def _collect_sub_event(ev: Event) -> None:
+        sub_events.append(ev)
+
+    await bus.subscribe(EventType.SUBAGENT_STARTED, _collect_sub_event)
+    await bus.subscribe(EventType.SUBAGENT_COMPLETED, _collect_sub_event)
+
+    parent_tools = create_default_registry(load_plugins=False)
+    parent_run = AgentRun(
+        task="Inspect and isolate fix",
+        repo_path=str(repo),
+        config=AgentConfig(context_enabled=False),
+    )
+
+    def _accumulate_parent_tokens(usage: TokenUsage) -> None:
+        parent_run.total_tokens = parent_run.total_tokens + usage
+
+    runner = SubagentRunner(
+        repo,
+        parent_run.config,
+        SandboxConfig(),
+        lambda: next(llms),
+        lambda _cfg: _EvalWorkspaceSandbox(),
+        parent_tools,
+        limits=SubagentLimits(max_result_chars=1200),
+        parent_run_id=parent_run.id,
+        event_bus=bus,
+        on_tokens=_accumulate_parent_tokens,
+        worktree_root=tmp_path / "eval_wts",
+    )
+    parent_tools.register(SpawnSubagentTool(runner))
+
+    parent_sb = _EvalWorkspaceSandbox()
+    await parent_sb.start(str(repo), SandboxConfig())
+    await react_loop(parent_run, next(llms), parent_tools, parent_sb, emit_lifecycle=False)
+
+    assert parent_run.state == RunState.COMPLETED
+    assert (repo / "src.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+    assert len(parent_run.tool_invocations) == 2
+    assert "+VALUE = 2" in parent_run.tool_invocations[1].result.output
+    assert [ev.type for ev in sub_events] == [
+        EventType.SUBAGENT_STARTED,
+        EventType.SUBAGENT_COMPLETED,
+        EventType.SUBAGENT_STARTED,
+        EventType.SUBAGENT_COMPLETED,
+    ]
+    assert parent_run.total_tokens.total_tokens == 134
