@@ -176,6 +176,7 @@ tests/
 │   ├── test_context_engine.py          # Instruction discovery, repo map, working set, compaction
 │   ├── test_cost.py                    # Cost/token tracking
 │   ├── test_declarative_approvals_and_egress_proxy.py # Declarative tool approvals & egress proxy
+│   ├── test_dev_session_and_context_state.py # DevSession persistence & ContextEngine serialization
 │   ├── test_devcontainer_and_setup_phase.py # Devcontainers, Dockerfile.universal, setup_command
 │   ├── test_events.py                  # Event bus pub/sub
 │   ├── test_llm_anthropic.py           # Anthropic adapter (mocked HTTP)
