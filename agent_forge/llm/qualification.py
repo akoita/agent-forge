@@ -167,19 +167,23 @@ def _create_profile_provider(
     *,
     capability_overrides: dict[str, Any] | None = None,
 ) -> LLMProvider:
+    from agent_forge.llm.factory import provider_kwargs_from_settings
+
     base_url = resolve_profile_base_url(config, profile)
     api_mode = resolve_profile_api_mode(config, profile)
-    provider_kwargs: dict[str, object] = {}
+    provider_kwargs: dict[str, object] = dict(
+        provider_kwargs_from_settings(profile.provider, config.providers.get(profile.provider))
+    )
     if base_url:
         provider_kwargs["base_url"] = base_url
-    if profile.provider in ("openai", "openai-compatible") and api_mode != "auto":
+    if profile.provider in ("openai", "openai-compatible", "openrouter") and api_mode != "auto":
         provider_kwargs["api_mode"] = api_mode
     merged_caps = (
         dict(capability_overrides)
         if capability_overrides is not None
         else resolve_profile_capabilities(config, profile)
     )
-    if merged_caps and profile.provider in ("openai", "openai-compatible"):
+    if merged_caps and profile.provider in ("openai", "openai-compatible", "openrouter"):
         provider_kwargs["capability_overrides"] = merged_caps
     return create_provider(profile.provider, api_key, **provider_kwargs)
 

@@ -101,24 +101,39 @@ def pricing_override_from_per_million(
     return entry
 
 
+def _pricing_candidates_for_model(model: str) -> tuple[str, ...]:
+    """Build normalized pricing table keys for bare and gateway-prefixed model IDs."""
+    raw = model.strip()
+    lower = raw.lower()
+    stripped_gw = lower.removeprefix("openrouter/")
+    base_no_tag = stripped_gw.split(":", 1)[0]
+    candidates: list[str] = [raw, lower, stripped_gw, base_no_tag]
+    for slug in (stripped_gw, base_no_tag):
+        if slug.startswith("google/"):
+            suffix = slug.split("/", 1)[1]
+            candidates.append(f"gemini/{suffix}")
+            candidates.append(suffix)
+        elif "/" in slug:
+            suffix = slug.rsplit("/", 1)[-1]
+            candidates.append(suffix)
+        else:
+            candidates.extend((f"gemini/{slug}", f"anthropic/{slug}", f"openai/{slug}"))
+        candidates.append(f"openrouter/{slug}")
+    return tuple(dict.fromkeys(c for c in candidates if c))
+
+
 def lookup_model_pricing(
     model: str,
     *,
     pricing_overrides: Mapping[str, Mapping[str, float]] | None = None,
 ) -> Mapping[str, float] | None:
     """Resolve per-token pricing from overrides first, then ``COST_TABLE``."""
-    lower = model.lower()
+    candidates = _pricing_candidates_for_model(model)
     if pricing_overrides:
-        for key in (model, lower, "*"):
+        for key in (*candidates, "*"):
             if key in pricing_overrides:
                 return pricing_overrides[key]
-    for candidate in (
-        model,
-        lower,
-        f"gemini/{lower}",
-        f"anthropic/{lower}",
-        f"openai/{lower}",
-    ):
+    for candidate in candidates:
         if candidate in COST_TABLE:
             return COST_TABLE[candidate]
     return None
@@ -172,6 +187,8 @@ class CostEntry:
     completion_tokens: int
     estimated_cost_usd: float
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+    reported_model: str | None = None
+    upstream_provider: str | None = None
 
 
 @dataclass
@@ -184,15 +201,29 @@ class CostTracker:
 
     # -- Recording ---------------------------------------------------------
 
-    def record(self, usage: TokenUsage, model: str) -> None:
+    def record(
+        self,
+        usage: TokenUsage,
+        model: str,
+        *,
+        reported_model: str | None = None,
+        upstream_provider: str | None = None,
+    ) -> None:
         """Append a cost entry for one LLM call."""
-        cost = _estimate_cost(usage, model, pricing_overrides=self.pricing_overrides or None)
+        cost = _estimate_cost(
+            usage,
+            model,
+            pricing_overrides=self.pricing_overrides or None,
+            reported_model=reported_model,
+        )
         self.entries.append(
             CostEntry(
                 model=model,
                 prompt_tokens=usage.prompt_tokens,
                 completion_tokens=usage.completion_tokens,
                 estimated_cost_usd=cost,
+                reported_model=reported_model,
+                upstream_provider=upstream_provider,
             )
         )
 
@@ -204,7 +235,7 @@ class CostTracker:
 
     def summary(self) -> dict[str, Any]:
         """Return an aggregated summary dict."""
-        return {
+        result: dict[str, Any] = {
             "run_id": self.run_id,
             "total_prompt_tokens": sum(e.prompt_tokens for e in self.entries),
             "total_completion_tokens": sum(e.completion_tokens for e in self.entries),
@@ -212,6 +243,15 @@ class CostTracker:
             "total_cost_usd": self.total_cost(),
             "llm_calls": len(self.entries),
         }
+        reported = list(dict.fromkeys(e.reported_model for e in self.entries if e.reported_model))
+        upstream = list(
+            dict.fromkeys(e.upstream_provider for e in self.entries if e.upstream_provider)
+        )
+        if reported:
+            result["reported_models"] = reported
+        if upstream:
+            result["upstream_providers"] = upstream
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -224,14 +264,23 @@ def _estimate_cost(
     model: str,
     *,
     pricing_overrides: Mapping[str, Mapping[str, float]] | None = None,
+    reported_model: str | None = None,
 ) -> float:
     """Compute estimated USD cost for a single LLM call.
 
-    Pricing is **per token** (sourced from overrides or LiteLLM's database).
-    Cached prompt tokens use ``cache_read_input_token_cost`` when present or
-    a 50% discount on ``input_cost_per_token``.
+    Uses provider-reported ``usage.reported_cost_usd`` when present; otherwise
+    falls back to overrides or the vendored LiteLLM pricing table.
     """
+    raw_reported = getattr(usage, "reported_cost_usd", None)
+    if (
+        isinstance(raw_reported, (int, float))
+        and not isinstance(raw_reported, bool)
+        and raw_reported >= 0
+    ):
+        return float(raw_reported)
     pricing = lookup_model_pricing(model, pricing_overrides=pricing_overrides)
+    if pricing is None and reported_model:
+        pricing = lookup_model_pricing(reported_model, pricing_overrides=pricing_overrides)
     if pricing is None:
         return 0.0
     input_rate = pricing["input_cost_per_token"]
@@ -400,6 +449,10 @@ def save_summary(
         "created_at": run.created_at.isoformat(),
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
     }
+    if "reported_models" in s:
+        summary_data["reported_models"] = s["reported_models"]
+    if "upstream_providers" in s:
+        summary_data["upstream_providers"] = s["upstream_providers"]
 
     summary_path = run_dir / "summary.json"
     summary_path.write_text(json.dumps(summary_data, indent=2) + "\n")

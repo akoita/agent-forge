@@ -518,18 +518,19 @@ def _create_benchmark_provider(
     api_key: str,
     base_url: str | None,
 ) -> Any:
+    from agent_forge.llm.factory import provider_kwargs_from_settings
+
     api_mode = profile.api_mode
-    if api_mode == "auto":
-        provider_cfg = config.providers.get(profile.provider)
-        if provider_cfg is not None:
-            api_mode = provider_cfg.api_mode
-    provider_kwargs: dict[str, Any] = {}
+    provider_cfg = config.providers.get(profile.provider)
+    if api_mode == "auto" and provider_cfg is not None:
+        api_mode = provider_cfg.api_mode
+    provider_kwargs: dict[str, Any] = provider_kwargs_from_settings(profile.provider, provider_cfg)
     if base_url:
         provider_kwargs["base_url"] = base_url
-    if profile.provider in ("openai", "openai-compatible") and api_mode != "auto":
+    if profile.provider in ("openai", "openai-compatible", "openrouter") and api_mode != "auto":
         provider_kwargs["api_mode"] = api_mode
     merged_caps = resolve_profile_capabilities(config, profile)
-    if merged_caps and profile.provider in ("openai", "openai-compatible"):
+    if merged_caps and profile.provider in ("openai", "openai-compatible", "openrouter"):
         provider_kwargs["capability_overrides"] = merged_caps
     return create_provider(profile.provider, api_key, **provider_kwargs)
 

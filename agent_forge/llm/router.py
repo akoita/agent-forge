@@ -280,14 +280,18 @@ def _instantiate_candidate_provider(
     api_key: str,
     shared_clients: dict[tuple[Any, ...], LLMProvider],
     provider_factory: Callable[..., LLMProvider],
+    *,
+    provider_cfg: Any | None = None,
 ) -> LLMProvider:
+    from agent_forge.llm.factory import provider_kwargs_from_settings
+
     caps_key = tuple(sorted((cand.capability_overrides or {}).items()))
     client_key = (cand.provider_name, api_key, cand.base_url, cand.api_mode, caps_key)
     if client_key not in shared_clients:
-        kwargs: dict[str, Any] = {}
+        kwargs = provider_kwargs_from_settings(cand.provider_name, provider_cfg)
         if cand.base_url:
             kwargs["base_url"] = cand.base_url
-        if cand.provider_name in ("openai", "openai-compatible"):
+        if cand.provider_name in ("openai", "openai-compatible", "openrouter"):
             kwargs["api_mode"] = cand.api_mode
         if cand.capability_overrides:
             kwargs["capability_overrides"] = dict(cand.capability_overrides)
@@ -348,7 +352,11 @@ class RoutingLLMProvider(LLMProvider):
 
             cand = _build_candidate(config, name, profile)
             providers[name] = _instantiate_candidate_provider(
-                cand, api_key, shared_clients, provider_factory
+                cand,
+                api_key,
+                shared_clients,
+                provider_factory,
+                provider_cfg=config.providers.get(profile.provider),
             )
             candidates.append(cand)
 

@@ -54,15 +54,20 @@ class TokenUsage:
     total_tokens: int
     cached_prompt_tokens: int = 0
     reasoning_tokens: int = 0
+    reported_cost_usd: float | None = None
 
     def __add__(self, other: TokenUsage) -> TokenUsage:
         """Combine two TokenUsage instances."""
+        combined_cost: float | None = None
+        if self.reported_cost_usd is not None or other.reported_cost_usd is not None:
+            combined_cost = (self.reported_cost_usd or 0.0) + (other.reported_cost_usd or 0.0)
         return TokenUsage(
             prompt_tokens=self.prompt_tokens + other.prompt_tokens,
             completion_tokens=self.completion_tokens + other.completion_tokens,
             total_tokens=self.total_tokens + other.total_tokens,
             cached_prompt_tokens=self.cached_prompt_tokens + other.cached_prompt_tokens,
             reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
+            reported_cost_usd=combined_cost,
         )
 
 
@@ -88,6 +93,8 @@ class LLMResponse:
     model: str = ""
     finish_reason: str = ""  # "stop", "tool_calls", "length", "error"
     reported_model: str | None = None
+    upstream_provider: str | None = None
+    native_finish_reason: str | None = None
     response_id: str | None = None
     reasoning_blocks: list[dict[str, Any]] = field(default_factory=list)
 

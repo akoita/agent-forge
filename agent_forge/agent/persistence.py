@@ -20,27 +20,37 @@ from agent_forge.config import USER_CONFIG_DIR
 from agent_forge.llm.base import Message, Role, TokenUsage, ToolCall
 
 
-def serialize_token_usage(usage: TokenUsage) -> dict[str, int]:
-    """Serialize a :class:`TokenUsage` record to plain JSON integers."""
-    return {
+def serialize_token_usage(usage: TokenUsage) -> dict[str, int | float]:
+    """Serialize a :class:`TokenUsage` record to plain JSON numbers."""
+    payload: dict[str, int | float] = {
         "prompt_tokens": usage.prompt_tokens,
         "completion_tokens": usage.completion_tokens,
         "total_tokens": usage.total_tokens,
         "cached_prompt_tokens": usage.cached_prompt_tokens,
         "reasoning_tokens": usage.reasoning_tokens,
     }
+    if usage.reported_cost_usd is not None:
+        payload["reported_cost_usd"] = usage.reported_cost_usd
+    return payload
 
 
 def deserialize_token_usage(data: dict[str, Any] | None) -> TokenUsage:
     """Restore a :class:`TokenUsage` record from a persisted dict."""
     if not data:
         return TokenUsage(0, 0, 0)
+    raw_cost = data.get("reported_cost_usd")
+    reported_cost = (
+        float(raw_cost)
+        if isinstance(raw_cost, (int, float)) and not isinstance(raw_cost, bool)
+        else None
+    )
     return TokenUsage(
         prompt_tokens=int(data.get("prompt_tokens", 0)),
         completion_tokens=int(data.get("completion_tokens", 0)),
         total_tokens=int(data.get("total_tokens", 0)),
         cached_prompt_tokens=int(data.get("cached_prompt_tokens", 0)),
         reasoning_tokens=int(data.get("reasoning_tokens", 0)),
+        reported_cost_usd=reported_cost,
     )
 
 

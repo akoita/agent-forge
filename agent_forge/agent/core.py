@@ -104,21 +104,45 @@ def _record_message(run: AgentRun, message: Message, journal: RunJournal) -> Non
     )
 
 
+def _build_token_usage_payload(response: LLMResponse) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "prompt_tokens": response.usage.prompt_tokens,
+        "completion_tokens": response.usage.completion_tokens,
+        "total_tokens": response.usage.total_tokens,
+        "model": response.model,
+    }
+    if response.reported_model:
+        payload["reported_model"] = response.reported_model
+    if response.upstream_provider:
+        payload["upstream_provider"] = response.upstream_provider
+    if response.usage.reported_cost_usd is not None:
+        payload["reported_cost_usd"] = response.usage.reported_cost_usd
+    return payload
+
+
 def _record_llm_response(response: LLMResponse, journal: RunJournal, iteration: int) -> None:
+    usage_payload: dict[str, Any] = {
+        "prompt_tokens": response.usage.prompt_tokens,
+        "completion_tokens": response.usage.completion_tokens,
+        "total_tokens": response.usage.total_tokens,
+    }
+    if response.usage.reported_cost_usd is not None:
+        usage_payload["reported_cost_usd"] = response.usage.reported_cost_usd
+    payload: dict[str, Any] = {
+        "model": response.model,
+        "reported_model": response.reported_model,
+        "finish_reason": response.finish_reason,
+        "content": response.content,
+        "tool_calls": [asdict(tc) for tc in response.tool_calls],
+        "usage": usage_payload,
+    }
+    if response.upstream_provider:
+        payload["upstream_provider"] = response.upstream_provider
+    if response.native_finish_reason:
+        payload["native_finish_reason"] = response.native_finish_reason
     journal.append(
         "llm_response",
-        {
-            "model": response.model,
-            "reported_model": response.reported_model,
-            "finish_reason": response.finish_reason,
-            "content": response.content,
-            "tool_calls": [asdict(tc) for tc in response.tool_calls],
-            "usage": {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-            },
-        },
+        payload,
         iteration=iteration,
     )
 
@@ -433,7 +457,12 @@ async def _run_loop_iterations(
             config=llm_config,
         )
         run.total_tokens = run.total_tokens + response.usage
-        tracker.record(response.usage, response.model or llm_config.model)
+        tracker.record(
+            response.usage,
+            response.model or llm_config.model,
+            reported_model=response.reported_model,
+            upstream_provider=response.upstream_provider,
+        )
         _record_llm_response(response, journal, run.iterations)
         last_response_id = (
             response.response_id
@@ -445,12 +474,7 @@ async def _run_loop_iterations(
             event_bus,
             EventType.TOKEN_USAGE,
             run.id,
-            {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-                "model": response.model,
-            },
+            _build_token_usage_payload(response),
         )
 
         # 2. CHECK BUDGET & INTERRUPT
