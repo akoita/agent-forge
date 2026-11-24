@@ -14,6 +14,11 @@ Agent Forge will deliver a verified local coding workflow, measure its quality, 
 | [4. Measure and choose a model default](https://github.com/akoita/agent-forge/milestone/4) | A maintainer can qualify model candidates and choose the default using measured results. |
 | [5. Operate the coding agent on GCP](https://github.com/akoita/agent-forge/milestone/5) | An operator can submit work remotely and retrieve a verified result across a restart. |
 | [6. Run an invite-only SaaS pilot](https://github.com/akoita/agent-forge/milestone/6) | Two invited developers can submit and retrieve their own runs under enforced quotas and isolation. |
+| [7. End-to-End Engineering Readiness](https://github.com/akoita/agent-forge/milestone/7) | Local models (`openai-compatible`), host auth/`git_push`, polyglot toolchains, and greenfield verification work end-to-end. |
+| [8. Universal Polyglot Runtime & Safe Deployments](https://github.com/akoita/agent-forge/milestone/8) | Stock Docker images, `.devcontainer.json`/`mise`, two-phase `setup_command`, declarative approval hooks, and host egress proxy. |
+| [9. Agentic Development Environment (ADE) Sessions](https://github.com/akoita/agent-forge/milestone/9) | Durable `DevSession` snapshots, stateful `ACP` replay, and interactive `agent-forge chat`/`session` CLI with warm sandboxes. |
+| [10. Daily-Driver ADE UX & v0.7.0 Release](https://github.com/akoita/agent-forge/milestone/10) | OpenRouter gateway, live streaming & prompt history, `/diff`/`/undo`/`/sessions`/`/resume`, warm Docker integration tests, and `v0.7.0`. |
+| [11. SOTA Agent Loop: Subagents & Code Mode](https://github.com/akoita/agent-forge/milestone/11) | Bounded hierarchical subagent delegation ([#32](https://github.com/akoita/agent-forge/issues/32)) and benchmarked Code Mode execution ([#193](https://github.com/akoita/agent-forge/issues/193)). |
 
 The [delivery plan](delivery-plan.md) records prerequisites, issue order, and exit criteria. GitHub tracks current assignments. Use the documented criteria and observed evidence to close a milestone.
 
@@ -26,6 +31,6 @@ The [delivery plan](delivery-plan.md) records prerequisites, issue order, and ex
 
 ## Later work
 
-Use task traces to prioritize the [context engine](https://github.com/akoita/agent-forge/issues/24) and [resumable terminal sessions](https://github.com/akoita/agent-forge/issues/137). Open standards guide any later [MCP](https://github.com/akoita/agent-forge/issues/40) or [ACP](https://github.com/akoita/agent-forge/issues/47) work. Parallel execution and [delegation](https://github.com/akoita/agent-forge/issues/32) need evaluation evidence and workspace isolation.
+Next harness-capability milestones prioritize hierarchical [subagent delegation](https://github.com/akoita/agent-forge/issues/32) and opt-in [Code Mode](https://github.com/akoita/agent-forge/issues/193) backed by paired `make eval` benchmarks.
 
-Fund fleet scaling, warm pools, and capacity dashboards when pilot measurements identify a bottleneck. The planned interfaces are the CLI, API, and pilot UI. Custom agent protocols, orchestration DSLs, vector memory by default, bespoke IDE plugins, and a tool marketplace remain outside the current roadmap.
+Fund fleet scaling, warm pools, and capacity dashboards when pilot measurements identify a bottleneck. The planned interfaces are the CLI, API, and ACP/pilot UI. Custom agent protocols, orchestration DSLs, vector memory by default, bespoke IDE plugins, and a tool marketplace remain outside the current roadmap.
