@@ -957,7 +957,7 @@ Before executing a tool call, `ApprovalGate` classifies destructive actions (`ap
 `ACPServer` (`agent_forge/acp/`) exposes Agent Forge over newline-delimited JSON-RPC 2.0 on `stdin`/`stdout` via `agent-forge acp [--sessions-dir PATH]`:
 
 - Supports `initialize`, `session/new` (including `cwd` validation and ACP `mcpServers` translation), disk-backed `session/load` (restoring stored `DevSession` / `ContextEngine` state and replaying turns via `session/update`), multi-turn stateful `session/prompt`, and `session/cancel`.
-- Maps typed `StreamEvent` (`run-event-v1`) lifecycle events onto `session/update` notifications (`tool_call`, `tool_call_update`, `agent_thought_chunk`, `agent_message_chunk`).
+- Maps typed `StreamEvent` (`run-event-v1`) lifecycle events onto `session/update` notifications (`tool_call`, `tool_call_update`, `agent_thought_chunk`, `agent_message_chunk`), including `[code-mode]` bridged calls/approvals and `subagent.started`/`subagent.completed` status updates.
 - Bridges `ApprovalGate` evaluation requests to bidirectional `session/request_permission` editor prompts (`allow_once`, `allow_always`, `reject_once`).
 
 ##### Interactive CLI Chat & Session Management
@@ -967,7 +967,7 @@ Before executing a tool call, `ApprovalGate` classifies destructive actions (`ap
 - **Warm session sandbox:** Reuses a single `Sandbox` container (and active PTY sessions) across consecutive `run_turn()` calls until explicit `close()` or `--idle-timeout` expiry.
 - **Live streaming & tool progress:** Streams assistant token deltas via `EventType.ASSISTANT_DELTA` (`--stream/--no-stream`) and prints real-time `EventBus` tool-call/approval status lines cleanly via `_ReplOutputCoordinator`.
 - **Multiline prompts & history:** Supports trailing `\` line continuation and `"""..."""` fenced blocks alongside persistent line history (`--history-file`, defaulting to `~/.agent-forge/chat_history` on interactive TTYs).
-- **Workspace & session controls:** Supports `/diff [--stat]` (Git status + diff), `/undo [--force]` (conflict-guarded pre/post turn workspace snapshot rollback via `workspace_undo.py`), `/sessions [--all] [N]`, `/resume <id|latest>` (in-place session switch preserving warm same-repo sandboxes), `/compact [keep_recent]`, `/context`, `/model [spec]`, `/clear [--sandbox]`, `/help`, and `/exit` (`/quit`).
+- **Workspace & session controls:** Supports `/diff [--stat]` (Git status + diff), `/undo [--force]` (conflict-guarded pre/post turn workspace snapshot rollback via `workspace_undo.py`), `/subagents`, `/apply <branch> [--strategy merge|rebase]`, `/sessions [--all] [N]`, `/resume <id|latest>` (in-place session switch preserving warm same-repo sandboxes), `/compact [keep_recent]`, `/context` (including active `execution_mode` & `subagents` flags), `/model [spec]`, `/clear [--sandbox]`, `/help`, and `/exit` (`/quit`).
 - **Session lifecycle CLI:** `agent-forge chat --resume <id|latest> [--sessions-dir PATH] [--idle-timeout SECONDS]` continues sessions across restarts; `agent-forge session list|show|compact|delete` inspects, compacts, and prunes stored sessions (`text` or `json` output).
 
 ##### Bounded Hierarchical Subagent Delegation

@@ -6,6 +6,8 @@ import asyncio
 import inspect
 import os
 import shlex
+import shutil
+import subprocess
 import sys
 import time
 from contextlib import suppress
@@ -35,22 +37,28 @@ from agent_forge.agent.workspace_undo import (
 from agent_forge.config import USER_CONFIG_DIR
 from agent_forge.observability.cost import build_pricing_overrides
 from agent_forge.orchestration.events import Event, EventBus, EventType
+from agent_forge.orchestration.worktree import WorktreeManager, is_git_repo
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from typing import Literal
 
     from agent_forge.agent.session import DevSession, SessionStore, SessionSummary
     from agent_forge.config import ForgeConfig
     from agent_forge.llm.base import LLMProvider
+    from agent_forge.orchestration.worktree import IntegrationResult
     from agent_forge.sandbox.base import Sandbox, SandboxConfig
     from agent_forge.tools.base import ToolRegistry
 
 
 _HELP_TEXT = """Available slash commands:
   /compact [keep_recent]  Compact older conversation turns while keeping working set
-  /context                Show token usage, compaction stats, active files, and warm sandbox status
+  /context                Show token usage, mode flags, active files, and warm sandbox status
   /diff [--stat]          Show uncommitted workspace changes in the active repository
   /undo [--force]         Revert the last turn's workspace edits (checks for external edits)
+  /subagents              List committed subagent worker branches ready for integration
+  /apply <branch> [--strategy merge|rebase]
+                          Integrate a committed subagent worker branch into HEAD
   /sessions [--all] [N]   List saved sessions for this repo (or all repos)
   /resume <id|latest>     Switch to another saved session in-place
   /model [spec]           Show or switch active model (model, provider/model, or profile)
@@ -393,10 +401,16 @@ class ChatSessionRuntime:
         assembled_tokens = self.context_engine.assembled_token_estimate(self.session.messages)
         stats = self.context_engine.stats_dict()
         policy = self.context_engine.policy
+        raw_exec = getattr(self.cfg.agent, "execution_mode", "tool_calling")
+        exec_mode = raw_exec if isinstance(raw_exec, str) else "tool_calling"
+        sub_cfg = getattr(self.cfg, "subagents", None)
+        sub_enabled = bool(getattr(sub_cfg, "enabled", False))
         return {
             "session_id": self.session.id,
             "provider": self.session.provider,
             "model": self.session.model,
+            "execution_mode": exec_mode,
+            "subagents_enabled": sub_enabled,
             "turns": len(self.session.turns),
             "messages": len(self.session.messages),
             "raw_tokens": raw_tokens,
@@ -527,6 +541,10 @@ class ChatSessionRuntime:
         )
         lines = [
             f"Session: {summary['session_id']} ({summary['provider']}/{summary['model']})",
+            (
+                f"Mode: execution={summary['execution_mode']}, "
+                f"subagents={'enabled' if summary['subagents_enabled'] else 'disabled'}"
+            ),
             (
                 f"Context: {summary['assembled_tokens']:,} / {summary['max_tokens']:,} tokens "
                 f"({pct}%, raw={summary['raw_tokens']:,}, "
@@ -663,6 +681,126 @@ class ChatSessionRuntime:
         result = self.undo_last_turn(force=force)
         return SlashCommandResult(handled=True, output=str(result["output"]), payload=result)
 
+    def _subagent_branch_prefix(self) -> str:
+        sub_cfg = getattr(self.cfg, "subagents", None)
+        raw = getattr(sub_cfg, "branch_prefix", "agent-forge/subagent")
+        cleaned = str(raw).strip().rstrip("/")
+        return cleaned or "agent-forge/subagent"
+
+    def list_subagent_branches(self) -> list[dict[str, str]]:
+        """List committed subagent worker branches in the active repository."""
+        repo = self.session.repo_path
+        if not is_git_repo(repo):
+            return []
+        prefix = self._subagent_branch_prefix()
+        git_bin = shutil.which("git") or "git"
+        proc = subprocess.run(  # noqa: S603
+            [
+                git_bin,
+                "for-each-ref",
+                "--sort=-committerdate",
+                "--format=%(refname:short)\t%(objectname:short)\t%(subject)",
+                f"refs/heads/{prefix}",
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return []
+        branches: list[dict[str, str]] = []
+        for line in proc.stdout.splitlines():
+            parts = line.split("\t", 2)
+            if len(parts) == 3 and parts[0].strip():
+                branches.append(
+                    {
+                        "branch": parts[0].strip(),
+                        "sha": parts[1].strip(),
+                        "subject": parts[2].strip(),
+                    }
+                )
+        return branches
+
+    async def apply_subagent_branch(
+        self,
+        branch: str,
+        *,
+        strategy: Literal["merge", "rebase"] = "merge",
+    ) -> IntegrationResult:
+        """Integrate a committed subagent branch into HEAD using ``WorktreeManager``."""
+        from agent_forge.orchestration.worktree import IntegrationResult
+
+        prefix = self._subagent_branch_prefix()
+        cleaned = branch.strip()
+        if not cleaned.startswith(f"{prefix}/"):
+            return IntegrationResult(
+                run_id=cleaned or "unknown",
+                branch=cleaned,
+                target_branch="",
+                strategy=strategy,
+                status="error",
+                detail=f"Branch '{cleaned}' must start with '{prefix}/'.",
+            )
+        if not is_git_repo(self.session.repo_path):
+            return IntegrationResult(
+                run_id=cleaned,
+                branch=cleaned,
+                target_branch="",
+                strategy=strategy,
+                status="error",
+                detail="Active workspace is not a Git repository.",
+            )
+        manager = WorktreeManager(self.session.repo_path, branch_prefix=prefix)
+        return await manager.integrate_branch(
+            cleaned,
+            strategy=strategy,
+            delete_branch_on_success=True,
+        )
+
+    async def _handle_subagents_command(self) -> SlashCommandResult:
+        branches = self.list_subagent_branches()
+        prefix = self._subagent_branch_prefix()
+        if not branches:
+            return SlashCommandResult(
+                handled=True,
+                output=(
+                    f"No committed subagent branches found under '{prefix}/'. "
+                    "Use --subagents with a worker task to produce isolated branches."
+                ),
+                payload={"branches": []},
+            )
+        lines = ["Subagent worker branches:"]
+        for item in branches:
+            lines.append(f"  * {item['branch']} ({item['sha']}) — {item['subject']}")
+        return SlashCommandResult(
+            handled=True,
+            output="\n".join(lines),
+            payload={"branches": branches},
+        )
+
+    async def _handle_apply_command(self, args: list[str]) -> SlashCommandResult:
+        branch, strategy, usage_err = _parse_apply_args(args)
+        if usage_err is not None or branch is None:
+            return SlashCommandResult(
+                handled=True,
+                output=usage_err or "Usage: /apply <branch> [--strategy merge|rebase]",
+            )
+        res = await self.apply_subagent_branch(branch, strategy=strategy)
+        return SlashCommandResult(
+            handled=True,
+            output=_format_apply_result(res),
+            payload={
+                "branch": res.branch,
+                "target_branch": res.target_branch,
+                "strategy": res.strategy,
+                "status": res.status,
+                "merged_revision": res.merged_revision,
+                "conflicted_files": list(res.conflicted_files),
+                "detail": res.detail,
+            },
+        )
+
     async def _handle_sessions_command(self, args: list[str]) -> SlashCommandResult:
         all_repos = "--all" in args
         limit = 20
@@ -754,6 +892,8 @@ class ChatSessionRuntime:
             "/context": self._handle_context_command,
             "/diff": lambda: self._handle_diff_command(args),
             "/undo": lambda: self._handle_undo_command(args),
+            "/subagents": self._handle_subagents_command,
+            "/apply": lambda: self._handle_apply_command(args),
             "/sessions": lambda: self._handle_sessions_command(args),
             "/resume": lambda: self._handle_resume_command(args),
             "/model": lambda: self._handle_model_command(args),
@@ -888,22 +1028,70 @@ def _truncate_value(value: Any, *, max_len: int = 56) -> str:
     return text[: max_len - 3] + "..." if len(text) > max_len else text
 
 
+def _parse_apply_args(
+    args: list[str],
+) -> tuple[str | None, Literal["merge", "rebase"], str | None]:
+    usage = "Usage: /apply <branch> [--strategy merge|rebase]"
+    branch: str | None = None
+    strategy: Literal["merge", "rebase"] = "merge"
+    idx = 0
+    while idx < len(args):
+        tok = args[idx]
+        if tok == "--strategy":
+            if idx + 1 >= len(args):
+                return None, strategy, usage
+            raw_strat = args[idx + 1].strip().lower()
+            if raw_strat not in {"merge", "rebase"}:
+                return None, strategy, f"Invalid strategy '{raw_strat}'. {usage}"
+            strategy = "rebase" if raw_strat == "rebase" else "merge"
+            idx += 2
+            continue
+        if tok == "--rebase":
+            strategy = "rebase"
+            idx += 1
+            continue
+        if tok.startswith("-"):
+            return None, strategy, f"Unknown flag '{tok}'. {usage}"
+        if branch is not None:
+            return None, strategy, usage
+        branch = tok
+        idx += 1
+    if branch is None:
+        return None, strategy, usage
+    return branch, strategy, None
+
+
+def _format_apply_result(res: IntegrationResult) -> str:
+    if res.status == "merged":
+        rev = res.merged_revision[:8] if res.merged_revision else "HEAD"
+        return f"Applied '{res.branch}' onto '{res.target_branch}' via {res.strategy} ({rev})."
+    if res.status == "no_changes":
+        return f"No unmerged changes on '{res.branch}'; cleaned up branch."
+    if res.status == "conflict":
+        files = ", ".join(res.conflicted_files) if res.conflicted_files else "unknown files"
+        return f"Apply conflict on '{res.branch}' ({files}); integration aborted cleanly."
+    return f"Apply failed for '{res.branch}': {res.detail or res.status}"
+
+
 def _format_tool_call_status(data: dict[str, Any]) -> str:
     tool_name = str(data.get("tool_name", "tool"))
+    prefix = "[code-mode] " if data.get("code_mode") else ""
     args = data.get("arguments")
     if isinstance(args, dict) and args:
         first_k, first_v = next(iter(args.items()))
-        return f"  -> {tool_name}({first_k}={_truncate_value(first_v)})"
-    return f"  -> {tool_name}()"
+        return f"  -> {prefix}{tool_name}({first_k}={_truncate_value(first_v)})"
+    return f"  -> {prefix}{tool_name}()"
 
 
 def _format_tool_result_status(data: dict[str, Any]) -> str:
     tool_name = str(data.get("tool_name", "tool"))
+    prefix = "[code-mode] " if data.get("code_mode") else ""
     exit_code = int(data.get("exit_code", 0) or 0)
     duration_ms = int(data.get("duration_ms", 0) or 0)
-    if exit_code == 0 and not data.get("error"):
-        return f"  [ok] {tool_name} ({duration_ms}ms)"
-    return f"  [err] {tool_name} (exit {exit_code}, {duration_ms}ms)"
+    has_err = bool(data.get("has_error")) or bool(data.get("error")) or exit_code != 0
+    if not has_err:
+        return f"  [ok] {prefix}{tool_name} ({duration_ms}ms)"
+    return f"  [err] {prefix}{tool_name} (exit {exit_code}, {duration_ms}ms)"
 
 
 async def _attach_repl_event_handlers(
@@ -921,18 +1109,20 @@ async def _attach_repl_event_handlers(
 
     async def _on_approval_requested(event: Event) -> None:
         tool_name = str(event.data.get("tool_name", "tool"))
+        prefix = "[code-mode] " if event.data.get("code_mode") else ""
         reason = str(event.data.get("reason", "")).strip()
         msg = (
-            f"  [?] Approval needed for {tool_name}: {reason}"
+            f"  [?] {prefix}Approval needed for {tool_name}: {reason}"
             if reason
-            else f"  [?] Approval needed for {tool_name}"
+            else f"  [?] {prefix}Approval needed for {tool_name}"
         )
         coordinator.emit_status(msg)
 
     async def _on_approval_decided(event: Event) -> None:
         tool_name = str(event.data.get("tool_name", "tool"))
+        prefix = "[code-mode] " if event.data.get("code_mode") else ""
         verdict = "approved" if event.data.get("approved") else "denied"
-        coordinator.emit_status(f"  [{verdict}] {tool_name}")
+        coordinator.emit_status(f"  [{verdict}] {prefix}{tool_name}")
 
     async def _on_subagent_started(event: Event) -> None:
         sid = str(event.data.get("subagent_id", "sub"))
