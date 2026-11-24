@@ -952,9 +952,9 @@ Before executing a tool call, `ApprovalGate` classifies destructive actions (`ap
 
 ##### Agent Client Protocol (ACP) Server
 
-`ACPServer` (`agent_forge/acp/`) exposes Agent Forge over newline-delimited JSON-RPC 2.0 on `stdin`/`stdout` via `agent-forge acp`:
+`ACPServer` (`agent_forge/acp/`) exposes Agent Forge over newline-delimited JSON-RPC 2.0 on `stdin`/`stdout` via `agent-forge acp [--sessions-dir PATH]`:
 
-- Supports `initialize`, `session/new` (including `cwd` validation and ACP `mcpServers` translation), `session/load`, `session/prompt`, and `session/cancel`.
+- Supports `initialize`, `session/new` (including `cwd` validation and ACP `mcpServers` translation), disk-backed `session/load` (restoring stored `DevSession` / `ContextEngine` state and replaying turns via `session/update`), multi-turn stateful `session/prompt`, and `session/cancel`.
 - Maps typed `StreamEvent` (`run-event-v1`) lifecycle events onto `session/update` notifications (`tool_call`, `tool_call_update`, `agent_thought_chunk`, `agent_message_chunk`).
 - Bridges `ApprovalGate` evaluation requests to bidirectional `session/request_permission` editor prompts (`allow_once`, `allow_always`, `reject_once`).
 
