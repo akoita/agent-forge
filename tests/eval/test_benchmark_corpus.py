@@ -1849,3 +1849,37 @@ async def test_unknown_frontier_model_profile_enforces_max_cost_budget(
     assert run.state == RunState.TIMEOUT
     assert run.error is not None and "cost" in run.error.lower()
     assert seen_effort == ["high"]
+
+
+@pytest.mark.asyncio
+async def test_search_codebase_works_without_ripgrep_in_minimal_sandbox(
+    tmp_path: Path,
+) -> None:
+    """Exit criterion: search_codebase works cleanly in stock sandboxes lacking ripgrep."""
+    from agent_forge.eval.corpus import resolve_tasks
+    from agent_forge.eval.deterministic import SubprocessEvalSandbox
+    from agent_forge.sandbox.base import ExecResult
+    from agent_forge.tools.search_codebase import SearchCodebaseTool
+
+    task = resolve_tasks(task_ids=["fix-health-status"])[0]
+    repo = materialize_task_repo(task, tmp_path / "repo")
+
+    class _NoRipgrepEvalSandbox(SubprocessEvalSandbox):
+        async def exec(self, command: str, *, timeout_seconds: int = 30) -> ExecResult:
+            if command.startswith("rg "):
+                return ExecResult(exit_code=127, stdout="", stderr="sh: rg: not found")
+            return await super().exec(command, timeout_seconds=timeout_seconds)
+
+    sandbox = _NoRipgrepEvalSandbox()
+    await sandbox.start(str(repo))
+    try:
+        res = await SearchCodebaseTool().execute(
+            {"pattern": "health", "file_glob": "*.py", "max_results": 10},
+            sandbox,
+        )
+    finally:
+        await sandbox.stop()
+
+    assert res.exit_code == 0
+    matches = json.loads(res.output)
+    assert any(m["file"].startswith("/workspace/") and m["file"].endswith(".py") for m in matches)

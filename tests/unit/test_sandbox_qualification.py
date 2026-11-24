@@ -67,7 +67,11 @@ async def test_docker_sandbox_drops_caps_sanitizes_env_quotes_paths_and_force_re
         assert run_kwargs["init"] is True
         assert run_kwargs["cap_drop"] == ["ALL"]
         assert "no-new-privileges" in run_kwargs["security_opt"]
-        assert run_kwargs["environment"] == {"SAFE_ENV": "yes"}
+        assert run_kwargs["environment"] == {
+            "SAFE_ENV": "yes",
+            "HOME": "/tmp/home",
+            "XDG_CACHE_HOME": "/tmp/xdg",
+        }
         assert sandbox.container_id == "deadbeef1234"
 
         await sandbox.write_file("/workspace/dir with spaces/file;name.txt", "hello")
