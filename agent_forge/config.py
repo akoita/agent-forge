@@ -161,6 +161,17 @@ class ProviderSettings(BaseModel):
     api_mode: Literal["auto", "responses", "chat_completions"] = "auto"
     api_key_required: bool | None = None
     capabilities: dict[str, Any] = Field(default_factory=dict)
+    http_referer: str = ""
+    app_title: str = ""
+    fallback_models: list[str] = Field(default_factory=list)
+    allow_fallbacks: bool | None = None
+    require_parameters: bool | None = None
+    data_collection: Literal["allow", "deny"] | None = None
+    zdr: bool | None = None
+    provider_order: list[str] = Field(default_factory=list)
+    only_providers: list[str] = Field(default_factory=list)
+    ignore_providers: list[str] = Field(default_factory=list)
+    provider_sort: Literal["price", "throughput", "latency"] | None = None
 
 
 class ModelProfileSettings(BaseModel):
@@ -250,6 +261,12 @@ def _default_providers() -> dict[str, ProviderSettings]:
             api_mode="chat_completions",
             api_key_required=False,
         ),
+        "openrouter": ProviderSettings(
+            api_key_env="OPENROUTER_API_KEY",
+            default_model="anthropic/claude-sonnet-4-6",
+            base_url="https://openrouter.ai/api/v1",
+            api_mode="chat_completions",
+        ),
     }
 
 
@@ -325,6 +342,7 @@ _SECTION_MODELS: dict[str, type[BaseModel]] = {
 
 _PROVIDER_ENV_ALIASES: tuple[tuple[str, str], ...] = (
     ("OPENAI_COMPATIBLE_", "openai-compatible"),
+    ("OPENROUTER_", "openrouter"),
     ("GEMINI_", "gemini"),
     ("OPENAI_", "openai"),
     ("ANTHROPIC_", "anthropic"),

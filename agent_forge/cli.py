@@ -370,7 +370,7 @@ def model_capabilities(profile: str | None, output_format: str, probe: bool) -> 
 @click.option(
     "--provider",
     default=None,
-    help="LLM provider (gemini, openai, openai-compatible, anthropic)",
+    help="LLM provider (gemini, openai, openai-compatible, openrouter, anthropic)",
 )
 @click.option(
     "--base-url",
@@ -683,6 +683,7 @@ def _apply_model_profile(config: Any, name: str | None) -> None:
 
 def _create_configured_provider(cfg: Any, provider_name: str, api_key: str) -> Any:
     from agent_forge.config import RoutingSettings
+    from agent_forge.llm.factory import provider_kwargs_from_settings
     from agent_forge.llm.router import RoutingLLMProvider
 
     routing_cfg = getattr(cfg, "routing", None)
@@ -690,20 +691,7 @@ def _create_configured_provider(cfg: Any, provider_name: str, api_key: str) -> A
         return RoutingLLMProvider.from_config(cfg)
     providers = getattr(cfg, "providers", None)
     provider_cfg = providers.get(provider_name) if isinstance(providers, dict) else None
-    raw_base_url = getattr(provider_cfg, "base_url", None) if provider_cfg is not None else None
-    raw_api_mode = getattr(provider_cfg, "api_mode", None) if provider_cfg is not None else None
-    raw_caps = getattr(provider_cfg, "capabilities", None) if provider_cfg is not None else None
-    kwargs: dict[str, Any] = {}
-    if isinstance(raw_base_url, str) and raw_base_url:
-        kwargs["base_url"] = raw_base_url
-    if (
-        provider_name in ("openai", "openai-compatible")
-        and isinstance(raw_api_mode, str)
-        and raw_api_mode != "auto"
-    ):
-        kwargs["api_mode"] = raw_api_mode
-    if isinstance(raw_caps, dict) and raw_caps:
-        kwargs["capability_overrides"] = dict(raw_caps)
+    kwargs = provider_kwargs_from_settings(provider_name, provider_cfg)
     return create_provider(provider_name, api_key, **kwargs)
 
 

@@ -35,9 +35,10 @@ from agent_forge.llm.errors import (
     ToolNotFoundError,
     ToolTimeoutError,
 )
-from agent_forge.llm.factory import create_provider
+from agent_forge.llm.factory import create_provider, provider_kwargs_from_settings
 from agent_forge.llm.gemini import GeminiProvider
 from agent_forge.llm.openai import OpenAIProvider
+from agent_forge.llm.openrouter import OpenRouterProvider
 from agent_forge.llm.router import (
     ModelCandidate,
     RoutingDecision,
@@ -65,6 +66,7 @@ __all__ = [
     "Message",
     "ModelCandidate",
     "OpenAIProvider",
+    "OpenRouterProvider",
     "ProviderCapabilities",
     "Role",
     "RoutingDecision",
@@ -83,6 +85,7 @@ __all__ = [
     "TurnRoutingContext",
     "create_provider",
     "is_local_endpoint",
+    "provider_kwargs_from_settings",
     "query_provider_capabilities",
     "resolve_capabilities",
     "select_route",

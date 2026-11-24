@@ -194,6 +194,19 @@ def resolve_capabilities(
             base_url=base_url,
             force_non_native=True,
         )
+    elif normalized == "openrouter":
+        base = ProviderCapabilities(
+            tool_calling=True,
+            reasoning_continuity=True,
+            parallel_tool_calls=True,
+            prompt_caching=True,
+            context_editing=False,
+            structured_output=True,
+            stateful_response_ids=False,
+            native_tools=True,
+            max_context_tokens=_resolve_openai_max_context(model),
+            api_protocol="openrouter_chat_completions",
+        )
     elif normalized == "anthropic":
         short_anthropic = _strip_provider_prefix(model).lower()
         anthropic_ctx = 1_000_000 if _MILLION_CONTEXT_RE.search(short_anthropic) else 200_000

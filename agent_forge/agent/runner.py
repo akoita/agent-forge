@@ -391,17 +391,11 @@ def _create_provider_from_config(
     api_key: str,
 ) -> LLMProvider:
     from agent_forge.llm.factory import create_provider as default_provider_factory
+    from agent_forge.llm.factory import provider_kwargs_from_settings
 
     providers = getattr(cfg, "providers", None)
     provider_cfg = providers.get(provider_name) if isinstance(providers, dict) else None
-    kwargs: dict[str, Any] = {}
-    if provider_cfg is not None:
-        if provider_cfg.base_url:
-            kwargs["base_url"] = provider_cfg.base_url
-        if provider_name in ("openai", "openai-compatible") and provider_cfg.api_mode != "auto":
-            kwargs["api_mode"] = provider_cfg.api_mode
-        if provider_cfg.capabilities:
-            kwargs["capability_overrides"] = dict(provider_cfg.capabilities)
+    kwargs = provider_kwargs_from_settings(provider_name, provider_cfg)
     return default_provider_factory(provider_name, api_key, **kwargs)
 
 

@@ -65,7 +65,7 @@ bash scripts/record-demo.sh
   <tr>
     <td width="50%" valign="top">
       <strong>Multi-Provider &amp; Qualification</strong><br />
-      First-class adapters for Gemini, OpenAI, Anthropic, and custom OpenAI-compatible endpoints, tested with <code>models validate</code> and <code>models benchmark</code>.
+      First-class adapters for Gemini, OpenAI, Anthropic, OpenRouter, and custom OpenAI-compatible endpoints, tested with <code>models validate</code> and <code>models benchmark</code>.
     </td>
     <td width="50%" valign="top">
       <strong>Resumable Runs &amp; Event Stream</strong><br />

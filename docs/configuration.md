@@ -82,6 +82,15 @@ api_key_env = ""
 default_model = ""
 api_mode = "chat_completions"
 api_key_required = false
+
+[providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+default_model = "anthropic/claude-sonnet-4-6"
+api_mode = "chat_completions"
+fallback_models = []
+# Optional: allow_fallbacks, require_parameters, data_collection ("allow"|"deny"), zdr,
+#           provider_order, only_providers, ignore_providers, provider_sort, http_referer, app_title
 ```
 
 ## Environment Variables
@@ -93,6 +102,7 @@ api_key_required = false
 | `GEMINI_API_KEY`    | Google Gemini |
 | `OPENAI_API_KEY`    | OpenAI        |
 | `ANTHROPIC_API_KEY` | Anthropic     |
+| `OPENROUTER_API_KEY` | OpenRouter gateway |
 
 ### Config Overrides
 

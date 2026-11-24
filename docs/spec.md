@@ -285,6 +285,7 @@ class LLMProvider(ABC):
 | **Gemini**    | `agent_forge.llm.gemini`    | `GEMINI_API_KEY` env var    | `generateContent`, `gemini-3.1-flash-lite-preview` |
 | **OpenAI**    | `agent_forge.llm.openai`    | `OPENAI_API_KEY` env var    | `/v1/responses` (auto fallback to `/v1/chat/completions`), `gpt-4o` / `gpt-5.4` |
 | **OpenAI-Compatible** | `agent_forge.llm.openai` (`openai-compatible`) | Optional (`api_key_required`) | `/v1/chat/completions` on `base_url` (Ollama, vLLM, `llama.cpp`, gateways) |
+| **OpenRouter** | `agent_forge.llm.openrouter` (`openrouter`) | `OPENROUTER_API_KEY` env var | `/v1/chat/completions` on `https://openrouter.ai/api/v1`, `anthropic/claude-sonnet-4-6` |
 | **Anthropic** | `agent_forge.llm.anthropic` | `ANTHROPIC_API_KEY` env var | `/v1/messages`, `claude-sonnet-4-20250514`        |
 | **Router**    | `agent_forge.llm.router`    | Profile credentials         | Data-driven per-turn selection across configured profiles |
 
@@ -292,6 +293,7 @@ class LLMProvider(ABC):
 
 - **OpenAI:** Native OpenAI endpoints (`api_mode="auto"` or `"responses"`) call `POST /v1/responses` with `instructions`, `input` items, delta slicing after matching `previous_response_id`, `prompt_cache_key`, `reasoning.effort`, and `text.format` JSON schemas. Custom `base_url` endpoints or explicit `api_mode="chat_completions"` automatically use `POST /v1/chat/completions`.
 - **OpenAI-Compatible (`openai-compatible`):** Defaults to `chat_completions` on the configured `base_url`, omits `Authorization` when `api_key` is blank (keyless localhost servers via `is_local_endpoint`), omits `parallel_tool_calls` unless supported, degrades `structured_output=False` to system-prompt JSON schema instructions, and degrades `tool_calling=False` to fenced ```` ```tool_call``` ```` prompt emulation.
+- **OpenRouter (`openrouter`):** Extends `OpenAIProvider` over `chat_completions` with optional attribution headers (`HTTP-Referer`, `X-Title`), `usage.include` / `stream_options.include_usage` billing extraction (`TokenUsage.reported_cost_usd`), fallback `models` list, `provider` preferences (`allow_fallbacks`, `require_parameters`, `data_collection`, `zdr`, `order`, `only`, `ignore`, `sort`), `reasoning_details` multi-turn replay, and `upstream_provider` / `native_finish_reason` capture.
 - **Anthropic:** Emits ephemeral `cache_control` breakpoints on `system` and final tools when `cache_key` is set, maps `parallel_tool_calls=False` to `disable_parallel_tool_use`, passes `thinking` budgets, roundtrips `thinking`/`redacted_thinking` blocks, and records `cache_read_input_tokens`.
 - **Gemini:** Translates schemas to `functionDeclarations`, sets `responseMimeType`/`responseSchema` and `thinkingConfig.thinkingBudget`, extracts `thought: True` parts into `reasoning_blocks`, and reads `cachedContentTokenCount` / `thoughtsTokenCount`.
 - **Inspecting and probing capabilities:** Run `agent-forge models capabilities [PROFILE] [--probe] [--output-format text|json]`.
@@ -1269,6 +1271,14 @@ api_mode = "chat_completions"
 api_key_required = false
 # Optional: capabilities = { tool_calling = true, parallel_tool_calls = false, structured_output = true }
 
+[providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+default_model = "anthropic/claude-sonnet-4-6"
+api_mode = "chat_completions"
+fallback_models = []
+# Optional: allow_fallbacks, require_parameters, data_collection, zdr, provider_order, only_providers, ignore_providers, provider_sort, http_referer, app_title
+
 [model_profiles.openai-gpt54]
 provider = "openai"
 model = "gpt-5.4"
@@ -1343,6 +1353,10 @@ Format: `AGENT_FORGE_{SECTION}_{KEY}` (uppercase, underscored).
 | `AGENT_FORGE_PROVIDERS_OPENAI_COMPATIBLE_BASE_URL` | `providers["openai-compatible"].base_url` |
 | `AGENT_FORGE_PROVIDERS_OPENAI_COMPATIBLE_DEFAULT_MODEL` | `providers["openai-compatible"].default_model` |
 | `AGENT_FORGE_PROVIDERS_OPENAI_COMPATIBLE_API_KEY_REQUIRED` | `providers["openai-compatible"].api_key_required` |
+| `AGENT_FORGE_PROVIDERS_OPENROUTER_DEFAULT_MODEL` | `providers["openrouter"].default_model` |
+| `AGENT_FORGE_PROVIDERS_OPENROUTER_FALLBACK_MODELS` | `providers["openrouter"].fallback_models` (comma-separated) |
+| `AGENT_FORGE_PROVIDERS_OPENROUTER_ZDR` | `providers["openrouter"].zdr` |
+| `AGENT_FORGE_PROVIDERS_OPENROUTER_DATA_COLLECTION` | `providers["openrouter"].data_collection` |
 | `AGENT_FORGE_SANDBOX_MEMORY_LIMIT` | `sandbox.memory_limit` |
 | `AGENT_FORGE_QUEUE_BACKEND`        | `queue.backend`        |
 | `AGENT_FORGE_QUEUE_WORKTREE_ISOLATION` | `queue.worktree_isolation` |
@@ -1355,6 +1369,7 @@ Format: `AGENT_FORGE_{SECTION}_{KEY}` (uppercase, underscored).
 | `AGENT_FORGE_SERVICE_PORT`         | `service.port`         |
 | `GEMINI_API_KEY`                   | (direct, not prefixed) |
 | `OPENAI_API_KEY`                   | (direct, not prefixed) |
+| `OPENROUTER_API_KEY`               | (direct, not prefixed) |
 | `ANTHROPIC_API_KEY`                | (direct, not prefixed) |
 
 ---
