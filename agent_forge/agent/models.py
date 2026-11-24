@@ -40,6 +40,7 @@ class AgentConfig:
     system_prompt: str | None = None  # Override default system prompt
     profile_id: str | None = None  # Active agent profile for this run
     approval_mode: str = "auto"  # "auto" | "prompt" | "deny"
+    execution_mode: str = "tool_calling"  # "tool_calling" | "code_mode"
     max_cost_usd: float | None = None
     max_duration_seconds: float | None = None
     budget_action: str = "timeout"  # "timeout" | "pause"

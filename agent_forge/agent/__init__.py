@@ -1,6 +1,12 @@
 """Agent core — ReAct loop and agent lifecycle."""
 
 from agent_forge.agent.chat import ChatSessionRuntime, SlashCommandResult, run_chat_repl
+from agent_forge.agent.code_mode import (
+    CodeModeLimits,
+    HostToolBridge,
+    build_code_mode_registry,
+    search_tool_definitions,
+)
 from agent_forge.agent.context import (
     ContextAssembly,
     ContextEngine,
@@ -41,6 +47,7 @@ __all__ = [
     "AgentRun",
     "ChatSessionRuntime",
     "ClauseResult",
+    "CodeModeLimits",
     "CompletionContract",
     "ContextAssembly",
     "ContextEngine",
@@ -49,6 +56,7 @@ __all__ = [
     "ContractContext",
     "ContractEvaluation",
     "DevSession",
+    "HostToolBridge",
     "InvalidStateTransitionError",
     "JournalEntry",
     "JsonArtifactClause",
@@ -65,6 +73,7 @@ __all__ = [
     "ToolInvocation",
     "WorkingSet",
     "artifact_report_contract",
+    "build_code_mode_registry",
     "build_repo_map",
     "build_system_prompt",
     "coding_fix_contract",
@@ -77,5 +86,6 @@ __all__ = [
     "resolve_completion_contract",
     "run_chat_repl",
     "save_run",
+    "search_tool_definitions",
     "transition",
 ]

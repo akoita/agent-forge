@@ -5,6 +5,7 @@ from importlib.metadata import EntryPoint
 
 from agent_forge.tools.apply_patch import ApplyPatchTool
 from agent_forge.tools.base import Tool, ToolRegistry, ToolResult, validate_path
+from agent_forge.tools.code_mode import ExecuteCodeTool, SearchToolsTool
 from agent_forge.tools.create_pr import CreatePRTool
 from agent_forge.tools.edit_file import EditFileTool
 from agent_forge.tools.git_commit import GitCommitTool
@@ -53,6 +54,7 @@ __all__ = [
     "ApplyPatchTool",
     "CreatePRTool",
     "EditFileTool",
+    "ExecuteCodeTool",
     "GitCommitTool",
     "GitCreateBranchTool",
     "GitDiffTool",
@@ -74,6 +76,7 @@ __all__ = [
     "ReadFileTool",
     "RunShellTool",
     "SearchCodebaseTool",
+    "SearchToolsTool",
     "ShellCancelTool",
     "ShellPollTool",
     "ShellStartTool",

@@ -181,14 +181,25 @@ async def react_loop(
     if active_context is None and run.config.context_enabled:
         active_context = ContextEngine(repo_path=run.repo_path, task=run.task)
     active_journal = journal if journal is not None else RunJournal(run.id)
-    completed_call_ids, completed_results_by_key = _prepare_run_start(
+    active_gate = _resolve_approval_gate(run, approval_gate)
+    active_tools, code_bridge = _maybe_wrap_code_mode_tools(
         run,
         tools,
+        sandbox=sandbox,
+        journal=active_journal,
+        approval_gate=active_gate,
+        event_bus=event_bus,
+    )
+    completed_call_ids, completed_results_by_key = _prepare_run_start(
+        run,
+        active_tools,
         active_journal,
         base_revision=base_revision,
         verify_command=verify_command,
         context_engine=active_context,
     )
+    if code_bridge is not None:
+        code_bridge.set_completed_results(completed_results_by_key)
     set_trace_context(run.id)
     tracker = CostTracker(run_id=run.id, pricing_overrides=dict(run.config.pricing_overrides))
     loop_started = time.monotonic()
@@ -201,9 +212,8 @@ async def react_loop(
         thinking_budget_tokens=run.config.thinking_budget_tokens,
         thinking_level=run.config.thinking_level,
     )
-    tool_definitions = tools.list_definitions()
+    tool_definitions = active_tools.list_definitions()
     lifecycle_bus = event_bus if emit_lifecycle else None
-    active_gate = _resolve_approval_gate(run, approval_gate)
 
     await _emit(
         lifecycle_bus,
@@ -215,7 +225,7 @@ async def react_loop(
     try:
         resumed_stopped = await _resume_pending_tool_calls(
             run,
-            tools,
+            active_tools,
             sandbox,
             completed_call_ids,
             completed_results_by_key,
@@ -230,7 +240,7 @@ async def react_loop(
             await _run_loop_iterations(
                 run,
                 llm,
-                tools,
+                active_tools,
                 sandbox,
                 tool_definitions=tool_definitions,
                 llm_config=llm_config,
@@ -1704,8 +1714,11 @@ async def _execute_with_retry(
                         exit_code=1,
                     )
 
+            call_args = dict(tool_call.arguments)  # type: ignore[attr-defined]
+            if getattr(tool, "name", "") == "execute_code":
+                call_args.setdefault("_tool_call_id", getattr(tool_call, "id", ""))
             return await tool.execute(  # type: ignore[attr-defined, no-any-return]
-                dict(tool_call.arguments),  # type: ignore[attr-defined]
+                call_args,
                 sandbox,
             )
 
@@ -1734,6 +1747,31 @@ async def _execute_with_retry(
         output="",
         error="Unexpected retry exhaustion",
         exit_code=1,
+    )
+
+
+def _maybe_wrap_code_mode_tools(
+    run: AgentRun,
+    tools: ToolRegistry,
+    *,
+    sandbox: Sandbox,
+    journal: RunJournal,
+    approval_gate: ApprovalGate | None,
+    event_bus: EventBus | None,
+) -> tuple[ToolRegistry, Any | None]:
+    """Wrap *tools* in the 2-tool Code Mode surface when ``execution_mode == 'code_mode'``."""
+    mode = str(getattr(run.config, "execution_mode", "tool_calling")).strip().lower()
+    if mode != "code_mode":
+        return tools, None
+    from agent_forge.agent.code_mode import build_code_mode_registry
+
+    return build_code_mode_registry(
+        tools,
+        run=run,
+        sandbox=sandbox,
+        journal=journal,
+        approval_gate=approval_gate,
+        event_bus=event_bus,
     )
 
 

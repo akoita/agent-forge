@@ -105,6 +105,7 @@ def _agent_config_from_runtime(
     raw_mode = getattr(cfg.agent, "thinking_mode", None)
     raw_budget = getattr(cfg.agent, "thinking_budget_tokens", None)
     raw_level = getattr(cfg.agent, "thinking_level", None)
+    raw_exec = getattr(cfg.agent, "execution_mode", None)
     return AgentConfig(
         model=model,
         provider=provider,
@@ -113,6 +114,7 @@ def _agent_config_from_runtime(
         temperature=cfg.agent.temperature,
         profile_id=profile.id if profile is not None else session.profile_id,
         approval_mode=approval_mode,
+        execution_mode=raw_exec if isinstance(raw_exec, str) else "tool_calling",
         max_cost_usd=cfg.agent.max_cost_usd,
         max_duration_seconds=cfg.agent.max_duration_seconds,
         budget_action=cfg.agent.budget_action,
