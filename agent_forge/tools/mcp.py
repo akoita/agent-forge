@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 
+from agent_forge import __version__
 from agent_forge.observability import get_logger
 from agent_forge.tools.base import Tool, ToolRegistry, ToolResult
 
@@ -26,7 +27,7 @@ if TYPE_CHECKING:
 logger = get_logger("mcp")
 
 MCP_PROTOCOL_VERSION = "2025-03-26"
-_CLIENT_INFO = {"name": "agent-forge", "version": "0.6.0"}
+_CLIENT_INFO = {"name": "agent-forge", "version": __version__}
 _SAFE_CHILD_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP", "USER")
 _ENV_PLACEHOLDER_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _IDENT_RE = re.compile(r"[^A-Za-z0-9_-]+")

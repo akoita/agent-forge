@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from agent_forge import __version__
 from agent_forge.agent.models import RunState
 from agent_forge.config import MCPServerSettings
 from agent_forge.llm.base import Role
@@ -17,7 +18,7 @@ ACP_PROTOCOL_VERSION = 1
 AGENT_INFO: dict[str, str] = {
     "name": "agent-forge",
     "title": "Agent Forge",
-    "version": "0.6.0",
+    "version": __version__,
 }
 
 JSONRPC_PARSE_ERROR = -32700
