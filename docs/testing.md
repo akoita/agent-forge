@@ -44,6 +44,7 @@ hidden verifier tests injected only inside the independent verifier checkout:
   `openai-compatible` profile targeting `http://localhost:11434/v1` without API keys
   completes a smoke task (both with native tool calling and with prompt-emulated
   `tool_calling = false`).
+- `test_chat_warm_sandbox_compact_and_resume_across_restart` verifies multi-turn `ChatSessionRuntime` warm sandbox reuse, `/compact`, and `--resume latest` restoration across restarts (complemented by unit tests in `tests/unit/test_cli_chat_and_session.py`).
 - `python -m agent_forge.eval --suite smoke --report-dir .eval-artifacts --assert-gates`
   runs scripted `oracle`, `noop`, and `incomplete` profiles through the full
   `react_loop`, tool registry, `VerificationWorkspace`, `CompletionContract`, and
