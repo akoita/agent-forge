@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import redirect_stdout
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, BinaryIO, Protocol
+from typing import TYPE_CHECKING, Any, BinaryIO, Protocol
 
 from agent_forge.acp.protocol import (
     ACP_PROTOCOL_VERSION,
@@ -22,6 +22,7 @@ from agent_forge.acp.protocol import (
     JSONRPC_INVALID_REQUEST,
     JSONRPC_METHOD_NOT_FOUND,
     JSONRPC_PARSE_ERROR,
+    build_replay_updates,
     classify_tool_kind,
     extract_prompt_text,
     make_error,
@@ -35,9 +36,12 @@ from agent_forge.acp.protocol import (
 from agent_forge.agent.approvals import ApprovalGate, ApprovalRequest
 from agent_forge.agent.budget import CancellationToken
 from agent_forge.agent.models import AgentConfig, AgentRun
+from agent_forge.agent.session import DevSession, SessionStore, validate_session_id
 from agent_forge.config import ForgeConfig, MCPServerSettings, load_config
-from agent_forge.llm.base import Role
 from agent_forge.observability import get_logger
+
+if TYPE_CHECKING:
+    from agent_forge.agent.context import ContextEngine
 from agent_forge.orchestration.event_stream import (
     JournalEventSink,
     StreamEvent,
@@ -104,9 +108,15 @@ class ACPSession:
     cwd: str
     mcp_servers: dict[str, MCPServerSettings] = field(default_factory=dict)
     allowed_categories: set[str] = field(default_factory=set)
+    dev_session: DevSession | None = None
+    context_engine: ContextEngine | None = None
     active_run_task: asyncio.Task[None] | None = None
     cancellation_token: CancellationToken | None = None
     pending_permission_ids: set[int] = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        if self.dev_session is None:
+            self.dev_session = DevSession(repo_path=self.cwd, id=self.session_id)
 
 
 RunExecutor = Callable[
@@ -132,13 +142,6 @@ def _parse_permission_option(
     return False, False
 
 
-def _extract_last_assistant_message(run: AgentRun) -> str:
-    for msg in reversed(run.messages):
-        if msg.role == Role.ASSISTANT and msg.content and msg.content.strip():
-            return msg.content
-    return ""
-
-
 class ACPServer:
     """JSON-RPC 2.0 ACP agent server bridged to Agent Forge runs and approvals."""
 
@@ -152,6 +155,7 @@ class ACPServer:
         sandbox_backend_override: str | None = None,
         max_iterations_override: int | None = None,
         permission_timeout_seconds: float = 300.0,
+        session_store: SessionStore | None = None,
         run_executor: RunExecutor | None = None,
         sandbox_factory: Any = None,
         provider_factory: Any = None,
@@ -164,6 +168,7 @@ class ACPServer:
         self._sandbox_backend_override = sandbox_backend_override
         self._max_iterations_override = max_iterations_override
         self._permission_timeout_seconds = permission_timeout_seconds
+        self._session_store = session_store or SessionStore()
         self._sandbox_factory = sandbox_factory
         self._provider_factory = provider_factory
         self._tools_factory = tools_factory
@@ -185,9 +190,10 @@ class ACPServer:
         approval_gate: ApprovalGate,
         cancellation_token: CancellationToken,
     ) -> AgentRun:
-        from agent_forge.agent.runner import run_agent_task
+        from agent_forge.agent.runner import _resolve_context_engine_for_config, run_agent_task
         from agent_forge.llm.qualification import is_api_key_required
 
+        assert session.dev_session is not None  # noqa: S101
         provider_name = agent_cfg.provider
         api_key = ""
         if self._provider_factory is None:
@@ -198,6 +204,16 @@ class ACPServer:
             if is_api_key_required(cfg, provider_name, base_url=base_url) and not api_key:
                 msg = f"Missing API key environment variable '{env_name}' for '{provider_name}'"
                 raise RuntimeError(msg)
+
+        if session.context_engine is None and cfg.context.enabled:
+            session.context_engine = _resolve_context_engine_for_config(
+                session.cwd,
+                prompt_text,
+                cfg,
+                agent_cfg,
+                dev_session=session.dev_session,
+            )
+
         return await run_agent_task(
             prompt_text,
             session.cwd,
@@ -208,6 +224,8 @@ class ACPServer:
             event_bus=event_bus,
             cancellation_token=cancellation_token,
             approval_gate=approval_gate,
+            context_engine=session.context_engine,
+            dev_session=session.dev_session,
             sandbox_factory=self._sandbox_factory,
             provider_factory=self._provider_factory,
             tools_factory=self._tools_factory,
@@ -300,6 +318,81 @@ class ACPServer:
             )
         )
 
+    def _persist_acp_session(self, session: ACPSession) -> None:
+        if session.dev_session is None:
+            return
+        session.dev_session.repo_path = session.cwd
+        session.dev_session.metadata["acp"] = {
+            "allowed_categories": sorted(session.allowed_categories),
+            "mcp_servers": {
+                name: srv.model_dump(mode="json") for name, srv in session.mcp_servers.items()
+            },
+        }
+        self._session_store.save(session.dev_session)
+
+    def _create_acp_session(
+        self,
+        *,
+        session_id: str,
+        cwd: str,
+        mcp_servers: dict[str, MCPServerSettings],
+    ) -> ACPSession:
+        dev_session = DevSession(
+            repo_path=cwd,
+            id=session_id,
+            provider=self._provider_override or self._config.agent.default_provider,
+            model=self._model_override or self._config.agent.default_model,
+            approval_mode=self._approval_mode,
+            sandbox_backend=self._sandbox_backend_override or self._config.sandbox.backend,
+            sandbox_image=self._config.sandbox.image,
+        )
+        session = ACPSession(
+            session_id=session_id,
+            cwd=cwd,
+            mcp_servers=mcp_servers,
+            dev_session=dev_session,
+        )
+        self._sessions[session_id] = session
+        self._persist_acp_session(session)
+        return session
+
+    def _restore_acp_session(
+        self,
+        *,
+        session_id: str,
+        raw_cwd: str,
+        incoming_mcp: dict[str, MCPServerSettings],
+    ) -> ACPSession | None:
+        dev_session = self._session_store.load(session_id)
+        target_cwd = str(Path(raw_cwd).resolve()) if raw_cwd else dev_session.repo_path
+        if not target_cwd or not Path(target_cwd).is_dir():
+            return None
+        acp_meta = dev_session.metadata.get("acp")
+        allowed_categories: set[str] = set()
+        mcp_servers: dict[str, MCPServerSettings] = {}
+        if isinstance(acp_meta, dict):
+            allowed_categories = {
+                str(cat) for cat in acp_meta.get("allowed_categories", []) if str(cat)
+            }
+            raw_saved = acp_meta.get("mcp_servers")
+            if isinstance(raw_saved, dict):
+                mcp_servers = {
+                    str(name): MCPServerSettings(**srv)
+                    for name, srv in raw_saved.items()
+                    if isinstance(srv, dict)
+                }
+        if incoming_mcp:
+            mcp_servers.update(incoming_mcp)
+        session = ACPSession(
+            session_id=session_id,
+            cwd=target_cwd,
+            mcp_servers=mcp_servers,
+            allowed_categories=allowed_categories,
+            dev_session=dev_session,
+        )
+        self._sessions[session_id] = session
+        return session
+
     async def _handle_session_new(
         self,
         req_id: int | str | None,
@@ -318,7 +411,7 @@ class ACPServer:
         resolved_cwd = str(Path(raw_cwd).resolve())
         session_id = f"sess_{uuid.uuid4().hex[:16]}"
         mcp_servers = translate_acp_mcp_servers(params.get("mcpServers"))
-        self._sessions[session_id] = ACPSession(
+        self._create_acp_session(
             session_id=session_id,
             cwd=resolved_cwd,
             mcp_servers=mcp_servers,
@@ -330,26 +423,71 @@ class ACPServer:
         req_id: int | str | None,
         params: dict[str, Any],
     ) -> None:
-        session_id = str(params.get("sessionId", "")).strip()
-        raw_cwd = str(params.get("cwd", "")).strip()
-        if not session_id or not raw_cwd or not Path(raw_cwd).is_dir():
+        raw_id = str(params.get("sessionId", "")).strip()
+        try:
+            session_id = validate_session_id(raw_id)
+        except ValueError:
             await self._send_json(
                 make_error(
                     req_id,
                     JSONRPC_INVALID_PARAMS,
-                    "session/load requires valid 'sessionId' and existing 'cwd'",
+                    f"Invalid 'sessionId' for session/load: {raw_id!r}",
                 )
             )
             return
-        existing = self._sessions.get(session_id)
-        if existing is None:
-            self._sessions[session_id] = ACPSession(
+
+        raw_cwd = str(params.get("cwd", "")).strip()
+        if raw_cwd and not Path(raw_cwd).is_dir():
+            await self._send_json(
+                make_error(
+                    req_id,
+                    JSONRPC_INVALID_PARAMS,
+                    f"Session 'cwd' must be an existing directory: {raw_cwd!r}",
+                )
+            )
+            return
+
+        incoming_mcp = translate_acp_mcp_servers(params.get("mcpServers"))
+        session = self._sessions.get(session_id)
+        if session is None and self._session_store.exists(session_id):
+            session = self._restore_acp_session(
+                session_id=session_id,
+                raw_cwd=raw_cwd,
+                incoming_mcp=incoming_mcp,
+            )
+            if session is None:
+                await self._send_json(
+                    make_error(
+                        req_id,
+                        JSONRPC_INVALID_PARAMS,
+                        "Persisted session directory no longer exists",
+                    )
+                )
+                return
+        elif session is None:
+            if not raw_cwd:
+                await self._send_json(
+                    make_error(
+                        req_id,
+                        JSONRPC_INVALID_PARAMS,
+                        "session/load requires existing 'cwd' when session is not stored on disk",
+                    )
+                )
+                return
+            session = self._create_acp_session(
                 session_id=session_id,
                 cwd=str(Path(raw_cwd).resolve()),
-                mcp_servers=translate_acp_mcp_servers(params.get("mcpServers")),
+                mcp_servers=incoming_mcp,
             )
         else:
-            existing.cwd = str(Path(raw_cwd).resolve())
+            if raw_cwd:
+                session.cwd = str(Path(raw_cwd).resolve())
+            if incoming_mcp:
+                session.mcp_servers.update(incoming_mcp)
+
+        assert session.dev_session is not None  # noqa: S101
+        for payload in build_replay_updates(session.dev_session):
+            await self._send_json(make_notification("session/update", payload))
         await self._send_json(make_response(req_id, {}))
 
     async def _handle_session_cancel(self, params: dict[str, Any]) -> None:
@@ -469,6 +607,8 @@ class ACPServer:
         gate = self._make_permission_gate(session)
         await sink.attach(event_bus)
         sub_ids = await self._attach_acp_event_forwarder(session, event_bus)
+        assert session.dev_session is not None  # noqa: S101
+        turns_before = len(session.dev_session.turns)
         try:
             run = await self._run_executor(
                 session,
@@ -479,8 +619,15 @@ class ACPServer:
                 gate,
                 token,
             )
-            final_text = _extract_last_assistant_message(run)
-            if final_text:
+            if len(session.dev_session.turns) == turns_before:
+                session.dev_session.record_turn(
+                    prompt=prompt_text,
+                    run=run,
+                    context_engine=session.context_engine,
+                )
+            self._persist_acp_session(session)
+            final_text = session.dev_session.turns[-1].response
+            if final_text and final_text.strip():
                 await self._send_json(
                     make_notification(
                         "session/update",

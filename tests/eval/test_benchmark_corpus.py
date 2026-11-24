@@ -2158,3 +2158,176 @@ async def test_dev_session_restart_preserves_messages_working_set_and_compaction
     assert "app.py" in restored_engine.working_set.modified_files
     assert restored_engine._compaction_epoch >= 1
     assert restored_engine._summary_message_text.startswith("[CONTEXT SUMMARY")
+
+
+class _EvalMemReader:
+    def __init__(self) -> None:
+        import asyncio
+
+        self._queue: asyncio.Queue[bytes] = asyncio.Queue()
+
+    async def close(self) -> None:
+        await self._queue.put(b"")
+
+    async def readline(self) -> bytes:
+        return await self._queue.get()
+
+
+class _EvalMemWriter:
+    def __init__(self) -> None:
+        import asyncio
+
+        self.messages: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        self._buf = bytearray()
+
+    def write(self, data: bytes) -> None:
+        self._buf.extend(data)
+        while b"\n" in self._buf:
+            line, _, rest = self._buf.partition(b"\n")
+            self._buf = bytearray(rest)
+            if line.strip():
+                self.messages.put_nowait(json.loads(line.decode("utf-8")))
+
+    async def drain(self) -> None:
+        import asyncio
+
+        await asyncio.sleep(0)
+
+    def close(self) -> None:
+        pass
+
+
+async def _acp_send_and_wait(
+    reader: _EvalMemReader,
+    writer: _EvalMemWriter,
+    msg: dict[str, object],
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    import asyncio
+
+    await reader._queue.put((json.dumps(msg) + "\n").encode("utf-8"))
+    updates: list[dict[str, object]] = []
+    target_id = msg["id"]
+    while True:
+        item = await asyncio.wait_for(writer.messages.get(), timeout=5.0)
+        if item.get("id") == target_id:
+            return updates, item
+        updates.append(item)
+
+
+@pytest.mark.asyncio
+async def test_acp_multi_turn_stateful_session_and_disk_reload_replay(tmp_path: Path) -> None:
+    """Exit criterion: two sequential ACP prompts share context and reload replays from disk."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from agent_forge.acp import ACPServer
+    from agent_forge.agent.session import SessionStore
+    from agent_forge.config import ForgeConfig
+    from agent_forge.llm.base import LLMResponse, Message, Role, TokenUsage
+    from agent_forge.tools import create_default_registry
+
+    repo = tmp_path / "acp_repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("x = 1\n", encoding="utf-8")
+    store_dir = tmp_path / "acp_store"
+
+    turn2_history: list[str] = []
+
+    def _make_llm(reply: str, *, record: bool = False) -> AsyncMock:
+        llm = AsyncMock()
+
+        async def _complete(messages: list[Message], **_kw: object) -> LLMResponse:
+            if record:
+                turn2_history.extend(m.content for m in messages if m.role != Role.SYSTEM)
+            return LLMResponse(
+                content=reply,
+                tool_calls=[],
+                usage=TokenUsage(20, 10, 30),
+                finish_reason="stop",
+            )
+
+        llm.complete.side_effect = _complete
+        return llm
+
+    llms = iter([_make_llm("First turn done."), _make_llm("Second turn done.", record=True)])
+
+    def _sb(_c: object) -> AsyncMock:
+        s = AsyncMock()
+        s.exec.return_value = MagicMock(exit_code=0, stdout="", stderr="")
+        return s
+
+    cfg = ForgeConfig()
+    s1 = ACPServer(
+        config=cfg,
+        approval_mode="auto",
+        session_store=SessionStore(base_dir=store_dir),
+        sandbox_factory=_sb,
+        provider_factory=lambda _p, _k: next(llms),
+        tools_factory=lambda: create_default_registry(load_plugins=False),
+    )
+    r1, w1 = _EvalMemReader(), _EvalMemWriter()
+    t1 = asyncio.create_task(s1.serve(r1, w1))
+    await _acp_send_and_wait(
+        r1, w1, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+    )
+    _, sess = await _acp_send_and_wait(
+        r1, w1, {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"cwd": str(repo)}}
+    )
+    sess_result = sess["result"]
+    assert isinstance(sess_result, dict)
+    sid = str(sess_result["sessionId"])
+    await _acp_send_and_wait(
+        r1,
+        w1,
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "session/prompt",
+            "params": {"sessionId": sid, "prompt": [{"type": "text", "text": "Prompt one"}]},
+        },
+    )
+    await _acp_send_and_wait(
+        r1,
+        w1,
+        {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "session/prompt",
+            "params": {"sessionId": sid, "prompt": [{"type": "text", "text": "Prompt two"}]},
+        },
+    )
+    await r1.close()
+    await t1
+    assert "Prompt one" in turn2_history
+    assert "First turn done." in turn2_history
+
+    s2 = ACPServer(
+        config=cfg,
+        approval_mode="auto",
+        session_store=SessionStore(base_dir=store_dir),
+    )
+    r2, w2 = _EvalMemReader(), _EvalMemWriter()
+    t2 = asyncio.create_task(s2.serve(r2, w2))
+    replay, load_resp = await _acp_send_and_wait(
+        r2,
+        w2,
+        {
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "session/load",
+            "params": {"sessionId": sid, "cwd": str(repo)},
+        },
+    )
+    await r2.close()
+    await t2
+    assert load_resp["result"] == {}
+    replayed_texts = [
+        item["params"]["update"]["content"]["text"]  # type: ignore[index]
+        for item in replay
+    ]
+    assert replayed_texts == [
+        "Prompt one",
+        "First turn done.",
+        "Prompt two",
+        "Second turn done.",
+    ]

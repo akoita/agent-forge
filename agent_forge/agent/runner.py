@@ -26,6 +26,7 @@ from agent_forge.sandbox.toolchain import DEFAULT_SANDBOX_IMAGE, resolve_sandbox
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from agent_forge.agent.session import DevSession
     from agent_forge.config import ForgeConfig
     from agent_forge.llm.base import LLMProvider
     from agent_forge.orchestration.events import EventBus
@@ -197,6 +198,8 @@ def _resolve_context_engine_for_config(
     task: str,
     cfg: Any,
     agent_config: AgentConfig | None = None,
+    *,
+    dev_session: DevSession | None = None,
 ) -> ContextEngine | None:
     ctx_cfg = getattr(cfg, "context", None)
     if isinstance(ctx_cfg, ContextSettings):
@@ -204,14 +207,19 @@ def _resolve_context_engine_for_config(
             if agent_config is not None:
                 agent_config.context_enabled = False
             return None
-        engine = ContextEngine(
-            repo_path=repo_path,
-            task=task,
-            policy=ContextPolicy.from_settings(ctx_cfg),
+        policy = ContextPolicy.from_settings(ctx_cfg)
+        engine = (
+            dev_session.build_context_engine(task=task, policy=policy)
+            if dev_session is not None
+            else ContextEngine(repo_path=repo_path, task=task, policy=policy)
         )
         _sync_context_engine_window(engine, cfg, agent_config)
         return engine
-    return ContextEngine(repo_path=repo_path, task=task)
+    return (
+        dev_session.build_context_engine(task=task)
+        if dev_session is not None
+        else ContextEngine(repo_path=repo_path, task=task)
+    )
 
 
 def render_task_system_prompt(
@@ -408,6 +416,47 @@ async def _attach_mcp_tools(cfg: Any, tools: ToolRegistry) -> Any:
     return manager
 
 
+def _prepare_agent_run_for_task(
+    task: str,
+    repo_path: str,
+    tools: ToolRegistry,
+    sandbox_config: SandboxConfig,
+    agent_config: AgentConfig,
+    *,
+    run_id: str | None,
+    active_context: ContextEngine | None,
+    prompt_scope: str | None,
+    report_schema: str | None,
+    discover_extensions: bool,
+    dev_session: DevSession | None,
+) -> AgentRun:
+    if dev_session is not None and dev_session.messages:
+        if dev_session.system_prompt and agent_config.system_prompt is None:
+            agent_config.system_prompt = dev_session.system_prompt
+        return dev_session.prepare_next_run(task, config=agent_config, run_id=run_id)
+
+    agent_config.system_prompt = render_task_system_prompt(
+        task,
+        tools,
+        sandbox_config,
+        repo_path=repo_path,
+        context_engine=active_context,
+        prompt_scope=prompt_scope,
+        report_schema=report_schema,
+        discover_extensions=discover_extensions,
+    )
+    if dev_session is not None:
+        return dev_session.prepare_next_run(task, config=agent_config, run_id=run_id)
+    run_kwargs: dict[str, Any] = {
+        "task": task,
+        "repo_path": repo_path,
+        "config": agent_config,
+    }
+    if run_id is not None:
+        run_kwargs["id"] = run_id
+    return AgentRun(**run_kwargs)
+
+
 async def run_agent_task(
     task: str,
     repo_path: str,
@@ -425,6 +474,7 @@ async def run_agent_task(
     cancellation_token: Any = None,
     completion_contract: Any = None,
     context_engine: ContextEngine | None = None,
+    dev_session: DevSession | None = None,
     approval_gate: Any = None,
     on_sandbox_started: Callable[[Sandbox], None] | None = None,
     post_run_hook: PostRunHook | None = None,
@@ -446,27 +496,28 @@ async def run_agent_task(
         active_context = (
             context_engine
             if context_engine is not None
-            else _resolve_context_engine_for_config(repo_path, task, cfg, agent_config)
+            else _resolve_context_engine_for_config(
+                repo_path,
+                task,
+                cfg,
+                agent_config,
+                dev_session=dev_session,
+            )
         )
         sandbox_config = build_sandbox_config(cfg, repo_path=repo_path)
-        agent_config.system_prompt = render_task_system_prompt(
+        agent_run = _prepare_agent_run_for_task(
             task,
+            repo_path,
             tools,
             sandbox_config,
-            repo_path=repo_path,
-            context_engine=active_context,
+            agent_config,
+            run_id=run_id,
+            active_context=active_context,
             prompt_scope=prompt_scope,
             report_schema=report_schema,
             discover_extensions=discover_extensions,
+            dev_session=dev_session,
         )
-        run_kwargs: dict[str, Any] = {
-            "task": task,
-            "repo_path": repo_path,
-            "config": agent_config,
-        }
-        if run_id is not None:
-            run_kwargs["id"] = run_id
-        agent_run = AgentRun(**run_kwargs)
 
         if sandbox_factory is None:
             from agent_forge.sandbox.factory import create_sandbox as default_sandbox_factory
@@ -487,7 +538,7 @@ async def run_agent_task(
         else:
             llm = provider_factory(provider_name, api_key)
 
-        return await execute_agent_run(
+        result_run = await execute_agent_run(
             agent_run,
             sandbox_config,
             llm,
@@ -503,6 +554,13 @@ async def run_agent_task(
             post_run_hook=post_run_hook,
             react_loop_fn=react_loop_fn,
         )
+        if dev_session is not None:
+            dev_session.record_turn(
+                prompt=task,
+                run=result_run,
+                context_engine=active_context,
+            )
+        return result_run
     finally:
         if mcp_manager is not None:
             await mcp_manager.close()

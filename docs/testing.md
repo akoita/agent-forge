@@ -167,6 +167,8 @@ tests/
 │       ├── test_app.py
 │       └── utils.py
 ├── unit/                               # Fast, isolated, no external deps
+│   ├── test_acp_server.py              # ACP server initialization, streaming, permissions
+│   ├── test_acp_stateful_sessions.py   # Stateful multi-turn ACP sessions & disk replay
 │   ├── test_agent_core.py              # ReAct loop with mocked LLM
 │   ├── test_bwrap_sandbox.py           # Bubblewrap sandbox unit tests
 │   ├── test_challenge_evidence.py      # PoA challenge evidence generator (plugin)
