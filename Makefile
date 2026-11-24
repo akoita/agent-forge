@@ -1,4 +1,4 @@
-.PHONY: setup build-sandbox build-sandbox-node build-sandbox-full test test-unit test-integration test-e2e eval lint format quality run clean update-prices
+.PHONY: setup build-sandbox build-sandbox-node build-sandbox-go build-sandbox-rust build-sandbox-jvm build-sandbox-full test test-unit test-integration test-e2e eval lint format quality run clean update-prices
 
 update-prices:             ## Refresh vendored model pricing from LiteLLM
 	python scripts/update_prices.py
@@ -11,6 +11,15 @@ build-sandbox:             ## Build the sandbox Docker image
 
 build-sandbox-node:        ## Build the Node-focused sandbox image
 	docker build -t agent-forge-sandbox:node -f agent_forge/sandbox/Dockerfile.node .
+
+build-sandbox-go:          ## Build the Go-focused sandbox image
+	docker build -t agent-forge-sandbox:go -f agent_forge/sandbox/Dockerfile.go .
+
+build-sandbox-rust:        ## Build the Rust-focused sandbox image
+	docker build -t agent-forge-sandbox:rust -f agent_forge/sandbox/Dockerfile.rust .
+
+build-sandbox-jvm:         ## Build the JVM-focused sandbox image
+	docker build -t agent-forge-sandbox:jvm -f agent_forge/sandbox/Dockerfile.jvm .
 
 build-sandbox-full:        ## Build the full Python+Node sandbox image
 	docker build -t agent-forge-sandbox:full -f agent_forge/sandbox/Dockerfile.full .

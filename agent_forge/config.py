@@ -16,7 +16,7 @@ from pathlib import Path
 from types import UnionType
 from typing import Any, Literal, Union, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Config Section Models
@@ -66,11 +66,22 @@ class SandboxSettings(BaseModel):
 
     backend: str = "docker"
     image: str = DEFAULT_SANDBOX_IMAGE
+    toolchain: Literal["auto", "python", "node", "go", "rust", "jvm", "full"] = "auto"
     cpu_limit: float = 1.0
     memory_limit: str = "512m"
     timeout_seconds: int = 300
     network_enabled: bool = False
     writable_cache_mounts: bool = True
+    published_ports: list[str] = Field(default_factory=list)
+
+    @field_validator("published_ports")
+    @classmethod
+    def _validate_published_ports(cls, value: list[str]) -> list[str]:
+        if value:
+            from agent_forge.sandbox.base import parse_published_ports
+
+            parse_published_ports(value)
+        return [item.strip() for item in value]
 
 
 class QueueSettings(BaseModel):

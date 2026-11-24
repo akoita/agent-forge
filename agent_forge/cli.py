@@ -372,6 +372,20 @@ def model_capabilities(profile: str | None, output_format: str, probe: bool) -> 
 )
 @click.option("--sandbox-image", default=None, help="Sandbox image to run")
 @click.option(
+    "--toolchain",
+    default=None,
+    type=click.Choice(
+        ["auto", "python", "node", "go", "rust", "jvm", "full"], case_sensitive=False
+    ),
+    help="Sandbox toolchain preset or auto-detection.",
+)
+@click.option(
+    "--publish-port",
+    multiple=True,
+    type=str,
+    help="Publish sandbox port to host loopback (e.g. 8080:3000). Repeatable; requires --network.",
+)
+@click.option(
     "--sandbox-backend",
     default=None,
     type=click.Choice(["docker", "bwrap", "auto"], case_sensitive=False),
@@ -447,6 +461,8 @@ def run(
     budget_action: str | None,
     approval_mode: str | None,
     sandbox_image: str | None,
+    toolchain: str | None,
+    publish_port: tuple[str, ...],
     sandbox_backend: str | None,
     network: bool | None,
     command_timeout: int | None,
@@ -493,6 +509,8 @@ def run(
             budget_action=budget_action,
             approval_mode=approval_mode,
             sandbox_image=sandbox_image,
+            toolchain=toolchain,
+            publish_port=publish_port,
             sandbox_backend=sandbox_backend,
             network=network,
             command_timeout=command_timeout,
@@ -650,7 +668,7 @@ async def _run_agent(
     from agent_forge.orchestration.events import EventBus
     from agent_forge.tools import create_default_registry
 
-    sandbox_config = _build_sandbox_config(cfg)
+    sandbox_config = _build_sandbox_config(cfg, repo_path=repo)
     agent_config = _build_agent_config(cfg, provider_name, profile=profile)
     prompt_scope = profile.prompt_scope if profile else None
     completion_contract = resolve_completion_contract(
@@ -770,7 +788,7 @@ async def _execute_with_workspace(
     from agent_forge.orchestration.event_stream import JournalEventSink
     from agent_forge.sandbox.factory import create_sandbox
 
-    sandbox_config = _build_sandbox_config(cfg)
+    sandbox_config = _build_sandbox_config(cfg, repo_path=agent_run.repo_path)
     sandbox = create_sandbox(sandbox_config)
     sink = JournalEventSink(run_id=agent_run.id)
     cancellation_token = CancellationToken()
@@ -971,11 +989,11 @@ def _make_task_runner(
     return _runner
 
 
-def _build_sandbox_config(cfg: Any) -> SandboxConfig:
+def _build_sandbox_config(cfg: Any, *, repo_path: str | Path | None = None) -> SandboxConfig:
     """Convert resolved app config into a sandbox runtime config."""
     from agent_forge.agent.runner import build_sandbox_config
 
-    return build_sandbox_config(cfg)
+    return build_sandbox_config(cfg, repo_path=repo_path)
 
 
 def _build_approval_gate(mode: object) -> Any:
@@ -1036,6 +1054,8 @@ def _build_cli_overrides(
     budget_action: str | None = None,
     approval_mode: str | None = None,
     sandbox_image: str | None = None,
+    toolchain: str | None = None,
+    publish_port: tuple[str, ...] = (),
     sandbox_backend: str | None = None,
     network: bool | None = None,
     command_timeout: int | None = None,
@@ -1050,6 +1070,8 @@ def _build_cli_overrides(
         "agent.budget_action": budget_action.lower() if budget_action is not None else None,
         "agent.approval_mode": approval_mode.lower() if approval_mode is not None else None,
         "sandbox.image": sandbox_image,
+        "sandbox.toolchain": toolchain.lower() if toolchain is not None else None,
+        "sandbox.published_ports": list(publish_port) if publish_port else None,
         "sandbox.backend": sandbox_backend,
         "sandbox.network_enabled": network,
         "sandbox.timeout_seconds": command_timeout,

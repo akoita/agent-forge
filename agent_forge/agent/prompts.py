@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from agent_forge.llm.base import ToolDefinition
 
 _SYSTEM_PROMPT_TEMPLATE = """\
@@ -29,7 +31,7 @@ precondition-checked edits; do not rewrite entire files unnecessarily.
 - Backend: {sandbox_backend}
 - Runtime image: {sandbox_image}
 - Network: {network_status}
-- Max shell command timeout: {command_timeout_seconds}s{repo_context}
+- Max shell command timeout: {command_timeout_seconds}s{published_ports_section}{repo_context}
 
 ## Task
 {task_description}"""
@@ -78,6 +80,7 @@ def render_system_prompt(
     sandbox_image: str = "agent-forge-sandbox:latest",
     network_enabled: bool = False,
     command_timeout_seconds: int = 300,
+    published_ports: Sequence[str] | None = None,
     repo_instructions: str | None = None,
     repo_map: str | None = None,
     scoped_instructions: str | None = None,
@@ -87,18 +90,24 @@ def render_system_prompt(
 ) -> str:
     """Render a system prompt template with runtime context and extensions."""
     network_rule, network_status = _format_network_rule(network_enabled)
-
-    prompt = template.format(
-        tool_descriptions=_format_tool_descriptions(tool_definitions),
-        sandbox_backend=sandbox_backend,
-        sandbox_image=sandbox_image,
-        network_rule=network_rule,
-        network_status=network_status,
-        command_timeout_seconds=command_timeout_seconds,
-        repo_context=_format_repo_context(repo_instructions, repo_map),
-        task_description=task,
+    format_vars: dict[str, object] = {
+        "tool_descriptions": _format_tool_descriptions(tool_definitions),
+        "sandbox_backend": sandbox_backend,
+        "sandbox_image": sandbox_image,
+        "network_rule": network_rule,
+        "network_status": network_status,
+        "command_timeout_seconds": command_timeout_seconds,
+        "repo_context": _format_repo_context(repo_instructions, repo_map),
+        "task_description": task,
         **template_vars,
-    )
+    }
+    if "{published_ports_section}" in template:
+        ports_list = [p.strip() for p in (published_ports or ()) if p and p.strip()]
+        format_vars["published_ports_section"] = (
+            f"\n- Published ports: {', '.join(ports_list)}" if ports_list else ""
+        )
+
+    prompt = template.format(**format_vars)
 
     if scoped_instructions and scoped_instructions.strip():
         prompt += f"\n\n{scoped_instructions.strip()}"
@@ -122,6 +131,7 @@ def build_system_prompt(
     sandbox_image: str = "agent-forge-sandbox:latest",
     network_enabled: bool = False,
     command_timeout_seconds: int = 300,
+    published_ports: Sequence[str] | None = None,
     repo_instructions: str | None = None,
     repo_map: str | None = None,
     scoped_instructions: str | None = None,
@@ -137,6 +147,7 @@ def build_system_prompt(
         sandbox_image=sandbox_image,
         network_enabled=network_enabled,
         command_timeout_seconds=command_timeout_seconds,
+        published_ports=published_ports,
         repo_instructions=repo_instructions,
         repo_map=repo_map,
         scoped_instructions=scoped_instructions,
@@ -179,7 +190,7 @@ extension instructions below.
 - Backend: {sandbox_backend}
 - Runtime image: {sandbox_image}
 - Network: {network_status}
-- Max shell command timeout: {command_timeout_seconds}s{repo_context}
+- Max shell command timeout: {command_timeout_seconds}s{published_ports_section}{repo_context}
 
 ## Task
 {task_description}"""
@@ -194,6 +205,7 @@ def build_hosted_system_prompt(
     sandbox_image: str = "agent-forge-sandbox:latest",
     network_enabled: bool = False,
     command_timeout_seconds: int = 300,
+    published_ports: Sequence[str] | None = None,
     repo_instructions: str | None = None,
     repo_map: str | None = None,
     scoped_instructions: str | None = None,
@@ -209,6 +221,7 @@ def build_hosted_system_prompt(
         sandbox_image=sandbox_image,
         network_enabled=network_enabled,
         command_timeout_seconds=command_timeout_seconds,
+        published_ports=published_ports,
         repo_instructions=repo_instructions,
         repo_map=repo_map,
         scoped_instructions=scoped_instructions,

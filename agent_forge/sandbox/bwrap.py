@@ -18,6 +18,8 @@ from agent_forge.sandbox.base import (
     Sandbox,
     SandboxConfig,
     SandboxState,
+    parse_published_port,
+    parse_published_ports,
     sanitize_sandbox_env,
 )
 from agent_forge.sandbox.sessions import LocalPtySessionManager, SessionLimits, SessionSnapshot
@@ -79,6 +81,25 @@ class BwrapSandbox(Sandbox):
             raise SandboxStartupError(msg)
 
         cfg = config or SandboxConfig(backend="bwrap")
+        if cfg.published_ports:
+            try:
+                parse_published_ports(cfg.published_ports)
+            except ValueError as exc:
+                raise SandboxStartupError(str(exc)) from exc
+            if not cfg.network_enabled:
+                msg = "Publishing sandbox ports requires sandbox.network_enabled=True (--network)."
+                raise SandboxStartupError(msg)
+            remapped = [
+                spec
+                for spec in cfg.published_ports
+                if (m := parse_published_port(spec)).host_port != m.container_port
+            ]
+            if remapped:
+                logger.warning(
+                    "bwrap_port_remapping_unsupported",
+                    ports=remapped,
+                    detail="bubblewrap shares host networking directly when network_enabled=True",
+                )
         self._config = cfg
         self._repo_path = str(Path(repo_path).resolve())
         self._sessions = LocalPtySessionManager(
@@ -308,6 +329,10 @@ class BwrapSandbox(Sandbox):
             env_vars.setdefault("YARN_CACHE_FOLDER", "/cache/yarn")
             env_vars.setdefault("PNPM_HOME", "/cache/pnpm-home")
             env_vars.setdefault("PNPM_STORE_DIR", "/cache/pnpm-store")
+            env_vars.setdefault("GOCACHE", "/cache/go-build")
+            env_vars.setdefault("GOMODCACHE", "/cache/go-mod")
+            env_vars.setdefault("CARGO_HOME", "/cache/cargo")
+            env_vars.setdefault("GRADLE_USER_HOME", "/cache/gradle")
         return env_vars
 
     def _ensure_running(self) -> None:

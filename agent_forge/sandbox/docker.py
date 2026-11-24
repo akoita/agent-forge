@@ -21,6 +21,7 @@ from agent_forge.sandbox.base import (
     Sandbox,
     SandboxConfig,
     SandboxState,
+    parse_published_ports,
     sanitize_sandbox_env,
 )
 from agent_forge.sandbox.docker_sessions import DockerSessionManager
@@ -95,17 +96,10 @@ class DockerSandbox(Sandbox):
         cfg = config or SandboxConfig()
         self._config = cfg
 
+        published_ports = self._resolve_published_ports(cfg)
         security_opts: list[str] = ["no-new-privileges"]
         tmpfs = self._build_tmpfs(cfg)
-        environment = sanitize_sandbox_env(cfg.env_vars)
-        if cfg.network_enabled and cfg.writable_cache_mounts:
-            environment.setdefault("HOME", "/cache/home")
-            environment.setdefault("XDG_CACHE_HOME", "/cache/xdg")
-            environment.setdefault("PIP_CACHE_DIR", "/cache/pip")
-            environment.setdefault("NPM_CONFIG_CACHE", "/cache/npm")
-            environment.setdefault("YARN_CACHE_FOLDER", "/cache/yarn")
-            environment.setdefault("PNPM_HOME", "/cache/pnpm-home")
-            environment.setdefault("PNPM_STORE_DIR", "/cache/pnpm-store")
+        environment = self._build_environment(cfg)
 
         # Parse memory limit to bytes for Docker SDK
         mem_limit = cfg.memory_limit
@@ -136,6 +130,8 @@ class DockerSandbox(Sandbox):
         # Network isolation
         if not cfg.network_enabled:
             run_kwargs["network_mode"] = "none"
+        elif published_ports:
+            run_kwargs["ports"] = published_ports
 
         # Run as the host user so files are owned by them (avoids PermissionError
         # when the host reads workspace files after the container writes them).
@@ -378,6 +374,37 @@ class DockerSandbox(Sandbox):
         if self._state != SandboxState.RUNNING or self._container is None:
             msg = "Sandbox is not running. Call start() first."
             raise RuntimeError(msg)
+
+    def _resolve_published_ports(self, cfg: SandboxConfig) -> dict[str, tuple[str, int]]:
+        if not cfg.published_ports:
+            return {}
+        try:
+            ports = parse_published_ports(cfg.published_ports)
+        except ValueError as exc:
+            raise SandboxStartupError(str(exc)) from exc
+        if not cfg.network_enabled:
+            msg = "Publishing sandbox ports requires sandbox.network_enabled=True (--network)."
+            raise SandboxStartupError(msg)
+        return ports
+
+    def _build_environment(self, cfg: SandboxConfig) -> dict[str, str]:
+        environment = sanitize_sandbox_env(cfg.env_vars)
+        if cfg.network_enabled and cfg.writable_cache_mounts:
+            for key, value in (
+                ("HOME", "/cache/home"),
+                ("XDG_CACHE_HOME", "/cache/xdg"),
+                ("PIP_CACHE_DIR", "/cache/pip"),
+                ("NPM_CONFIG_CACHE", "/cache/npm"),
+                ("YARN_CACHE_FOLDER", "/cache/yarn"),
+                ("PNPM_HOME", "/cache/pnpm-home"),
+                ("PNPM_STORE_DIR", "/cache/pnpm-store"),
+                ("GOCACHE", "/cache/go-build"),
+                ("GOMODCACHE", "/cache/go-mod"),
+                ("CARGO_HOME", "/cache/cargo"),
+                ("GRADLE_USER_HOME", "/cache/gradle"),
+            ):
+                environment.setdefault(key, value)
+        return environment
 
     def _build_tmpfs(self, cfg: SandboxConfig) -> dict[str, str]:
         """Build tmpfs mounts for scratch space and optional package caches."""
