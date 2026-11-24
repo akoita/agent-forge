@@ -3,6 +3,7 @@
 from agent_forge.acp.protocol import (
     ACP_PROTOCOL_VERSION,
     AGENT_INFO,
+    build_replay_updates,
     classify_tool_kind,
     extract_prompt_text,
     map_run_state_to_stop_reason,
@@ -17,6 +18,7 @@ __all__ = [
     "ACPServer",
     "ACPSession",
     "RunExecutor",
+    "build_replay_updates",
     "classify_tool_kind",
     "extract_prompt_text",
     "map_run_state_to_stop_reason",

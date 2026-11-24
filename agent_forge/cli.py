@@ -2282,6 +2282,12 @@ def mcp_inspect(server_name: str | None, output_format: str) -> None:
 )
 @click.option("--max-iterations", type=int, default=None, help="Override max iterations.")
 @click.option("--sandbox-backend", default=None, help="Override sandbox runtime backend.")
+@click.option(
+    "--sessions-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory for durable ACP session storage.",
+)
 def acp_serve(
     provider: str | None,
     model: str | None,
@@ -2290,9 +2296,11 @@ def acp_serve(
     approval_mode: str,
     max_iterations: int | None,
     sandbox_backend: str | None,
+    sessions_dir: Path | None,
 ) -> None:
     """Run Agent Forge as an Agent Client Protocol (ACP) stdio server for editors."""
     from agent_forge.acp import ACPServer
+    from agent_forge.agent.session import SessionStore
 
     cfg = load_config(
         cli_overrides=_build_cli_overrides(
@@ -2314,6 +2322,7 @@ def acp_serve(
         model_override=model,
         sandbox_backend_override=sandbox_backend,
         max_iterations_override=max_iterations,
+        session_store=SessionStore(base_dir=sessions_dir) if sessions_dir is not None else None,
     )
     asyncio.run(server.serve_stdio())
 

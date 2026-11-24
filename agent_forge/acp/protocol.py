@@ -7,8 +7,10 @@ from typing import TYPE_CHECKING, Any
 
 from agent_forge.agent.models import RunState
 from agent_forge.config import MCPServerSettings
+from agent_forge.llm.base import Role
 
 if TYPE_CHECKING:
+    from agent_forge.agent.session import DevSession
     from agent_forge.orchestration.event_stream import StreamEvent
 
 ACP_PROTOCOL_VERSION = 1
@@ -298,3 +300,81 @@ def _map_thought_or_terminal_event(
             )
         ]
     return []
+
+
+def _replay_turn_tool_updates(
+    dev_session: DevSession,
+    start_idx: int,
+    end_idx: int,
+) -> list[dict[str, Any]]:
+    updates: list[dict[str, Any]] = []
+    turn_messages = dev_session.messages[start_idx:end_idx]
+    tool_outputs: dict[str, str] = {
+        msg.tool_call_id: msg.content
+        for msg in turn_messages
+        if msg.role == Role.TOOL and msg.tool_call_id
+    }
+    for msg in turn_messages:
+        if msg.role != Role.ASSISTANT or not msg.tool_calls:
+            continue
+        for tc in msg.tool_calls:
+            updates.append(
+                _update_payload(
+                    dev_session.id,
+                    {
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": tc.id,
+                        "title": tc.name,
+                        "kind": classify_tool_kind(tc.name),
+                        "status": "in_progress",
+                        "rawInput": tc.arguments,
+                    },
+                )
+            )
+            if tc.id in tool_outputs:
+                text = tool_outputs[tc.id]
+                is_err = text.startswith("[ERROR]") or "\n[ERROR] " in text
+                tool_upd: dict[str, Any] = {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": tc.id,
+                    "status": "failed" if is_err else "completed",
+                }
+                if text:
+                    tool_upd["content"] = [
+                        {"type": "content", "content": {"type": "text", "text": text}}
+                    ]
+                updates.append(_update_payload(dev_session.id, tool_upd))
+    return updates
+
+
+def build_replay_updates(dev_session: DevSession) -> list[dict[str, Any]]:
+    """Build ordered ACP ``session/update`` payloads replaying stored turns on ``session/load``."""
+    updates: list[dict[str, Any]] = []
+    for turn in dev_session.turns:
+        updates.append(
+            _update_payload(
+                dev_session.id,
+                {
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"type": "text", "text": turn.prompt},
+                },
+            )
+        )
+        updates.extend(
+            _replay_turn_tool_updates(
+                dev_session,
+                turn.message_start_index,
+                turn.message_end_index,
+            )
+        )
+        if turn.response:
+            updates.append(
+                _update_payload(
+                    dev_session.id,
+                    {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": turn.response},
+                    },
+                )
+            )
+    return updates
