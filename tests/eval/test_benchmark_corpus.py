@@ -1883,3 +1883,63 @@ async def test_search_codebase_works_without_ripgrep_in_minimal_sandbox(
     assert res.exit_code == 0
     matches = json.loads(res.output)
     assert any(m["file"].startswith("/workspace/") and m["file"].endswith(".py") for m in matches)
+
+
+@pytest.mark.asyncio
+async def test_devcontainer_and_two_phase_setup_transitions_to_offline_execution(
+    tmp_path: Path,
+) -> None:
+    """Exit criterion: devcontainer resolves runtime and setup_command transitions offline."""
+    from unittest.mock import MagicMock, patch
+
+    from agent_forge.agent.runner import build_sandbox_config
+    from agent_forge.config import ForgeConfig, SandboxSettings
+    from agent_forge.sandbox.docker import DockerSandbox
+
+    dc_dir = tmp_path / ".devcontainer"
+    dc_dir.mkdir()
+    (dc_dir / "devcontainer.json").write_text(
+        '{"image": "agent-forge-sandbox:universal", "containerEnv": {"MISE_YES": "1"}}',
+        encoding="utf-8",
+    )
+
+    cfg = ForgeConfig(
+        sandbox=SandboxSettings(
+            toolchain="auto",
+            network_enabled=False,
+            writable_cache_mounts=True,
+            setup_command="mise install zig@0.13.0",
+        )
+    )
+    sandbox_cfg = build_sandbox_config(cfg, repo_path=tmp_path)
+    assert sandbox_cfg.image == "agent-forge-sandbox:universal"
+    assert sandbox_cfg.toolchain == "devcontainer"
+    assert sandbox_cfg.env_vars["MISE_YES"] == "1"
+
+    setup_container = MagicMock()
+    setup_container.exec_run.return_value = (0, (b"zig installed\n", b""))
+    agent_container = MagicMock()
+    agent_container.id = "dc-agent-1"
+    agent_container.short_id = "dcagent"
+    agent_container.exec_run.return_value = (0, (b"0.13.0\n", b""))
+
+    client = MagicMock()
+    client.containers.run.side_effect = [setup_container, agent_container]
+
+    with patch("agent_forge.sandbox.docker.docker") as mock_docker:
+        mock_docker.from_env.return_value = client
+        sandbox = DockerSandbox()
+        await sandbox.start(str(tmp_path), sandbox_cfg)
+        try:
+            check = await sandbox.exec("zig version")
+            assert check.exit_code == 0
+            assert "0.13.0" in check.stdout
+        finally:
+            await sandbox.stop()
+
+    phase1_kwargs = client.containers.run.call_args_list[0].kwargs
+    phase2_kwargs = client.containers.run.call_args_list[1].kwargs
+    assert "network_mode" not in phase1_kwargs
+    assert phase2_kwargs["network_mode"] == "none"
+    assert phase2_kwargs["environment"]["MISE_YES"] == "1"
+    assert phase2_kwargs["environment"]["MISE_DATA_DIR"] == "/cache/mise"

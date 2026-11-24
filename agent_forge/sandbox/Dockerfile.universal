@@ -1,0 +1,29 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    build-essential \
+    ca-certificates \
+    curl \
+    git \
+    gnupg \
+    jq \
+    pkg-config \
+    ripgrep \
+    tree \
+    unzip \
+    xz-utils \
+    zip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh
+
+ENV MISE_DATA_DIR=/cache/mise \
+    MISE_CACHE_DIR=/cache/mise-cache \
+    MISE_CONFIG_DIR=/cache/mise-config \
+    PATH="/cache/mise/shims:/cache/home/.local/bin:/tmp/home/.local/share/mise/shims:/usr/local/bin:$PATH"
+
+WORKDIR /workspace
+
+RUN useradd -m -s /bin/bash agent && chown agent:agent /workspace
+USER agent

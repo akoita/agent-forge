@@ -346,8 +346,11 @@ same result object to disk.
 ```toml
 [sandbox]
 backend = "auto"
-toolchain = "auto"            # "auto" | "python" | "node" | "go" | "rust" | "jvm" | "full"
+toolchain = "auto"            # "auto" | "python" | "node" | "go" | "rust" | "jvm" | "full" | "universal"
 image = "agent-forge-sandbox:full"
+dockerfile = ""               # Optional repo-relative Dockerfile built and cached per content hash
+setup_command = ""            # Optional Phase 1 online bootstrap command before offline Phase 2
+setup_timeout_seconds = 300   # Timeout cap for Phase 1 setup_command
 memory_limit = "1g"
 timeout_seconds = 600
 network_enabled = true        # Allow network access (e.g. package installs / port publishing)
@@ -357,6 +360,8 @@ mount_host_toolchains = true  # Mount user toolchain dirs read-only in bwrap
 extra_ro_binds = []           # Optional extra read-only toolchain paths (credentials blocked)
 published_ports = ["127.0.0.1:8080:8080"]
 ```
+
+Repositories with `.devcontainer/devcontainer.json` or `.devcontainer.json` resolve their declared `image` or `build.dockerfile` automatically when `toolchain = "auto"` and default `image` are in effect (with explicit `--sandbox-dockerfile`, `--sandbox-image`, and `--toolchain` taking precedence). Use `--setup-command` (or `sandbox.setup_command`) to run Phase 1 online setup into an ephemeral `/cache` before transitioning to `--network none` for Phase 2 agent turns (`VerificationWorkspace` keeps `setup_command` disabled during final verification).
 
 Any stock upstream image (such as `mcr.microsoft.com/dotnet/sdk:9.0`, `haskell:9.8`, `php:8.4-cli`, `ghcr.io/foundry-rs/foundry`, `gcc:14`, or `alpine`) works directly via `--sandbox-image` without wrapper Dockerfiles (`entrypoint` is overridden, POSIX `sh` fallback handles images without `bash`, offline `HOME=/tmp/home` stays writable, and `search_codebase` falls back to host search or POSIX `grep` when `rg` is absent).
 
@@ -368,8 +373,9 @@ Any stock upstream image (such as `mcr.microsoft.com/dotnet/sdk:9.0`, `haskell:9
 - `agent-forge-sandbox:rust`: Rust 1.85 image (`rustc`, `cargo`, `rustfmt`, `clippy`)
 - `agent-forge-sandbox:jvm`: JDK 21 image (`java`, `javac`, `maven`, `gradle`)
 - `agent-forge-sandbox:full`: Python + Node image for mixed-language repos
+- `agent-forge-sandbox:universal`: `debian:bookworm-slim` with `build-essential` and `mise` (`mise.toml`, `.mise.toml`, `.tool-versions`)
 
-With `sandbox.toolchain = "auto"` (and default `image = "agent-forge-sandbox:latest"`), top-level markers (`go.mod`, `Cargo.toml`, `pom.xml`/`build.gradle*`, `package.json`, `pyproject.toml`) select the matching ecosystem image automatically, falling back to `python` on empty greenfield directories. Override per run with `--toolchain` or `--publish-port 8080:3000 --network`.
+With `sandbox.toolchain = "auto"` (and default `image = "agent-forge-sandbox:latest"`), `.devcontainer/devcontainer.json` takes priority when present; otherwise top-level markers (`mise.toml`/`.mise.toml`/`.tool-versions`, `go.mod`, `Cargo.toml`, `pom.xml`/`build.gradle*`, `package.json`, `pyproject.toml`) select the matching ecosystem image automatically, falling back to `python` on empty greenfield directories. Override per run with `--toolchain`, `--sandbox-dockerfile`, `--setup-command`, or `--publish-port 8080:3000 --network`.
 
 Build them with:
 
@@ -380,6 +386,7 @@ Build them with:
 ./scripts/build-sandbox.sh rust
 ./scripts/build-sandbox.sh jvm
 ./scripts/build-sandbox.sh full
+./scripts/build-sandbox.sh universal
 ```
 
 ### Sandbox Backends

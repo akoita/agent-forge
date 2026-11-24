@@ -14,11 +14,13 @@ TOOLCHAIN_IMAGES: Final[dict[str, str]] = {
     "rust": "agent-forge-sandbox:rust",
     "jvm": "agent-forge-sandbox:jvm",
     "full": "agent-forge-sandbox:full",
+    "universal": "agent-forge-sandbox:universal",
 }
 
 VALID_TOOLCHAINS: Final[frozenset[str]] = frozenset({"auto", *TOOLCHAIN_IMAGES.keys()})
 
 _TOOLCHAIN_MARKERS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("universal", ("mise.toml", ".mise.toml", ".tool-versions")),
     ("go", ("go.mod", "go.work")),
     ("rust", ("Cargo.toml",)),
     (

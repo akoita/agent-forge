@@ -269,6 +269,7 @@ class VerificationWorkspace:
                 network_enabled=False,
                 writable_cache_mounts=False,
                 published_ports=[],
+                setup_command="",
             )
             sandbox = (sandbox_factory or create_sandbox)(verification_config)
             try:
