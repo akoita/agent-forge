@@ -8,6 +8,7 @@ from agent_forge.sandbox.base import (
     SandboxState,
     parse_published_port,
     parse_published_ports,
+    validate_ro_bind_path,
 )
 from agent_forge.sandbox.bwrap import BwrapSandbox
 from agent_forge.sandbox.docker import DockerSandbox
@@ -34,4 +35,5 @@ __all__ = [
     "parse_published_port",
     "parse_published_ports",
     "resolve_sandbox_image",
+    "validate_ro_bind_path",
 ]
