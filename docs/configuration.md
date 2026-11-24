@@ -25,6 +25,7 @@ default_model = "gemini-3.1-flash-lite-preview"
 temperature = 0.0
 system_prompt_path = ""
 approval_mode = "auto"          # "auto", "prompt", or "deny"
+execution_mode = "tool_calling" # "tool_calling" or opt-in "code_mode"
 budget_action = "timeout"       # "timeout" or "pause"
 # max_cost_usd = 1.00           # optional estimated USD limit per run
 # max_duration_seconds = 300.0  # optional wall-clock limit per run
@@ -152,6 +153,7 @@ agent-forge run \
   --max-duration 300 \              # optional wall-clock seconds cap
   --budget-action pause \           # "timeout" or "pause" on budget exceed
   --approval-mode prompt \          # "auto", "prompt", or "deny"
+  --execution-mode code_mode \      # "tool_calling" (default) or "code_mode"
   --subagents \                     # enable bounded spawn_subagent delegation
   --sandbox-backend auto \
   --sandbox-image agent-forge-sandbox:full \
