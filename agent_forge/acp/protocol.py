@@ -43,6 +43,9 @@ _TOOL_KINDS: dict[str, str] = {
     "git_commit": "execute",
     "git_create_branch": "execute",
     "create_pr": "execute",
+    "search_tools": "search",
+    "execute_code": "execute",
+    "spawn_subagent": "other",
 }
 
 
@@ -200,13 +203,14 @@ def map_stream_event_to_acp_updates(
 
     if etype == "tool.called":
         tool_name = str(data.get("tool_name", "tool"))
+        title = f"[code-mode] {tool_name}" if data.get("code_mode") else tool_name
         return [
             _update_payload(
                 session_id,
                 {
                     "sessionUpdate": "tool_call",
                     "toolCallId": call_id,
-                    "title": tool_name,
+                    "title": title,
                     "kind": classify_tool_kind(tool_name),
                     "status": "in_progress",
                     "rawInput": data.get("arguments", {}),
@@ -267,8 +271,9 @@ def _map_thought_or_terminal_event(
             )
         ]
     if etype == "approval.requested":
+        prefix = "[code-mode] " if data.get("code_mode") else ""
         text = (
-            f"Approval requested ({data.get('category', 'policy')}) "
+            f"{prefix}Approval requested ({data.get('category', 'policy')}) "
             f"for {data.get('tool_name', 'tool')}: {data.get('reason', '')}"
         )
         return [
@@ -278,11 +283,37 @@ def _map_thought_or_terminal_event(
             )
         ]
     if etype == "approval.decided":
+        prefix = "[code-mode] " if data.get("code_mode") else ""
         verdict = "approved" if data.get("approved") else "denied"
         text = (
-            f"Approval {verdict} ({data.get('decided_by', 'policy')}) "
+            f"{prefix}Approval {verdict} ({data.get('decided_by', 'policy')}) "
             f"for {data.get('tool_name', 'tool')}"
         )
+        return [
+            _update_payload(
+                session_id,
+                {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": text}},
+            )
+        ]
+    if etype == "subagent.started":
+        sid = str(data.get("subagent_id", "sub"))
+        mode = str(data.get("mode", "research"))
+        task = str(data.get("task", ""))
+        text = f"Subagent {sid} started ({mode}): {task}"
+        return [
+            _update_payload(
+                session_id,
+                {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": text}},
+            )
+        ]
+    if etype == "subagent.completed":
+        sid = str(data.get("subagent_id", "sub"))
+        state = str(data.get("state", "completed"))
+        mode = str(data.get("mode", "research"))
+        tokens = int(data.get("total_tokens", 0) or 0)
+        branch = data.get("branch")
+        branch_note = f", branch={branch}" if branch else ""
+        text = f"Subagent {sid} {state} ({mode}, {tokens:,} tokens{branch_note})"
         return [
             _update_payload(
                 session_id,
