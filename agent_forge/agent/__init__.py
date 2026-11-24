@@ -31,6 +31,7 @@ from agent_forge.agent.models import AgentConfig, AgentRun, RunState, ToolInvoca
 from agent_forge.agent.persistence import load_run, save_run
 from agent_forge.agent.prompts import build_system_prompt
 from agent_forge.agent.repo_map import build_repo_map
+from agent_forge.agent.session import DevSession, SessionStore, SessionSummary, SessionTurn
 from agent_forge.agent.state import InvalidStateTransitionError, transition
 
 __all__ = [
@@ -44,12 +45,16 @@ __all__ = [
     "ContractClause",
     "ContractContext",
     "ContractEvaluation",
+    "DevSession",
     "InvalidStateTransitionError",
     "JournalEntry",
     "JsonArtifactClause",
     "ReplayResult",
     "RunJournal",
     "RunState",
+    "SessionStore",
+    "SessionSummary",
+    "SessionTurn",
     "ToolInvocation",
     "WorkingSet",
     "artifact_report_contract",

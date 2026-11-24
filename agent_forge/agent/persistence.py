@@ -11,12 +11,116 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from agent_forge.agent.models import AgentConfig, AgentRun, RunState, ToolInvocation
 from agent_forge.config import USER_CONFIG_DIR
 from agent_forge.llm.base import Message, Role, TokenUsage, ToolCall
+
+
+def serialize_token_usage(usage: TokenUsage) -> dict[str, int]:
+    """Serialize a :class:`TokenUsage` record to plain JSON integers."""
+    return {
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "total_tokens": usage.total_tokens,
+        "cached_prompt_tokens": usage.cached_prompt_tokens,
+        "reasoning_tokens": usage.reasoning_tokens,
+    }
+
+
+def deserialize_token_usage(data: dict[str, Any] | None) -> TokenUsage:
+    """Restore a :class:`TokenUsage` record from a persisted dict."""
+    if not data:
+        return TokenUsage(0, 0, 0)
+    return TokenUsage(
+        prompt_tokens=int(data.get("prompt_tokens", 0)),
+        completion_tokens=int(data.get("completion_tokens", 0)),
+        total_tokens=int(data.get("total_tokens", 0)),
+        cached_prompt_tokens=int(data.get("cached_prompt_tokens", 0)),
+        reasoning_tokens=int(data.get("reasoning_tokens", 0)),
+    )
+
+
+def serialize_message(msg: Message) -> dict[str, Any]:
+    """Serialize a chat :class:`Message` into a JSON-compatible dictionary."""
+    line: dict[str, Any] = {
+        "role": msg.role.value,
+        "content": msg.content,
+    }
+    if msg.tool_call_id:
+        line["tool_call_id"] = msg.tool_call_id
+    if msg.tool_calls:
+        line["tool_calls"] = [asdict(tc) for tc in msg.tool_calls]
+    if msg.response_id:
+        line["response_id"] = msg.response_id
+    if msg.reasoning_blocks:
+        line["reasoning_blocks"] = msg.reasoning_blocks
+    return line
+
+
+def deserialize_message(data: dict[str, Any]) -> Message:
+    """Restore a :class:`Message` from a JSON dictionary."""
+    tool_calls = None
+    if "tool_calls" in data:
+        tool_calls = [
+            ToolCall(
+                id=tc["id"],
+                name=tc["name"],
+                arguments=tc["arguments"],
+            )
+            for tc in data["tool_calls"]
+        ]
+    return Message(
+        role=Role(data["role"]),
+        content=data["content"],
+        tool_call_id=data.get("tool_call_id"),
+        tool_calls=tool_calls,
+        reasoning_blocks=data.get("reasoning_blocks"),
+        response_id=data.get("response_id"),
+    )
+
+
+def serialize_tool_invocation(inv: ToolInvocation) -> dict[str, Any]:
+    """Serialize a :class:`ToolInvocation` record into JSON-compatible data."""
+    result_data: dict[str, Any] = {
+        "output": inv.result.output,
+        "error": inv.result.error,
+        "exit_code": inv.result.exit_code,
+        "execution_time_ms": inv.result.execution_time_ms,
+    }
+    if inv.result.metadata:
+        result_data["metadata"] = inv.result.metadata
+    return {
+        "tool_name": inv.tool_name,
+        "arguments": inv.arguments,
+        "result": result_data,
+        "iteration": inv.iteration,
+        "timestamp": inv.timestamp.isoformat(),
+        "duration_ms": inv.duration_ms,
+    }
+
+
+def deserialize_tool_invocation(data: dict[str, Any]) -> ToolInvocation:
+    """Restore a :class:`ToolInvocation` from a JSON dictionary."""
+    from agent_forge.tools.base import ToolResult
+
+    return ToolInvocation(
+        tool_name=data["tool_name"],
+        arguments=data["arguments"],
+        result=ToolResult(
+            output=data["result"]["output"],
+            error=data["result"].get("error"),
+            exit_code=data["result"]["exit_code"],
+            execution_time_ms=data["result"].get("execution_time_ms", 0),
+            metadata=data["result"].get("metadata", {}),
+        ),
+        iteration=data["iteration"],
+        timestamp=datetime.fromisoformat(data["timestamp"]),
+        duration_ms=data["duration_ms"],
+    )
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
@@ -80,43 +184,13 @@ def save_run(run: AgentRun, *, base_dir: Path | str | None = None) -> Path:
         )
 
     # ── messages.jsonl ────────────────────────────────────────────
-    message_lines: list[str] = []
-    for msg in run.messages:
-        line: dict[str, Any] = {
-            "role": msg.role.value,
-            "content": msg.content,
-        }
-        if msg.tool_call_id:
-            line["tool_call_id"] = msg.tool_call_id
-        if msg.tool_calls:
-            line["tool_calls"] = [asdict(tc) for tc in msg.tool_calls]
-        if msg.response_id:
-            line["response_id"] = msg.response_id
-        if msg.reasoning_blocks:
-            line["reasoning_blocks"] = msg.reasoning_blocks
-        message_lines.append(json.dumps(line) + "\n")
+    message_lines = [json.dumps(serialize_message(msg)) + "\n" for msg in run.messages]
     _atomic_write_text(run_dir / "messages.jsonl", "".join(message_lines))
 
     # ── events.jsonl ──────────────────────────────────────────────
-    event_lines: list[str] = []
-    for inv in run.tool_invocations:
-        result_data: dict[str, Any] = {
-            "output": inv.result.output,
-            "error": inv.result.error,
-            "exit_code": inv.result.exit_code,
-            "execution_time_ms": inv.result.execution_time_ms,
-        }
-        if inv.result.metadata:
-            result_data["metadata"] = inv.result.metadata
-        line_ev: dict[str, Any] = {
-            "tool_name": inv.tool_name,
-            "arguments": inv.arguments,
-            "result": result_data,
-            "iteration": inv.iteration,
-            "timestamp": inv.timestamp.isoformat(),
-            "duration_ms": inv.duration_ms,
-        }
-        event_lines.append(json.dumps(line_ev) + "\n")
+    event_lines = [
+        json.dumps(serialize_tool_invocation(inv)) + "\n" for inv in run.tool_invocations
+    ]
     _atomic_write_text(run_dir / "events.jsonl", "".join(event_lines))
 
     return run_dir
@@ -127,11 +201,8 @@ def load_run(run_id: str, *, base_dir: Path | str | None = None) -> AgentRun:
 
     Raises FileNotFoundError if the run directory doesn't exist.
     """
-    from datetime import datetime
-
     from agent_forge.agent.contracts import ContractEvaluation
     from agent_forge.agent.verification import VerificationResult
-    from agent_forge.tools.base import ToolResult
 
     runs_dir = Path(base_dir) if base_dir is not None else _default_runs_dir()
     run_dir = runs_dir / run_id
@@ -148,50 +219,14 @@ def load_run(run_id: str, *, base_dir: Path | str | None = None) -> AgentRun:
     messages_path = run_dir / "messages.jsonl"
     if messages_path.exists():
         for line in messages_path.read_text().strip().splitlines():
-            data = json.loads(line)
-            tool_calls = None
-            if "tool_calls" in data:
-                tool_calls = [
-                    ToolCall(
-                        id=tc["id"],
-                        name=tc["name"],
-                        arguments=tc["arguments"],
-                    )
-                    for tc in data["tool_calls"]
-                ]
-            messages.append(
-                Message(
-                    role=Role(data["role"]),
-                    content=data["content"],
-                    tool_call_id=data.get("tool_call_id"),
-                    tool_calls=tool_calls,
-                    reasoning_blocks=data.get("reasoning_blocks"),
-                    response_id=data.get("response_id"),
-                )
-            )
+            messages.append(deserialize_message(json.loads(line)))
 
     # ── events.jsonl ──────────────────────────────────────────────
     invocations: list[ToolInvocation] = []
     events_path = run_dir / "events.jsonl"
     if events_path.exists():
         for line in events_path.read_text().strip().splitlines():
-            data = json.loads(line)
-            invocations.append(
-                ToolInvocation(
-                    tool_name=data["tool_name"],
-                    arguments=data["arguments"],
-                    result=ToolResult(
-                        output=data["result"]["output"],
-                        error=data["result"].get("error"),
-                        exit_code=data["result"]["exit_code"],
-                        execution_time_ms=data["result"].get("execution_time_ms", 0),
-                        metadata=data["result"].get("metadata", {}),
-                    ),
-                    iteration=data["iteration"],
-                    timestamp=datetime.fromisoformat(data["timestamp"]),
-                    duration_ms=data["duration_ms"],
-                )
-            )
+            invocations.append(deserialize_tool_invocation(json.loads(line)))
 
     tokens = meta["total_tokens"]
     verification = meta.get("verification")
@@ -206,11 +241,7 @@ def load_run(run_id: str, *, base_dir: Path | str | None = None) -> AgentRun:
         state=RunState(meta["state"]),
         messages=messages,
         iterations=meta["iterations"],
-        total_tokens=TokenUsage(
-            prompt_tokens=tokens["prompt_tokens"],
-            completion_tokens=tokens["completion_tokens"],
-            total_tokens=tokens["total_tokens"],
-        ),
+        total_tokens=deserialize_token_usage(tokens),
         tool_invocations=invocations,
         created_at=datetime.fromisoformat(meta["created_at"]),
         completed_at=completed_at,
