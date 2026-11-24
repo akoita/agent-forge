@@ -125,6 +125,8 @@ ACP server JSON-RPC framing, `StreamEvent` -> `session/update` mapping, bidirect
 
 Host service credential storage (`~/.agent-forge/credentials.json`), `agent-forge auth` CLI commands, `CreatePRTool`/`HttpMCPTransport` credential fallbacks, secret scrubbing, and offline-sandbox host-brokered `git_push` (with `ApprovalGate` enforcement) are covered in `tests/unit/test_auth_and_git_push.py` and `tests/eval/test_benchmark_corpus.py`.
 
+Polyglot toolchain detection (`go.mod`, `Cargo.toml`, `pom.xml`/`build.gradle*`, `package.json`, `pyproject.toml`), loopback port publishing validation/forwarding, and greenfield empty-directory verification (`VerificationWorkspace` bootstrap without pre-existing Git commits) are covered in `tests/unit/test_polyglot_sandbox_and_greenfield.py` and `tests/eval/test_benchmark_corpus.py`.
+
 ## Running Tests
 
 ```bash

@@ -339,24 +339,35 @@ same result object to disk.
 ```toml
 [sandbox]
 backend = "auto"
+toolchain = "auto"            # "auto" | "python" | "node" | "go" | "rust" | "jvm" | "full"
 image = "agent-forge-sandbox:full"
 memory_limit = "1g"
 timeout_seconds = 600
-network_enabled = true   # Allow network access (e.g. pip install)
+network_enabled = true        # Allow network access (e.g. package installs / port publishing)
 cpu_limit = 2.0
-writable_cache_mounts = true  # Mount /cache for npm/pip/pnpm/yarn caches
+writable_cache_mounts = true  # Mount /cache for pip/npm/pnpm/yarn/go/cargo/gradle caches
+published_ports = ["127.0.0.1:8080:8080"]
+```
 
-### Sandbox Images
+### Sandbox Images & Toolchains
 
-- `agent-forge-sandbox:latest`: Python-focused base image
+- `agent-forge-sandbox:latest`: Python-focused base image (`python`, default & empty greenfield dirs)
 - `agent-forge-sandbox:node`: Node-focused image with `node`, `npm`, `pnpm`, and `yarn`
+- `agent-forge-sandbox:go`: Go 1.23 image (`go`, `git`, `ripgrep`)
+- `agent-forge-sandbox:rust`: Rust 1.85 image (`rustc`, `cargo`, `rustfmt`, `clippy`)
+- `agent-forge-sandbox:jvm`: JDK 21 image (`java`, `javac`, `maven`, `gradle`)
 - `agent-forge-sandbox:full`: Python + Node image for mixed-language repos
+
+With `sandbox.toolchain = "auto"` (and default `image = "agent-forge-sandbox:latest"`), top-level markers (`go.mod`, `Cargo.toml`, `pom.xml`/`build.gradle*`, `package.json`, `pyproject.toml`) select the matching ecosystem image automatically, falling back to `python` on empty greenfield directories. Override per run with `--toolchain` or `--publish-port 8080:3000 --network`.
 
 Build them with:
 
 ```bash
 ./scripts/build-sandbox.sh python
 ./scripts/build-sandbox.sh node
+./scripts/build-sandbox.sh go
+./scripts/build-sandbox.sh rust
+./scripts/build-sandbox.sh jvm
 ./scripts/build-sandbox.sh full
 ```
 
@@ -365,7 +376,6 @@ Build them with:
 - `docker`: use the Docker daemon-backed sandbox
 - `bwrap`: use Linux bubblewrap directly
 - `auto`: prefer Docker and fall back to bubblewrap when Docker is unavailable
-```
 
 ## Inspecting Config
 

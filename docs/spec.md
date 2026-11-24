@@ -486,13 +486,15 @@ from dataclasses import dataclass
 @dataclass
 class SandboxConfig:
     backend: str = "docker"                      # "docker" | "bwrap" | "auto"
-    image: str = "agent-forge-sandbox:latest"    # Pre-built image with common tools
+    image: str = "agent-forge-sandbox:latest"    # Resolved polyglot image tag
+    toolchain: str = "auto"                      # "auto" | "python" | "node" | "go" | "rust" | "jvm" | "full"
     workspace_path: str = "/workspace"           # Mount point inside container
     cpu_limit: float = 1.0                       # CPU cores
     memory_limit: str = "512m"                   # Memory limit
     timeout_seconds: int = 300                   # Max container lifetime
     network_enabled: bool = False                # Network access (default: isolated)
     writable_cache_mounts: bool = True           # Mount writable cache tmpfs
+    published_ports: list[str] = field(default_factory=list)  # Loopback port bindings
     env_vars: dict[str, str] = field(default_factory=dict)
 
 class Sandbox(ABC):
@@ -531,7 +533,9 @@ class Sandbox(ABC):
 
 #### Sandbox Docker Image
 
-The sandbox base image should be built with common development tools pre-installed:
+Agent Forge ships polyglot sandbox Dockerfiles (`Dockerfile`, `Dockerfile.node`, `Dockerfile.go`, `Dockerfile.rust`, `Dockerfile.jvm`, `Dockerfile.full`) selected explicitly or automatically via `sandbox.toolchain`, while host loopback preview ports bind only when `published_ports` and `network_enabled=True` are set.
+
+The Python base image includes common development tools pre-installed:
 
 ```dockerfile
 # agent_forge/sandbox/Dockerfile
