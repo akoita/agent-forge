@@ -142,6 +142,8 @@ Extension-layer cloud deployment workflows (`plugins/cloud_deploy/`: GCP Cloud R
 
 Extension-layer EVM/Foundry smart-contract workflows (`plugins/evm_foundry/`: offline `forge_build`/`forge_test`, fork dry-run simulation, `ApprovalGate`-gated `--broadcast`, and signer isolation) are covered in `tests/unit/test_evm_foundry_plugin.py`.
 
+Deterministic persistent repository memory (`.agent-forge/memory.md`, `RepoMemoryStore`, `ContextEngine` prompt-prefix injection, `agent-forge memory` CLI, and `/memory` REPL command) is covered in `tests/unit/test_repo_memory.py` and `tests/eval/test_benchmark_corpus.py`.
+
 Polyglot tree-sitter symbol extraction, comment/string-stripped repo-map ranking, and the post-edit diagnostics feedback loop are covered in `tests/unit/test_polyglot_code_intel_and_diagnostics.py` and `tests/eval/test_benchmark_corpus.py`.
 
 ## Running Tests

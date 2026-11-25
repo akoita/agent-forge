@@ -242,11 +242,13 @@ def render_task_system_prompt(
         active_context = ContextEngine(repo_path=repo_path, task=task)
     repo_instructions: str | None = None
     repo_map: str | None = None
+    repo_memory: str | None = None
     scoped_instructions: str | None = None
     if active_context is not None:
         instructions, repo_map_obj = active_context.prepare_initial_context()
         repo_instructions = instructions.rendered or None
         repo_map = repo_map_obj.rendered or None
+        repo_memory = active_context.repo_memory_rendered or None
         scoped_instructions = active_context.task_scoped_instructions_rendered or None
 
     tool_definitions = tools.list_definitions()
@@ -262,6 +264,7 @@ def render_task_system_prompt(
             published_ports=sandbox_config.published_ports or None,
             repo_instructions=repo_instructions,
             repo_map=repo_map,
+            repo_memory=repo_memory,
             scoped_instructions=scoped_instructions,
             prompt_scope=prompt_scope,
             extension_prompts=extension_prompts,
@@ -276,6 +279,7 @@ def render_task_system_prompt(
         published_ports=sandbox_config.published_ports or None,
         repo_instructions=repo_instructions,
         repo_map=repo_map,
+        repo_memory=repo_memory,
         scoped_instructions=scoped_instructions,
         prompt_scope=prompt_scope,
         extension_prompts=extension_prompts,

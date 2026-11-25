@@ -23,6 +23,9 @@ compaction_trigger_ratio = 0.75
 compaction_target_ratio = 0.45
 keep_recent_turns = 4
 stale_tool_result_max_chars = 600
+memory_enabled = true
+memory_path = ".agent-forge/memory.md"
+max_memory_tokens = 800
 
 [routing]
 enabled = false

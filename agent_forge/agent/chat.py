@@ -61,6 +61,8 @@ _HELP_TEXT = """Available slash commands:
                           Integrate a committed subagent worker branch into HEAD
   /sessions [--all] [N]   List saved sessions for this repo (or all repos)
   /resume <id|latest>     Switch to another saved session in-place
+  /memory [add|remove|clear]
+                          Inspect or update persistent repo memory (.agent-forge/memory.md)
   /model [spec]           Show or switch active model (model, provider/model, or profile)
   /clear [--sandbox]      Reset conversation history and optionally restart the warm sandbox
   /help                   Show this help message
@@ -859,6 +861,65 @@ class ChatSessionRuntime:
             },
         )
 
+    def _refresh_runtime_repo_memory(self) -> None:
+        if self.context_engine is not None:
+            self.context_engine.refresh_repo_memory()
+
+    async def _handle_memory_command(self, args: list[str]) -> SlashCommandResult:
+        from agent_forge.agent.memory import RepoMemoryStore
+
+        store = RepoMemoryStore(self.session.repo_path)
+        sub = args[0].lower() if args else "list"
+        if sub == "list":
+            entries = store.load_entries()
+            if not entries:
+                return SlashCommandResult(
+                    handled=True,
+                    output=f"No repository memory entries in {store.relative_path}.",
+                    payload={"entries": []},
+                )
+            lines = [f"Repository memory ({store.relative_path}):"]
+            for entry in entries:
+                lines.append(f"  * [{entry.id}] [{entry.category}] {entry.text}")
+            return SlashCommandResult(
+                handled=True,
+                output="\n".join(lines),
+                payload={
+                    "entries": [
+                        {"id": e.id, "category": e.category, "text": e.text} for e in entries
+                    ]
+                },
+            )
+        if sub == "add":
+            text = " ".join(args[1:]).strip()
+            if not text:
+                return SlashCommandResult(handled=True, output="Usage: /memory add <learning>")
+            entry, added = store.add(text)
+            self._refresh_runtime_repo_memory()
+            verb = "Saved" if added else "Already recorded"
+            return SlashCommandResult(
+                handled=True,
+                output=f"{verb} [{entry.id}] [{entry.category}] {entry.text}",
+                payload={"id": entry.id, "added": added},
+            )
+        if sub == "remove" and len(args) >= 2:
+            removed = store.remove(args[1])
+            self._refresh_runtime_repo_memory()
+            msg = f"Removed memory entry {args[1]}." if removed else f"Entry not found: {args[1]}"
+            return SlashCommandResult(handled=True, output=msg, payload={"removed": removed})
+        if sub == "clear":
+            count = store.clear()
+            self._refresh_runtime_repo_memory()
+            return SlashCommandResult(
+                handled=True,
+                output=f"Cleared {count} repository memory entries.",
+                payload={"cleared": count},
+            )
+        return SlashCommandResult(
+            handled=True,
+            output="Usage: /memory [list | add <text> | remove <id> | clear]",
+        )
+
     async def handle_slash_command(self, line: str) -> SlashCommandResult:
         """Dispatch a ``/...`` slash command locally without invoking the model."""
         stripped = line.strip()
@@ -898,6 +959,7 @@ class ChatSessionRuntime:
             "/apply": lambda: self._handle_apply_command(args),
             "/sessions": lambda: self._handle_sessions_command(args),
             "/resume": lambda: self._handle_resume_command(args),
+            "/memory": lambda: self._handle_memory_command(args),
             "/model": lambda: self._handle_model_command(args),
         }
         handler = handlers.get(cmd)

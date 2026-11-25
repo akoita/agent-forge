@@ -2923,5 +2923,142 @@ def session_delete(session_id: str, sessions_dir: Path | None, output_format: st
         sys.exit(1)
 
 
+@main.group("memory")
+def memory_group() -> None:
+    """Inspect and manage persistent repository memory (.agent-forge/memory.md)."""
+
+
+@memory_group.command("list")
+@click.option(
+    "--repo",
+    default=".",
+    type=click.Path(exists=True, file_okay=False),
+    help="Repository directory.",
+)
+@click.option("--category", default=None, help="Filter entries by category.")
+@click.option("--query", default="", help="Substring search query.")
+@click.option(
+    "--output-format",
+    default="text",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    help="Output format.",
+)
+def memory_list(
+    repo: str,
+    category: str | None,
+    query: str,
+    output_format: str,
+) -> None:
+    """List persisted learnings stored in repository memory."""
+    from agent_forge.agent.memory import RepoMemoryStore
+
+    store = RepoMemoryStore(repo)
+    entries = store.search(query) if query.strip() else store.load_entries()
+    if category:
+        target_cat = category.strip().lower()
+        entries = [entry for entry in entries if entry.category == target_cat]
+    if output_format.lower() == "json":
+        click.echo(
+            json.dumps(
+                [
+                    {
+                        "id": entry.id,
+                        "category": entry.category,
+                        "text": entry.text,
+                        "created_at": entry.created_at,
+                    }
+                    for entry in entries
+                ],
+                indent=2,
+            )
+        )
+        return
+    if not entries:
+        console.print(f"[dim]No memory entries found in {store.relative_path}.[/dim]")
+        return
+    for entry in entries:
+        console.print(
+            f"[{entry.id}] ({entry.created_at or 'undated'}) [{entry.category}] {entry.text}"
+        )
+
+
+@memory_group.command("add")
+@click.argument("text")
+@click.option(
+    "--repo",
+    default=".",
+    type=click.Path(exists=True, file_okay=False),
+    help="Repository directory.",
+)
+@click.option("--category", default="general", help="Memory category label.")
+@click.option(
+    "--output-format",
+    default="text",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    help="Output format.",
+)
+def memory_add(text: str, repo: str, category: str, output_format: str) -> None:
+    """Persist a concise repository learning into .agent-forge/memory.md."""
+    from agent_forge.agent.memory import RepoMemoryStore
+
+    store = RepoMemoryStore(repo)
+    try:
+        entry, added = store.add(text, category=category)
+    except ValueError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+    if output_format.lower() == "json":
+        click.echo(
+            json.dumps(
+                {
+                    "id": entry.id,
+                    "category": entry.category,
+                    "text": entry.text,
+                    "created_at": entry.created_at,
+                    "added": added,
+                },
+                indent=2,
+            )
+        )
+        return
+    status_word = "Saved" if added else "Already present"
+    console.print(f"[green]{status_word}[/green] [{entry.id}] [{entry.category}] {entry.text}")
+
+
+@memory_group.command("remove")
+@click.argument("entry_id")
+@click.option(
+    "--repo",
+    default=".",
+    type=click.Path(exists=True, file_okay=False),
+    help="Repository directory.",
+)
+def memory_remove(entry_id: str, repo: str) -> None:
+    """Remove a persisted memory entry by exact ID or unique prefix."""
+    from agent_forge.agent.memory import RepoMemoryStore
+
+    store = RepoMemoryStore(repo)
+    if store.remove(entry_id):
+        console.print(f"[green]Removed memory entry {entry_id}[/green]")
+        return
+    err_console.print(f"[red]Memory entry not found:[/red] {entry_id}")
+    sys.exit(1)
+
+
+@memory_group.command("clear")
+@click.option(
+    "--repo",
+    default=".",
+    type=click.Path(exists=True, file_okay=False),
+    help="Repository directory.",
+)
+def memory_clear(repo: str) -> None:
+    """Clear all entries from repository memory."""
+    from agent_forge.agent.memory import RepoMemoryStore
+
+    count = RepoMemoryStore(repo).clear()
+    console.print(f"[green]Cleared {count} memory entries[/green]")
+
+
 if __name__ == "__main__":
     main()

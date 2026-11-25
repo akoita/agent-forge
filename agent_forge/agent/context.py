@@ -15,6 +15,7 @@ from agent_forge.agent.instructions import (
     discover_repo_instructions,
     discover_scoped_instructions_for_path,
 )
+from agent_forge.agent.memory import DEFAULT_MEMORY_PATH, RenderedMemory, RepoMemoryStore
 from agent_forge.agent.repo_map import RepoMap, build_repo_map
 from agent_forge.llm.base import Message, Role, ToolCall, ToolDefinition
 
@@ -94,6 +95,9 @@ class ContextPolicy:
     compaction_target_ratio: float = 0.45
     keep_recent_turns: int = 4
     stale_tool_result_max_chars: int = 600
+    memory_enabled: bool = True
+    memory_path: str = DEFAULT_MEMORY_PATH
+    max_memory_tokens: int = 800
 
     @property
     def trigger_tokens(self) -> int:
@@ -124,6 +128,9 @@ class ContextPolicy:
             compaction_target_ratio=settings.compaction_target_ratio,
             keep_recent_turns=settings.keep_recent_turns,
             stale_tool_result_max_chars=settings.stale_tool_result_max_chars,
+            memory_enabled=settings.memory_enabled,
+            memory_path=settings.memory_path,
+            max_memory_tokens=settings.max_memory_tokens,
         )
 
 
@@ -599,6 +606,7 @@ class ContextEngine:
         self._base_instructions = DiscoveredInstructions((), "", 0, False)
         self._task_scoped_instructions = DiscoveredInstructions((), "", 0, False)
         self._repo_map = RepoMap("", (), 0, 0, 0, False)
+        self._repo_memory = RenderedMemory(self.repo_path / DEFAULT_MEMORY_PATH, (), "", 0, False)
         self._loaded_instruction_resolved: set[Path] = set()
         self._pending_scoped_instructions: list[InstructionFile] = []
 
@@ -655,7 +663,30 @@ class ContextEngine:
                 max_tokens=self.policy.max_repo_map_tokens,
                 max_files=self.policy.max_repo_files,
             )
+        if self.policy.memory_enabled:
+            self.refresh_repo_memory()
         return self._base_instructions, self._repo_map
+
+    def refresh_repo_memory(self) -> RenderedMemory:
+        """Reload and bound persistent repository memory from disk."""
+        if not self.policy.enabled or not self.policy.memory_enabled:
+            self._repo_memory = RenderedMemory(
+                self.repo_path / DEFAULT_MEMORY_PATH, (), "", 0, False
+            )
+            return self._repo_memory
+        try:
+            store = RepoMemoryStore(self.repo_path, relative_path=self.policy.memory_path)
+            self._repo_memory = store.render_for_prompt(max_tokens=self.policy.max_memory_tokens)
+        except (ValueError, OSError):
+            self._repo_memory = RenderedMemory(
+                self.repo_path / DEFAULT_MEMORY_PATH, (), "", 0, False
+            )
+        return self._repo_memory
+
+    @property
+    def repo_memory_rendered(self) -> str:
+        """Return persistent repository memory formatted for prompt injection."""
+        return self._repo_memory.rendered
 
     @property
     def task_scoped_instructions_rendered(self) -> str:

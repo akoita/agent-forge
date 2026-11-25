@@ -173,6 +173,8 @@ agent-forge cancel <run-id> --reason "Stopped by operator"
 agent-forge worktrees list --repo ./my-project
 agent-forge worktrees integrate <run-id-or-branch> --repo ./my-project --strategy merge
 agent-forge worktrees cleanup --repo ./my-project
+agent-forge memory list --repo ./my-project
+agent-forge memory add "Run make test-unit before pushing" --category testing --repo ./my-project
 agent-forge mcp list
 agent-forge mcp inspect --output-format json
 agent-forge auth status --output-format json
