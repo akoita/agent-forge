@@ -138,6 +138,8 @@ Bounded hierarchical subagent delegation (read-only research fan-out sharing the
 
 Opt-in Code Mode programmatic execution (`search_tools` progressive discovery, sandboxed Python host RPC bridge, secret isolation, `ApprovalGate` & `RunJournal` replay parity, and paired A/B benchmark evaluation vs classic `tool_calling`) is covered in `tests/unit/test_code_mode.py` and `tests/eval/test_benchmark_corpus.py`. Chat `/subagents`/`/apply`, `[code-mode]` REPL/ACP progress mapping, and real `--network none` Docker verification for Code Mode and worktree subagents live in `tests/unit/test_ade_subagents_and_code_mode_ux.py` and `tests/integration/test_subagents_and_code_mode_integration.py`.
 
+Extension-layer cloud deployment workflows (`plugins/cloud_deploy/`: GCP Cloud Run, AWS CloudFormation, and Terraform plan/apply gates, strict egress allowlists, and host-brokered OIDC/WIF boundaries) are covered in `tests/unit/test_cloud_deploy_plugin.py`.
+
 Polyglot tree-sitter symbol extraction, comment/string-stripped repo-map ranking, and the post-edit diagnostics feedback loop are covered in `tests/unit/test_polyglot_code_intel_and_diagnostics.py` and `tests/eval/test_benchmark_corpus.py`.
 
 ## Running Tests
