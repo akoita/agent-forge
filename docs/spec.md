@@ -985,6 +985,11 @@ When `[agent].execution_mode = "code_mode"` (or `--execution-mode code_mode`; de
 - **Host RPC bridge (`HostToolBridge`):** Scripts inside the `--network none` sandbox call `call_tool(name, arguments)` and `list_tools()`, routed back to the host while keeping all LLM/MCP credentials outside the sandbox.
 - **Harness invariant parity:** Every bridged call enforces `ApprovalGate` (`auto`, interactive `prompt`, `deny`), underlying MCP circuit breakers/timeouts, recursive-call blocking, `max_bridged_calls` (`50`), and deterministic `RunJournal` (`run-journal-v1`) idempotent replay.
 
+##### Polyglot Code Intelligence & Post-Edit Diagnostics
+
+- **Tree-sitter & polyglot repo map (`agent_forge/agent/treesitter.py`, `agent_forge/agent/repo_map.py`):** Uses optional `tree-sitter` / `tree-sitter-language-pack` (`pip install agent-forge[code-intel]`) across TS/TSX, JS, Go, Rust, Java, C/C++, Ruby, C#, PHP, Kotlin, Swift, Shell, and `.sol`, falling back to comment/string-stripped brace-tracked symbol extraction (and stdlib `ast` for Python).
+- **Post-edit diagnostics (`agent_forge/agent/diagnostics.py`):** When `[agent].post_edit_diagnostics = true` (`--diagnostics`), successful `write_file`, `edit_file`, and `apply_patch` calls immediately run fast syntax/compiler checks inside the sandbox (`py_compile` + `ruff`, `node --check`, `tsc --noEmit`, `go vet`, `cargo check`, `sh -n`, `json.tool`) and append `[POST-EDIT DIAGNOSTICS]` on error.
+
 ---
 
 ### 4.6 Observability
@@ -1357,6 +1362,7 @@ Format: `AGENT_FORGE_{SECTION}_{KEY}` (uppercase, underscored).
 | ---------------------------------- | ---------------------- |
 | `AGENT_FORGE_AGENT_EXECUTION_MODE` | `agent.execution_mode` |
 | `AGENT_FORGE_AGENT_MAX_ITERATIONS` | `agent.max_iterations` |
+| `AGENT_FORGE_AGENT_POST_EDIT_DIAGNOSTICS` | `agent.post_edit_diagnostics` |
 | `AGENT_FORGE_CONTEXT_ENABLED` | `context.enabled` |
 | `AGENT_FORGE_CONTEXT_MAX_INSTRUCTION_TOKENS` | `context.max_instruction_tokens` |
 | `AGENT_FORGE_CONTEXT_MAX_REPO_MAP_TOKENS` | `context.max_repo_map_tokens` |

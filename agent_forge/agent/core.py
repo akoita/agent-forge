@@ -18,6 +18,7 @@ from agent_forge.agent.contracts import (
     ContractContext,
     coding_fix_contract,
 )
+from agent_forge.agent.diagnostics import maybe_attach_post_edit_diagnostics
 from agent_forge.agent.journal import (
     RunJournal,
     compute_tool_idempotency_key,
@@ -1652,6 +1653,13 @@ async def _execute_tool_call(
         return
 
     result = await _execute_with_retry(tool, tool_call, sandbox, run, event_bus)
+    result = await maybe_attach_post_edit_diagnostics(
+        run,
+        tool_call.name,
+        dict(tool_call.arguments),
+        result,
+        sandbox,
+    )
     await _record_tool_outcome(
         run,
         tool_call,

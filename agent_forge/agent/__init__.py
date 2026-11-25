@@ -26,6 +26,11 @@ from agent_forge.agent.contracts import (
     resolve_completion_contract,
 )
 from agent_forge.agent.core import react_loop
+from agent_forge.agent.diagnostics import (
+    DiagnosticItem,
+    DiagnosticsReport,
+    run_post_edit_diagnostics,
+)
 from agent_forge.agent.instructions import discover_repo_instructions
 from agent_forge.agent.journal import (
     JournalEntry,
@@ -41,6 +46,7 @@ from agent_forge.agent.repo_map import build_repo_map
 from agent_forge.agent.session import DevSession, SessionStore, SessionSummary, SessionTurn
 from agent_forge.agent.state import InvalidStateTransitionError, transition
 from agent_forge.agent.subagent import SubagentLimits, SubagentResult, SubagentRunner
+from agent_forge.agent.treesitter import extract_treesitter_file_symbols, is_treesitter_available
 
 __all__ = [
     "AgentConfig",
@@ -56,6 +62,8 @@ __all__ = [
     "ContractContext",
     "ContractEvaluation",
     "DevSession",
+    "DiagnosticItem",
+    "DiagnosticsReport",
     "HostToolBridge",
     "InvalidStateTransitionError",
     "JournalEntry",
@@ -79,12 +87,15 @@ __all__ = [
     "coding_fix_contract",
     "compute_tool_idempotency_key",
     "discover_repo_instructions",
+    "extract_treesitter_file_symbols",
+    "is_treesitter_available",
     "load_run",
     "qa_contract",
     "react_loop",
     "replay_journal",
     "resolve_completion_contract",
     "run_chat_repl",
+    "run_post_edit_diagnostics",
     "save_run",
     "search_tool_definitions",
     "transition",

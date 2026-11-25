@@ -507,6 +507,11 @@ def model_capabilities(profile: str | None, output_format: str, probe: bool) -> 
     type=click.Choice(["tool_calling", "code_mode"], case_sensitive=False),
     help="Tool execution mode ('tool_calling' or opt-in 'code_mode').",
 )
+@click.option(
+    "--diagnostics/--no-diagnostics",
+    default=None,
+    help="Run lightweight syntax/compiler diagnostics after file edits.",
+)
 def run(
     task: str,
     repo: str,
@@ -543,6 +548,7 @@ def run(
     contract: str,
     subagents: bool | None,
     execution_mode: str | None,
+    diagnostics: bool | None,
 ) -> None:
     """Run an agent task on a repository."""
     # --- Resolve profile early so it can override provider/model ---
@@ -590,6 +596,7 @@ def run(
             thinking_budget=thinking_budget,
             subagents=subagents,
             execution_mode=execution_mode,
+            diagnostics=diagnostics,
         )
     )
 
@@ -622,8 +629,8 @@ def run(
             )
         )
     else:
-        diagnostics = sys.stderr if output_format == "json" else sys.stdout
-        with redirect_stdout(diagnostics):
+        diag_stream = sys.stderr if output_format == "json" else sys.stdout
+        with redirect_stdout(diag_stream):
             try:
                 result = asyncio.run(
                     _run_agent(
@@ -638,7 +645,7 @@ def run(
                     ),
                 )
             finally:
-                diagnostics.flush()
+                diag_stream.flush()
         _emit_run_output(
             result,
             output_format=output_format,
@@ -1129,6 +1136,7 @@ def _build_agent_config(
     raw_budget = getattr(cfg.agent, "thinking_budget_tokens", None)
     raw_level = getattr(cfg.agent, "thinking_level", None)
     raw_exec = getattr(cfg.agent, "execution_mode", None)
+    raw_diag = getattr(cfg.agent, "post_edit_diagnostics", False)
     return AgentConfig(
         model=cfg.agent.default_model,
         provider=provider_name,
@@ -1138,6 +1146,7 @@ def _build_agent_config(
         profile_id=profile.id if profile else None,
         approval_mode=approval,
         execution_mode=raw_exec if isinstance(raw_exec, str) else "tool_calling",
+        post_edit_diagnostics=bool(raw_diag) if isinstance(raw_diag, bool) else False,
         max_cost_usd=float(max_cost) if max_cost is not None else None,
         max_duration_seconds=float(max_duration) if max_duration is not None else None,
         budget_action=budget_action,
@@ -1175,6 +1184,7 @@ def _build_cli_overrides(
     thinking_budget: int | None = None,
     subagents: bool | None = None,
     execution_mode: str | None = None,
+    diagnostics: bool | None = None,
 ) -> dict[str, Any] | None:
     """Collect non-empty CLI overrides into config dotted keys."""
     mapping = {
@@ -1186,6 +1196,7 @@ def _build_cli_overrides(
         "agent.budget_action": budget_action.lower() if budget_action is not None else None,
         "agent.approval_mode": approval_mode.lower() if approval_mode is not None else None,
         "agent.execution_mode": (execution_mode.lower() if execution_mode is not None else None),
+        "agent.post_edit_diagnostics": diagnostics,
         "agent.reasoning_effort": (
             reasoning_effort.lower() if reasoning_effort is not None else None
         ),
@@ -2603,6 +2614,11 @@ def _create_chat_runtime(
     type=click.Choice(["tool_calling", "code_mode"], case_sensitive=False),
     help="Tool execution mode ('tool_calling' or opt-in 'code_mode').",
 )
+@click.option(
+    "--diagnostics/--no-diagnostics",
+    default=None,
+    help="Run lightweight syntax/compiler diagnostics after file edits.",
+)
 def chat(
     repo: str,
     resume: str | None,
@@ -2622,6 +2638,7 @@ def chat(
     history_file: Path | None,
     subagents: bool | None,
     execution_mode: str | None,
+    diagnostics: bool | None,
 ) -> None:
     """Start or resume an interactive multi-turn terminal session with a warm sandbox."""
     from agent_forge.agent.chat import run_chat_repl
@@ -2638,6 +2655,7 @@ def chat(
             sandbox_backend=sandbox_backend,
             subagents=subagents,
             execution_mode=execution_mode,
+            diagnostics=diagnostics,
         )
     )
     _apply_model_profile(cfg, model_profile)

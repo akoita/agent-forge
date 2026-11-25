@@ -52,6 +52,14 @@ _SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(
         ".h",
         ".hpp",
         ".rb",
+        ".cs",
+        ".php",
+        ".kt",
+        ".kts",
+        ".swift",
+        ".sh",
+        ".bash",
+        ".sol",
     }
 )
 
@@ -114,6 +122,75 @@ _LANG_DEF_PATTERNS: dict[str, tuple[tuple[str, re.Pattern[str]], ...]] = {
         ("type", re.compile(r"^\s*(?:typedef\s+)?(?:class|struct|enum)\s+(\w+)\s*\{", re.M)),
         ("function", re.compile(r"^[A-Za-z_][\w\s\*&:<>]*\b(\w+)\s*\(([^;{)]*)\)\s*\{", re.M)),
     ),
+    "cs": (
+        (
+            "class",
+            re.compile(
+                r"^\s*(?:public|private|protected|internal|sealed|abstract|static|\s)*"
+                r"(?:class|interface|struct|record|enum)\s+(\w+)",
+                re.M,
+            ),
+        ),
+        (
+            "function",
+            re.compile(
+                r"^\s*(?:public|private|protected|internal|static|async|virtual|override|\s)+"
+                r"[\w<>\[\]?]+\s+(\w+)\s*\(([^)]*)\)",
+                re.M,
+            ),
+        ),
+    ),
+    "php": (
+        (
+            "class",
+            re.compile(r"^\s*(?:abstract\s+|final\s+)?(?:class|interface|trait)\s+(\w+)", re.M),
+        ),
+        (
+            "function",
+            re.compile(
+                r"^\s*(?:public|protected|private|static|\s)*function\s+(\w+)\s*\(([^)]*)\)", re.M
+            ),
+        ),
+    ),
+    "kotlin": (
+        (
+            "class",
+            re.compile(
+                r"^\s*(?:data\s+|sealed\s+|open\s+|abstract\s+)?(?:class|interface|object|enum\s+class)\s+(\w+)",
+                re.M,
+            ),
+        ),
+        (
+            "function",
+            re.compile(
+                r"^\s*(?:suspend\s+|override\s+|private\s+|internal\s+)?fun\s+(?:<[^>]+>\s*)?(\w+)\s*\(([^)]*)\)",
+                re.M,
+            ),
+        ),
+    ),
+    "swift": (
+        (
+            "class",
+            re.compile(
+                r"^\s*(?:public|internal|private|final|\s)*(?:class|struct|protocol|enum|actor)\s+(\w+)",
+                re.M,
+            ),
+        ),
+        (
+            "function",
+            re.compile(
+                r"^\s*(?:public|internal|private|static|\s)*func\s+(\w+)\s*\(([^)]*)\)", re.M
+            ),
+        ),
+    ),
+    "sh": (
+        ("function", re.compile(r"^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)", re.M)),
+    ),
+    "sol": (
+        ("class", re.compile(r"^\s*(?:abstract\s+)?(?:contract|interface|library)\s+(\w+)", re.M)),
+        ("type", re.compile(r"^\s*(?:struct|enum)\s+(\w+)", re.M)),
+        ("function", re.compile(r"^\s*function\s+(\w+)\s*\(([^)]*)\)", re.M)),
+    ),
 }
 
 _LANG_IMPORT_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
@@ -126,11 +203,17 @@ _LANG_IMPORT_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
     "java": (re.compile(r"^\s*import\s+(?:static\s+)?([\w.]+);", re.M),),
     "rb": (re.compile(r"""^\s*require(?:_relative)?\s+['"]([^'"]+)['"]""", re.M),),
     "c": (re.compile(r"""^\s*#include\s*[<"]([^>"]+)[>"]""", re.M),),
+    "cs": (re.compile(r"^\s*using\s+(?:static\s+)?([\w.]+);", re.M),),
+    "php": (re.compile(r"^\s*use\s+([\w\\]+);", re.M),),
+    "kotlin": (re.compile(r"^\s*import\s+([\w.]+)", re.M),),
+    "swift": (re.compile(r"^\s*import\s+(\w+)", re.M),),
+    "sh": (re.compile(r"""^\s*(?:source|\.)\s+['"]?([^\s'"]+)['"]?""", re.M),),
+    "sol": (re.compile(r"""^\s*import\s+(?:[^'"]*from\s+)?['"]([^'"]+)['"]""", re.M),),
 }
 
 _EXT_TO_LANG: dict[str, str] = {
-    ".ts": "js",
-    ".tsx": "js",
+    ".ts": "ts",
+    ".tsx": "tsx",
     ".js": "js",
     ".jsx": "js",
     ".mjs": "js",
@@ -140,10 +223,24 @@ _EXT_TO_LANG: dict[str, str] = {
     ".java": "java",
     ".rb": "rb",
     ".c": "c",
-    ".cc": "c",
-    ".cpp": "c",
+    ".cc": "cpp",
+    ".cpp": "cpp",
     ".h": "c",
-    ".hpp": "c",
+    ".hpp": "cpp",
+    ".cs": "cs",
+    ".php": "php",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".swift": "swift",
+    ".sh": "sh",
+    ".bash": "sh",
+    ".sol": "sol",
+}
+
+_PATTERN_ALIAS: dict[str, str] = {
+    "ts": "js",
+    "tsx": "js",
+    "cpp": "c",
 }
 
 
@@ -310,24 +407,102 @@ def _extract_python_file_symbols(rel_path: str, source: str) -> FileSymbols | No
     )
 
 
-def _extract_regex_file_symbols(rel_path: str, lang: str, source: str) -> FileSymbols:
-    defs: list[SymbolDef] = []
-    for kind, pattern in _LANG_DEF_PATTERNS.get(lang, ()):
-        for match in pattern.finditer(source):
+def _preserve_newlines(match: re.Match[str]) -> str:
+    return "\n" * match.group(0).count("\n")
+
+
+def _strip_comments_and_strings(source: str, lang: str) -> str:
+    """Replace comments and string literals with whitespace while preserving line numbers."""
+    if lang in {"sh", "rb"}:
+        comment_pat = re.compile(r"#[^\n]*")
+    elif lang == "php":
+        comment_pat = re.compile(r"//[^\n]*|#[^\n]*|/\*[\s\S]*?\*/")
+    else:
+        comment_pat = re.compile(r"//[^\n]*|/\*[\s\S]*?\*/")
+    without_comments = comment_pat.sub(_preserve_newlines, source)
+    string_pat = re.compile(r'`[^`]*`|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'')
+    return string_pat.sub(_preserve_newlines, without_comments)
+
+
+def _advance_brace_line(
+    line: str,
+    depth: int,
+    pending: str | None,
+    stack: list[tuple[int, str]],
+) -> tuple[int, str | None]:
+    for ch in line:
+        if ch == "{":
+            depth += 1
+            if pending is not None:
+                stack.append((depth, pending))
+                pending = None
+        elif ch == "}":
+            while stack and depth <= stack[-1][0]:
+                stack.pop()
+            depth = max(0, depth - 1)
+    return depth, pending
+
+
+def _enclosing_parents_by_line(
+    source: str,
+    containers: list[SymbolDef],
+) -> dict[int, str]:
+    """Compute enclosing class/struct/contract names per line via brace depth."""
+    opener_by_line = {sym.line: sym.name for sym in containers if sym.kind in {"class", "type"}}
+    if not opener_by_line:
+        return {}
+
+    parents: dict[int, str] = {}
+    stack: list[tuple[int, str]] = []
+    depth = 0
+    pending: str | None = None
+    for lineno, line in enumerate(source.splitlines(), start=1):
+        if lineno in opener_by_line:
+            pending = opener_by_line[lineno]
+        parents[lineno] = stack[-1][1] if stack else ""
+        depth, pending = _advance_brace_line(line, depth, pending, stack)
+    return parents
+
+
+def _extract_polyglot_file_symbols(rel_path: str, lang: str, source: str) -> FileSymbols:
+    pat_lang = _PATTERN_ALIAS.get(lang, lang)
+    imports: set[str] = set()
+    for imp_pat in _LANG_IMPORT_PATTERNS.get(pat_lang, ()):
+        for match in imp_pat.finditer(source):
+            imports.add(match.group(1).replace("\\", "."))
+
+    cleaned = _strip_comments_and_strings(source, pat_lang)
+    containers: list[SymbolDef] = []
+    raw_defs: list[tuple[str, str, str, int]] = []
+    for kind, pattern in _LANG_DEF_PATTERNS.get(pat_lang, ()):
+        for match in pattern.finditer(cleaned):
             name = match.group(1)
             params = match.group(2).strip() if match.lastindex and match.lastindex >= 2 else ""
-            line = source.count("\n", 0, match.start()) + 1
+            line = cleaned.count("\n", 0, match.start()) + 1
             sig = f"{kind} {name}({params})" if kind == "function" else f"{kind} {name}"
-            defs.append(SymbolDef(name=name, kind=kind, signature=sig, line=line))
+            if kind in {"class", "type"}:
+                containers.append(SymbolDef(name=name, kind=kind, signature=sig, line=line))
+            raw_defs.append((name, kind, sig, line))
+
+    parent_map = _enclosing_parents_by_line(cleaned, containers)
+    defs: list[SymbolDef] = []
+    for name, kind, sig, line in raw_defs:
+        enclosing = parent_map.get(line, "")
+        parent = enclosing if (enclosing and enclosing != name and kind == "function") else None
+        effective_kind = "method" if parent is not None else kind
+        defs.append(
+            SymbolDef(
+                name=name,
+                kind=effective_kind,
+                signature=sig,
+                line=line,
+                parent=parent,
+            )
+        )
 
     defs.sort(key=lambda item: (item.line, item.name))
-    imports: set[str] = set()
-    for imp_pat in _LANG_IMPORT_PATTERNS.get(lang, ()):
-        for match in imp_pat.finditer(source):
-            imports.add(match.group(1))
-
     defined_names = {d.name for d in defs}
-    refs = {m.group(1) for m in _IDENT_RE.finditer(source)} - defined_names
+    refs = {m.group(1) for m in _IDENT_RE.finditer(cleaned)} - defined_names
     return FileSymbols(
         rel_path=rel_path,
         definitions=tuple(defs),
@@ -342,9 +517,15 @@ def _extract_file_symbols(rel_path: str, suffix: str, source: str) -> FileSymbol
         parsed = _extract_python_file_symbols(rel_path, source)
         if parsed is not None:
             return parsed
-        return _extract_regex_file_symbols(rel_path, "py", source)
+        return _extract_polyglot_file_symbols(rel_path, "py", source)
     lang = _EXT_TO_LANG.get(suffix, "")
-    return _extract_regex_file_symbols(rel_path, lang, source)
+    if lang:
+        from agent_forge.agent.treesitter import extract_treesitter_file_symbols
+
+        ts_parsed = extract_treesitter_file_symbols(rel_path, lang, source)
+        if ts_parsed is not None:
+            return ts_parsed
+    return _extract_polyglot_file_symbols(rel_path, lang, source)
 
 
 def _load_gitignore_patterns(repo_root: Path) -> tuple[str, ...]:

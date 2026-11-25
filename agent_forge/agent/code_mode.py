@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agent_forge.agent.approvals import ApprovalGate
+from agent_forge.agent.diagnostics import maybe_attach_post_edit_diagnostics
 from agent_forge.agent.journal import compute_tool_idempotency_key, is_side_effecting_tool
 from agent_forge.agent.models import ToolInvocation
 from agent_forge.orchestration.events import Event, EventType
@@ -444,6 +445,13 @@ class HostToolBridge:
 
         try:
             result = await tool_obj.execute(dict(arguments), self.sandbox)
+            result = await maybe_attach_post_edit_diagnostics(
+                self.run,
+                tool_name,
+                dict(arguments),
+                result,
+                self.sandbox,
+            )
         except (OSError, RuntimeError, ValueError, TypeError) as exc:
             result = ToolResult(output="", error=f"{type(exc).__name__}: {exc}", exit_code=1)
 

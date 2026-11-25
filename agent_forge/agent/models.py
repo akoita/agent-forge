@@ -41,6 +41,7 @@ class AgentConfig:
     profile_id: str | None = None  # Active agent profile for this run
     approval_mode: str = "auto"  # "auto" | "prompt" | "deny"
     execution_mode: str = "tool_calling"  # "tool_calling" | "code_mode"
+    post_edit_diagnostics: bool = False
     max_cost_usd: float | None = None
     max_duration_seconds: float | None = None
     budget_action: str = "timeout"  # "timeout" | "pause"
