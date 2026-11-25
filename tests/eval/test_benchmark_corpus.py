@@ -3028,3 +3028,137 @@ async def test_code_mode_ab_benchmark_vs_tool_calling(tmp_path: Path) -> None:
     assert replay_b.valid is True
     assert replay_b.anomalies == []
     assert replay_b.duplicate_side_effects == []
+
+
+@pytest.mark.asyncio
+async def test_polyglot_repo_map_and_post_edit_diagnostics_catch_errors_early(
+    tmp_path: Path,
+) -> None:
+    """Verify #224: polyglot repo map & post-edit diagnostics catch syntax bugs immediately."""
+    from agent_forge.agent.core import react_loop
+    from agent_forge.agent.models import AgentConfig, AgentRun, RunState
+    from agent_forge.agent.repo_map import build_repo_map
+    from agent_forge.llm.base import (
+        LLMConfig,
+        LLMProvider,
+        LLMResponse,
+        Message,
+        TokenUsage,
+        ToolCall,
+        ToolDefinition,
+    )
+    from agent_forge.tools import ReadFileTool, ToolRegistry, WriteFileTool
+
+    repo = tmp_path / "poly_diag_repo"
+    repo.mkdir()
+    (repo / "service.ts").write_text(
+        "// function decoy() {}\nexport class BillingService {\n  charge(cents: number) {}\n}\n",
+        encoding="utf-8",
+    )
+    (repo / "handler.py").write_text(
+        "def compute(x: int) -> int:\n    return x + 1\n",
+        encoding="utf-8",
+    )
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_handler.py").write_text(
+        "import unittest\n"
+        "from handler import compute\n\n"
+        "class TestHandler(unittest.TestCase):\n"
+        "    def test_compute(self) -> None:\n"
+        "        self.assertEqual(compute(2), 4)\n",
+        encoding="utf-8",
+    )
+
+    rmap = build_repo_map(repo, task="Update BillingService and handler compute")
+    assert "decoy" not in rmap.rendered
+    assert "class BillingService" in rmap.rendered
+    assert "def compute(x: int) -> int" in rmap.rendered
+
+    sb = _AbEvalSandbox()
+    await sb.start(str(repo), SandboxConfig())
+    tools = ToolRegistry()
+    tools.register(ReadFileTool())
+    tools.register(WriteFileTool())
+
+    observed_diag: list[str] = []
+
+    class _DiagEvalLLM(LLMProvider):
+        def __init__(self) -> None:
+            self._turn = 0
+
+        @property
+        def model_name(self) -> str:
+            return "diag-eval"
+
+        async def complete(
+            self,
+            messages: list[Message],
+            tools: list[ToolDefinition] | None = None,
+            config: LLMConfig | None = None,
+        ) -> LLMResponse:
+            del tools, config
+            self._turn += 1
+            for m in messages:
+                if m.role.value == "tool" and "[POST-EDIT DIAGNOSTICS" in m.content:
+                    observed_diag.append(m.content)
+            if self._turn == 1:
+                return LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="e1",
+                            name="write_file",
+                            arguments={
+                                "path": "/workspace/handler.py",
+                                "content": "def compute(x: int) -> int:\n    return (x + 2\n",
+                            },
+                        )
+                    ],
+                    usage=TokenUsage(15, 10, 25),
+                    model="diag-eval",
+                    finish_reason="tool_calls",
+                )
+            if self._turn == 2:
+                return LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="e2",
+                            name="write_file",
+                            arguments={
+                                "path": "/workspace/handler.py",
+                                "content": "def compute(x: int) -> int:\n    return x + 2\n",
+                            },
+                        )
+                    ],
+                    usage=TokenUsage(15, 10, 25),
+                    model="diag-eval",
+                    finish_reason="tool_calls",
+                )
+            return LLMResponse(
+                content="Corrected handler.py after post-edit syntax diagnostic.",
+                usage=TokenUsage(12, 8, 20),
+                model="diag-eval",
+                finish_reason="stop",
+            )
+
+        async def stream(
+            self,
+            messages: list[Message],
+            tools: list[ToolDefinition] | None = None,
+            config: LLMConfig | None = None,
+        ):
+            del messages, tools, config
+            if False:  # pragma: no cover
+                yield None
+
+    run = AgentRun(
+        task="Fix compute return value",
+        repo_path=str(repo),
+        config=AgentConfig(post_edit_diagnostics=True, context_enabled=False),
+    )
+    await react_loop(run, _DiagEvalLLM(), tools, sb, emit_lifecycle=False)
+    assert run.state == RunState.COMPLETED
+    assert observed_diag
+    assert run.tool_invocations[-1].result.metadata["diagnostics"]["errors"] == 0
+    assert _run_unittest(repo).returncode == 0
