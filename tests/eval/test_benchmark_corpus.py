@@ -3191,3 +3191,124 @@ async def test_deterministic_eval_paired_code_mode_and_subagents_smoke() -> None
 
     assert subagents.verified_fixes == len(report.tasks)
     assert subagents.total_tokens > oracle.total_tokens
+
+
+@pytest.mark.asyncio
+async def test_repo_memory_persists_learnings_across_runs_and_guides_next_run(
+    tmp_path: Path,
+) -> None:
+    """Verify #25: persisted .agent-forge/memory.md guides a fresh subsequent run."""
+    from agent_forge.agent.context import ContextEngine
+    from agent_forge.agent.core import react_loop
+    from agent_forge.agent.memory import RepoMemoryStore
+    from agent_forge.agent.models import AgentConfig, AgentRun, RunState
+    from agent_forge.agent.runner import render_task_system_prompt
+    from agent_forge.llm.base import (
+        LLMConfig,
+        LLMProvider,
+        LLMResponse,
+        Message,
+        TokenUsage,
+        ToolCall,
+        ToolDefinition,
+    )
+    from agent_forge.tools import create_default_registry
+
+    repo = tmp_path / "mem_repo"
+    repo.mkdir()
+    (repo / "service.py").write_text("PORT = 8000\n", encoding="utf-8")
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_service.py").write_text(
+        "import unittest\n"
+        "from service import PORT\n\n"
+        "class TestService(unittest.TestCase):\n"
+        "    def test_port(self) -> None:\n"
+        "        self.assertEqual(PORT, 8099)\n",
+        encoding="utf-8",
+    )
+
+    # Run 1 stores a repo-specific learning into .agent-forge/memory.md
+    store = RepoMemoryStore(repo)
+    _, added = store.add(
+        "service.py must expose PORT = 8099 to match deployment health probes",
+        category="config",
+        created_at="2026-11-25",
+    )
+    assert added is True
+
+    # Run 2 renders initial context on a fresh ContextEngine and sees the learning before ## Task
+    tools = create_default_registry(load_plugins=False)
+    sb_cfg = SandboxConfig(backend="subprocess-eval")
+    sys_prompt = render_task_system_prompt(
+        "Update service port to expected value",
+        tools,
+        sb_cfg,
+        repo_path=repo,
+        context_engine=ContextEngine(repo, task="Update service port to expected value"),
+        discover_extensions=False,
+    )
+    assert "service.py must expose PORT = 8099" in sys_prompt.split("## Task", 1)[0]
+
+    sb = _AbEvalSandbox()
+    await sb.start(str(repo), sb_cfg)
+
+    class _MemoryEvalLLM(LLMProvider):
+        def __init__(self) -> None:
+            self._turn = 0
+            self.saw_memory_in_system = False
+
+        @property
+        def model_name(self) -> str:
+            return "mem-eval"
+
+        async def complete(
+            self,
+            messages: list[Message],
+            tools: list[ToolDefinition] | None = None,
+            config: LLMConfig | None = None,
+        ) -> LLMResponse:
+            del tools, config
+            self._turn += 1
+            if messages and messages[0].role.value == "system":
+                self.saw_memory_in_system = "PORT = 8099" in messages[0].content
+            if self._turn == 1:
+                return LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="m1",
+                            name="write_file",
+                            arguments={"path": "/workspace/service.py", "content": "PORT = 8099\n"},
+                        )
+                    ],
+                    usage=TokenUsage(20, 10, 30),
+                    model="mem-eval",
+                    finish_reason="tool_calls",
+                )
+            return LLMResponse(
+                content="Updated PORT per persisted repository memory.",
+                usage=TokenUsage(20, 10, 30),
+                model="mem-eval",
+                finish_reason="stop",
+            )
+
+        async def stream(
+            self,
+            messages: list[Message],
+            tools: list[ToolDefinition] | None = None,
+            config: LLMConfig | None = None,
+        ):
+            del messages, tools, config
+            if False:  # pragma: no cover
+                yield None
+
+    llm = _MemoryEvalLLM()
+    run = AgentRun(
+        task="Update service port to expected value",
+        repo_path=str(repo),
+        config=AgentConfig(system_prompt=sys_prompt, context_enabled=False),
+    )
+    await react_loop(run, llm, tools, sb, emit_lifecycle=False)
+    assert run.state == RunState.COMPLETED
+    assert llm.saw_memory_in_system is True
+    assert _run_unittest(repo).returncode == 0
