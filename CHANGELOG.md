@@ -2,6 +2,24 @@
 
 All notable changes to Agent Forge are documented in this file.
 
+## [0.8.0] - 2026-11-25
+
+### Added
+- **Bounded Hierarchical Subagents (`agent_forge/agent/subagent.py`, `agent_forge/tools/subagent.py`):**
+  - Read-only `research` fan-out sharing the parent sandbox plus isolated Git worktree `worker` subagents (`spawn_subagent`) with recursion depth/token/count guards, `--subagents` / `--no-subagents` CLI flags, and orphan worktree cleanup (`#32`).
+- **Opt-In Code Mode & Host RPC Bridge (`agent_forge/agent/code_mode.py`, `agent_forge/tools/code_mode.py`):**
+  - Progressive tool discovery (`search_tools`) and sandboxed Python orchestration (`execute_code`) over a host RPC bridge preserving `ApprovalGate` checks, secret stripping, idempotency keys, and `RunJournal` replay (`--code-mode`, `#193`).
+- **Real Docker Verification & ADE Subagent/Code Mode UX (`agent_forge/agent/chat.py`, `agent_forge/acp/`):**
+  - Interactive `/subagents` and `/apply <subagent_id>` chat commands, `[code-mode]` / bridged child progress events in Chat & ACP `session/update`, and real `--network none` Docker integration tests (`#223`).
+- **Polyglot Code Intelligence & Post-Edit Diagnostics (`agent_forge/agent/treesitter.py`, `agent_forge/agent/diagnostics.py`, `agent_forge/agent/repo_map.py`):**
+  - Optional AST-backed tree-sitter symbol extraction (`pip install 'agent-forge[code-intel]'`), hardened comment/string-stripped polyglot repo maps with enclosing-parent attribution, and opt-in `post_edit_diagnostics` / `--diagnostics` sandbox checks wired into both `react_loop` and `HostToolBridge` (`#224`, ADR-028).
+- **Paired Benchmark Profiles (`agent_forge/eval/deterministic.py`):**
+  - Added `--include-paired` to `python -m agent_forge.eval` to score `deterministic-oracle-code-mode` and `deterministic-oracle-subagents` alongside baseline profiles (`#225`).
+
+### Changed
+- Package version bumped from `0.7.0` to `0.8.0` in `pyproject.toml` and `agent_forge/__init__.py`.
+- Checked in refreshed full 12-task paired deterministic baseline at `docs/eval/baseline-v0.8.0.{json,md}` (`#225`).
+
 ## [0.7.0] - 2026-11-24
 
 ### Added
