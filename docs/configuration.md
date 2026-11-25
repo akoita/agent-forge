@@ -26,6 +26,7 @@ temperature = 0.0
 system_prompt_path = ""
 approval_mode = "auto"          # "auto", "prompt", or "deny"
 execution_mode = "tool_calling" # "tool_calling" or opt-in "code_mode"
+post_edit_diagnostics = false   # run lightweight post-edit syntax/compiler checks
 budget_action = "timeout"       # "timeout" or "pause"
 # max_cost_usd = 1.00           # optional estimated USD limit per run
 # max_duration_seconds = 300.0  # optional wall-clock limit per run
@@ -154,6 +155,7 @@ agent-forge run \
   --budget-action pause \           # "timeout" or "pause" on budget exceed
   --approval-mode prompt \          # "auto", "prompt", or "deny"
   --execution-mode code_mode \      # "tool_calling" (default) or "code_mode"
+  --diagnostics \                   # run fast syntax/compiler checks after edits
   --subagents \                     # enable bounded spawn_subagent delegation
   --sandbox-backend auto \
   --sandbox-image agent-forge-sandbox:full \
