@@ -40,6 +40,7 @@ class AgentSettings(BaseModel):
     system_prompt_path: str = ""
     approval_mode: Literal["auto", "prompt", "deny"] = "auto"
     execution_mode: Literal["tool_calling", "code_mode"] = "tool_calling"
+    post_edit_diagnostics: bool = False
     max_cost_usd: float | None = None
     max_duration_seconds: float | None = None
     budget_action: Literal["timeout", "pause"] = "timeout"
