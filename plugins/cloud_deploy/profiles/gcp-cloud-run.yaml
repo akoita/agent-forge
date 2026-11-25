@@ -1,0 +1,18 @@
+id: cloud-deploy-gcp
+name: Cloud Deploy — GCP Cloud Run
+description: Plan/inspect and approval-gated Cloud Run deployments using host-brokered WIF/OIDC auth.
+aliases:
+  - gcp-deploy
+  - cloud-run-deploy
+capabilities:
+  - cloud-deploy
+  - gcp
+  - approval-gated
+prompt_scope: |
+  You are managing a GCP Cloud Run deployment inside an isolated sandbox.
+  1. Always run `gcp_cloud_run_plan` first to inspect live service state and mint a `plan_id`.
+  2. Summarize image, project, region, and diff highlights before invoking `gcp_cloud_run_deploy`.
+  3. Authentication uses short-lived host-brokered GCP Workload Identity Federation (WIF/OIDC);
+     never read or embed static service-account JSON keys.
+  4. Egress allowlist is restricted to GCP endpoints (run.googleapis.com, iamcredentials.googleapis.com,
+     sts.googleapis.com, oauth2.googleapis.com, artifactregistry.googleapis.com, storage.googleapis.com).
