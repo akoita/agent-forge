@@ -68,6 +68,9 @@ class ContextSettings(BaseModel):
     compaction_target_ratio: float = 0.45
     keep_recent_turns: int = 4
     stale_tool_result_max_chars: int = 600
+    memory_enabled: bool = True
+    memory_path: str = ".agent-forge/memory.md"
+    max_memory_tokens: int = 800
 
 
 class SandboxSettings(BaseModel):

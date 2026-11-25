@@ -39,6 +39,12 @@ from agent_forge.agent.journal import (
     compute_tool_idempotency_key,
     replay_journal,
 )
+from agent_forge.agent.memory import (
+    DEFAULT_MEMORY_PATH,
+    MemoryEntry,
+    RenderedMemory,
+    RepoMemoryStore,
+)
 from agent_forge.agent.models import AgentConfig, AgentRun, RunState, ToolInvocation
 from agent_forge.agent.persistence import load_run, save_run
 from agent_forge.agent.prompts import build_system_prompt
@@ -49,6 +55,7 @@ from agent_forge.agent.subagent import SubagentLimits, SubagentResult, SubagentR
 from agent_forge.agent.treesitter import extract_treesitter_file_symbols, is_treesitter_available
 
 __all__ = [
+    "DEFAULT_MEMORY_PATH",
     "AgentConfig",
     "AgentRun",
     "ChatSessionRuntime",
@@ -68,7 +75,10 @@ __all__ = [
     "InvalidStateTransitionError",
     "JournalEntry",
     "JsonArtifactClause",
+    "MemoryEntry",
+    "RenderedMemory",
     "ReplayResult",
+    "RepoMemoryStore",
     "RunJournal",
     "RunState",
     "SessionStore",

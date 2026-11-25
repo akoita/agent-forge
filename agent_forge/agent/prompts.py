@@ -64,8 +64,13 @@ def _format_network_rule(network_enabled: bool) -> tuple[str, str]:
 def _format_repo_context(
     repo_instructions: str | None,
     repo_map: str | None,
+    repo_memory: str | None = None,
 ) -> str:
-    blocks = [block.strip() for block in (repo_instructions, repo_map) if block and block.strip()]
+    blocks = [
+        block.strip()
+        for block in (repo_instructions, repo_memory, repo_map)
+        if block and block.strip()
+    ]
     if not blocks:
         return ""
     return "\n\n" + "\n\n".join(blocks)
@@ -83,6 +88,7 @@ def render_system_prompt(
     published_ports: Sequence[str] | None = None,
     repo_instructions: str | None = None,
     repo_map: str | None = None,
+    repo_memory: str | None = None,
     scoped_instructions: str | None = None,
     prompt_scope: str | None = None,
     extension_prompts: list[str] | None = None,
@@ -97,7 +103,7 @@ def render_system_prompt(
         "network_rule": network_rule,
         "network_status": network_status,
         "command_timeout_seconds": command_timeout_seconds,
-        "repo_context": _format_repo_context(repo_instructions, repo_map),
+        "repo_context": _format_repo_context(repo_instructions, repo_map, repo_memory),
         "task_description": task,
         **template_vars,
     }
@@ -134,6 +140,7 @@ def build_system_prompt(
     published_ports: Sequence[str] | None = None,
     repo_instructions: str | None = None,
     repo_map: str | None = None,
+    repo_memory: str | None = None,
     scoped_instructions: str | None = None,
     prompt_scope: str | None = None,
     extension_prompts: list[str] | None = None,
@@ -150,6 +157,7 @@ def build_system_prompt(
         published_ports=published_ports,
         repo_instructions=repo_instructions,
         repo_map=repo_map,
+        repo_memory=repo_memory,
         scoped_instructions=scoped_instructions,
         prompt_scope=prompt_scope,
         extension_prompts=extension_prompts,
@@ -208,6 +216,7 @@ def build_hosted_system_prompt(
     published_ports: Sequence[str] | None = None,
     repo_instructions: str | None = None,
     repo_map: str | None = None,
+    repo_memory: str | None = None,
     scoped_instructions: str | None = None,
     prompt_scope: str | None = None,
     extension_prompts: list[str] | None = None,
@@ -224,6 +233,7 @@ def build_hosted_system_prompt(
         published_ports=published_ports,
         repo_instructions=repo_instructions,
         repo_map=repo_map,
+        repo_memory=repo_memory,
         scoped_instructions=scoped_instructions,
         prompt_scope=prompt_scope,
         extension_prompts=extension_prompts,
