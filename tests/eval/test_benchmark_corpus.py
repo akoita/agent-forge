@@ -3162,3 +3162,32 @@ async def test_polyglot_repo_map_and_post_edit_diagnostics_catch_errors_early(
     assert observed_diag
     assert run.tool_invocations[-1].result.metadata["diagnostics"]["errors"] == 0
     assert _run_unittest(repo).returncode == 0
+
+
+@pytest.mark.asyncio
+async def test_deterministic_eval_paired_code_mode_and_subagents_smoke() -> None:
+    """Verify #225: paired Code Mode & Subagents profiles pass deterministic gates."""
+    report = await run_deterministic_eval(suite="smoke", include_paired=True)
+    assert check_deterministic_gates(report) == []
+
+    by_profile = {p.profile: p for p in report.profiles}
+    assert set(by_profile) == {
+        "deterministic-oracle",
+        "deterministic-noop",
+        "deterministic-incomplete",
+        "deterministic-oracle-code-mode",
+        "deterministic-oracle-subagents",
+    }
+
+    oracle = by_profile["deterministic-oracle"]
+    code_mode = by_profile["deterministic-oracle-code-mode"]
+    subagents = by_profile["deterministic-oracle-subagents"]
+
+    assert code_mode.verified_fixes == len(report.tasks)
+    assert code_mode.total_tokens < oracle.total_tokens
+    oracle_mean_iters = sum(r.iterations for r in oracle.results) / len(oracle.results)
+    cm_mean_iters = sum(r.iterations for r in code_mode.results) / len(code_mode.results)
+    assert cm_mean_iters < oracle_mean_iters
+
+    assert subagents.verified_fixes == len(report.tasks)
+    assert subagents.total_tokens > oracle.total_tokens

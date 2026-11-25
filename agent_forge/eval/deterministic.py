@@ -17,6 +17,7 @@ from agent_forge.agent.core import react_loop
 from agent_forge.agent.journal import RunJournal
 from agent_forge.agent.models import AgentConfig, AgentRun
 from agent_forge.agent.prompts import build_system_prompt
+from agent_forge.agent.subagent import SubagentLimits, SubagentRunner
 from agent_forge.agent.verification import VerificationWorkspace
 from agent_forge.config import ModelProfileSettings
 from agent_forge.eval.benchmark import (
@@ -43,15 +44,20 @@ from agent_forge.llm.base import (
 from agent_forge.sandbox.base import ExecResult, Sandbox, SandboxConfig, SandboxState
 from agent_forge.sandbox.sessions import LocalPtySessionManager, SessionLimits, SessionSnapshot
 from agent_forge.tools import create_default_registry
+from agent_forge.tools.subagent import SpawnSubagentTool
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-ScriptedMode = Literal["oracle", "noop", "incomplete"]
+ScriptedMode = Literal["oracle", "noop", "incomplete", "oracle_code_mode", "oracle_subagents"]
 _SCRIPTED_PROFILES: tuple[tuple[str, ScriptedMode], ...] = (
     ("deterministic-oracle", "oracle"),
     ("deterministic-noop", "noop"),
     ("deterministic-incomplete", "incomplete"),
+)
+_PAIRED_SCRIPTED_PROFILES: tuple[tuple[str, ScriptedMode], ...] = (
+    ("deterministic-oracle-code-mode", "oracle_code_mode"),
+    ("deterministic-oracle-subagents", "oracle_subagents"),
 )
 
 
@@ -270,6 +276,73 @@ class SubprocessEvalSandbox(Sandbox):
         return target
 
 
+def _build_code_mode_script(task: BenchmarkTask) -> str:
+    """Build a single Code Mode script reading, patching, and verifying *task*."""
+    first_file = next(iter(task.files))
+    lines = [
+        f"call_tool('read_file', {{'path': {f'/workspace/{first_file}'!r}}})",
+    ]
+    for rel_path, content in task.known_good_files.items():
+        ws_path = f"/workspace/{rel_path}"
+        lines.append(f"call_tool('write_file', {{'path': {ws_path!r}, 'content': {content!r}}})")
+    lines.append(f"res = call_tool('run_shell', {{'command': {task.verify_command!r}}})")
+    lines.append("assert res['exit_code'] == 0, res.get('error') or res.get('output')")
+    lines.append("print('verified')")
+    return "\n".join(lines) + "\n"
+
+
+class _ScriptedResearchSubagentLLM(LLMProvider):
+    """Deterministic child provider for read-only research subagent eval runs."""
+
+    def __init__(self, task: BenchmarkTask) -> None:
+        first_file = next(iter(task.files))
+        model_id = "scripted-subagent-research"
+        self._turns = [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="sub_read_1",
+                        name="read_file",
+                        arguments={"path": f"/workspace/{first_file}"},
+                    )
+                ],
+                usage=TokenUsage(prompt_tokens=80, completion_tokens=15, total_tokens=95),
+                model=model_id,
+                finish_reason="tool_calls",
+                reported_model=model_id,
+            ),
+            LLMResponse(
+                content="Inspected target file and located the issue.",
+                tool_calls=[],
+                usage=TokenUsage(prompt_tokens=90, completion_tokens=15, total_tokens=105),
+                model=model_id,
+                finish_reason="stop",
+                reported_model=model_id,
+            ),
+        ]
+        self._cursor = 0
+
+    async def complete(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None = None,
+        config: LLMConfig | None = None,
+    ) -> LLMResponse:
+        del messages, tools, config
+        idx = min(self._cursor, len(self._turns) - 1)
+        self._cursor += 1
+        return self._turns[idx]
+
+    async def stream(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None = None,
+        config: LLMConfig | None = None,
+    ) -> AsyncIterator[LLMResponse]:
+        yield await self.complete(messages, tools=tools, config=config)
+
+
 class _ScriptedEvalLLM(LLMProvider):
     """Deterministic scripted provider exercising tools and verification."""
 
@@ -282,16 +355,52 @@ class _ScriptedEvalLLM(LLMProvider):
     def _build_turns(task: BenchmarkTask, mode: ScriptedMode) -> list[LLMResponse]:
         first_file = next(iter(task.files))
         model_id = f"scripted-{mode}"
+        if mode == "oracle_code_mode":
+            return [
+                LLMResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_code_1",
+                            name="execute_code",
+                            arguments={"code": _build_code_mode_script(task)},
+                        )
+                    ],
+                    usage=TokenUsage(prompt_tokens=95, completion_tokens=45, total_tokens=140),
+                    model=model_id,
+                    finish_reason="tool_calls",
+                    reported_model=model_id,
+                ),
+                LLMResponse(
+                    content=f"Completed scripted {mode} trajectory.",
+                    tool_calls=[],
+                    usage=TokenUsage(prompt_tokens=105, completion_tokens=15, total_tokens=120),
+                    model=model_id,
+                    finish_reason="stop",
+                    reported_model=model_id,
+                ),
+            ]
+
+        first_call = (
+            ToolCall(
+                id="call_sub_1",
+                name="spawn_subagent",
+                arguments={
+                    "task": f"Inspect {first_file} and summarize the bug.",
+                    "mode": "research",
+                },
+            )
+            if mode == "oracle_subagents"
+            else ToolCall(
+                id="call_read_1",
+                name="read_file",
+                arguments={"path": f"/workspace/{first_file}"},
+            )
+        )
         turns = [
             LLMResponse(
                 content="",
-                tool_calls=[
-                    ToolCall(
-                        id="call_read_1",
-                        name="read_file",
-                        arguments={"path": f"/workspace/{first_file}"},
-                    )
-                ],
+                tool_calls=[first_call],
                 usage=TokenUsage(prompt_tokens=120, completion_tokens=20, total_tokens=140),
                 model=model_id,
                 finish_reason="tool_calls",
@@ -299,7 +408,7 @@ class _ScriptedEvalLLM(LLMProvider):
             )
         ]
         target_files: dict[str, str] = {}
-        if mode == "oracle":
+        if mode in {"oracle", "oracle_subagents"}:
             target_files = task.known_good_files
         elif mode == "incomplete":
             target_files = task.incomplete_files
@@ -321,7 +430,7 @@ class _ScriptedEvalLLM(LLMProvider):
                     reported_model=model_id,
                 )
             )
-        if mode == "oracle":
+        if mode in {"oracle", "oracle_subagents"}:
             turns.append(
                 LLMResponse(
                     content="",
@@ -396,6 +505,7 @@ async def _run_deterministic_attempt(
             max_iterations=10,
             max_tokens_per_run=40_000,
             temperature=0.0,
+            execution_mode="code_mode" if mode == "oracle_code_mode" else "tool_calling",
             system_prompt=build_system_prompt(
                 task.prompt,
                 tools.list_definitions(),
@@ -408,21 +518,44 @@ async def _run_deterministic_attempt(
                 scoped_instructions=context_engine.task_scoped_instructions_rendered or None,
             ),
         )
-        run = AgentRun(task=task.prompt, repo_path=str(repo_path), config=agent_cfg)
-        journal: RunJournal | None = None
-        if trajectory_dir is not None:
-            traj_path = trajectory_dir / f"{profile_name}__{task.id}__attempt-1.jsonl"
-            if traj_path.exists():
-                traj_path.unlink()
-            journal = RunJournal(run.id, path=traj_path, fsync=False)
         llm = _ScriptedEvalLLM(task, mode)
         sandbox = SubprocessEvalSandbox()
+        run: AgentRun | None = None
+        journal: RunJournal | None = None
         try:
             with VerificationWorkspace(
                 str(repo_path),
                 task.verify_command,
                 extra_verifier_files=task.hidden_tests,
             ) as workspace:
+                run = AgentRun(
+                    task=task.prompt, repo_path=str(workspace.workspace), config=agent_cfg
+                )
+                if mode == "oracle_subagents":
+                    runner = SubagentRunner(
+                        repo_path=str(workspace.workspace),
+                        parent_config=agent_cfg,
+                        sandbox_config=sandbox_cfg,
+                        llm_factory=lambda: _ScriptedResearchSubagentLLM(task),
+                        sandbox_factory=lambda _cfg: SubprocessEvalSandbox(),
+                        parent_tools=tools,
+                        limits=SubagentLimits(
+                            max_depth=1,
+                            max_subagents_per_run=2,
+                            max_iterations=4,
+                            max_tokens=20_000,
+                        ),
+                        parent_run_id=run.id,
+                        on_tokens=lambda usage: setattr(
+                            run, "total_tokens", run.total_tokens + usage
+                        ),
+                    )
+                    tools.register(SpawnSubagentTool(runner))
+                if trajectory_dir is not None:
+                    traj_path = trajectory_dir / f"{profile_name}__{task.id}__attempt-1.jsonl"
+                    if traj_path.exists():
+                        traj_path.unlink()
+                    journal = RunJournal(run.id, path=traj_path, fsync=False)
                 await sandbox.start(repo_path=str(workspace.workspace), config=sandbox_cfg)
 
                 async def _verify() -> Any:
@@ -511,14 +644,18 @@ async def run_deterministic_eval(
     output_md: Path | None = None,
     trajectory_dir: Path | None = None,
     max_concurrency: int = 1,
+    include_paired: bool = False,
 ) -> BenchmarkReport:
     """Run offline scripted oracle/noop/incomplete evaluation and emit scored reports."""
     if max_concurrency < 1:
         msg = "max_concurrency must be >= 1"
         raise ValueError(msg)
     tasks = resolve_tasks(task_ids, suite=suite)
+    selected_profiles = (
+        _SCRIPTED_PROFILES + _PAIRED_SCRIPTED_PROFILES if include_paired else _SCRIPTED_PROFILES
+    )
     summaries: list[ProfileBenchmarkSummary] = []
-    for profile_name, mode in _SCRIPTED_PROFILES:
+    for profile_name, mode in selected_profiles:
         results = await _run_profile_deterministic_tasks(
             profile_name,
             mode,
@@ -642,5 +779,30 @@ def check_deterministic_gates(report: BenchmarkReport) -> list[str]:
                 expected_run_state=exp_state,
                 expected_unmet=exp_unmet,
             )
+        )
+
+    for paired_name in ("deterministic-oracle-code-mode", "deterministic-oracle-subagents"):
+        paired_summary = by_profile.get(paired_name)
+        if paired_summary is not None:
+            failures.extend(
+                _check_profile_gate(
+                    paired_summary,
+                    expected_rate=1.0,
+                    expected_reason="verified",
+                    expected_patch=True,
+                    expected_run_state="completed",
+                    expected_unmet=(),
+                )
+            )
+    oracle_summary = by_profile.get("deterministic-oracle")
+    code_mode_summary = by_profile.get("deterministic-oracle-code-mode")
+    if (
+        oracle_summary is not None
+        and code_mode_summary is not None
+        and code_mode_summary.total_tokens >= oracle_summary.total_tokens
+    ):
+        failures.append(
+            "deterministic-oracle-code-mode: expected fewer total_tokens than deterministic-oracle "
+            f"({code_mode_summary.total_tokens} >= {oracle_summary.total_tokens})"
         )
     return failures
