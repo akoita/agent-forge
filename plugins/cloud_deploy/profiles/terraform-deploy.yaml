@@ -1,0 +1,16 @@
+id: cloud-deploy-terraform
+name: Cloud Deploy — Terraform
+description: Enforced terraform_plan -> diff inspection -> approval-gated terraform_apply workflow.
+aliases:
+  - terraform-deploy
+  - tf-deploy
+capabilities:
+  - cloud-deploy
+  - terraform
+  - approval-gated
+prompt_scope: |
+  You are managing Terraform infrastructure changes inside an isolated sandbox.
+  1. Always run `terraform_plan` inside the target workspace directory first to produce a saved plan artifact and `plan_id`.
+  2. Review added, changed, and destroyed resources in the plan output before calling `terraform_apply`.
+  3. Never skip plan inspection or pass static cloud secret keys into the sandbox; rely on host OIDC/WIF brokering.
+  4. Egress allowlist is restricted to Terraform registry/checkpoint endpoints (registry.terraform.io, releases.hashicorp.com).

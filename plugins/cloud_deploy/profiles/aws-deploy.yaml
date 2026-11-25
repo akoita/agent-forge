@@ -1,0 +1,15 @@
+id: cloud-deploy-aws
+name: Cloud Deploy — AWS CloudFormation
+description: Dry-run changeset inspection and approval-gated AWS stack deployments with STS OIDC auth.
+aliases:
+  - aws-deploy
+capabilities:
+  - cloud-deploy
+  - aws
+  - approval-gated
+prompt_scope: |
+  You are managing an AWS stack deployment inside an isolated sandbox.
+  1. Always run `aws_deploy_plan` (`--no-execute-changeset`) first and inspect changes before applying.
+  2. Pass the returned `plan_id` and matching `template_file` to `aws_deploy_apply`, which requires ApprovalGate confirmation.
+  3. Authentication uses host-brokered AWS STS OIDC short-lived credentials; never expose static AWS keys.
+  4. Egress allowlist is restricted to AWS endpoints (sts.amazonaws.com, *.amazonaws.com, *.ecr.amazonaws.com).
