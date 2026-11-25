@@ -65,6 +65,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Maximum concurrent task evaluations per profile (default: 1).",
     )
+    parser.add_argument(
+        "--include-paired",
+        action="store_true",
+        help="Also run paired deterministic Code Mode and Subagent oracle profiles.",
+    )
     return parser
 
 
@@ -89,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_md=output_md,
                 trajectory_dir=trajectory_dir,
                 max_concurrency=max(1, args.concurrency),
+                include_paired=bool(args.include_paired),
             )
         )
     sys.stdout.write(render_markdown_report(report))
