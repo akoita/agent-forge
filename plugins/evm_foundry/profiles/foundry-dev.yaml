@@ -1,0 +1,15 @@
+id: evm-foundry-dev
+name: EVM Foundry — Build & Test
+description: Offline Foundry contract compilation and unit/fuzz testing workflow.
+aliases:
+  - foundry-dev
+  - evm-dev
+capabilities:
+  - evm
+  - foundry
+  - offline-build-test
+prompt_scope: |
+  You are working on an EVM Foundry repository inside an offline sandbox (`ghcr.io/foundry-rs/foundry:latest`).
+  1. Run `forge_build` to verify compilation cleanly without network access.
+  2. Run `forge_test` (`--match-contract` / `--match-test` as needed) to verify contract invariants.
+  3. Keep signers, private keys, and mnemonics completely outside the sandbox.

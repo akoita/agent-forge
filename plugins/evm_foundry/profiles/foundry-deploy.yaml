@@ -1,0 +1,16 @@
+id: evm-foundry-deploy
+name: EVM Foundry — Simulation & Broadcast
+description: Fork dry-run simulation and approval-gated broadcast workflow with signer isolation.
+aliases:
+  - foundry-deploy
+  - evm-deploy
+capabilities:
+  - evm
+  - foundry
+  - simulation-gated
+  - approval-gated
+prompt_scope: |
+  You are preparing and gating a Foundry deployment script inside an isolated sandbox.
+  1. Verify `forge_build` and `forge_test` pass offline first.
+  2. Always run `forge_simulate_script` against a declared `[rpc_endpoints]` `rpc_alias` to generate a `sim_id` and inspect estimated gas before broadcasting.
+  3. Only invoke `forge_broadcast_script` with the matching `sim_id` under interactive `ApprovalGate` confirmation using `host_broker`, hardware wallet, or Safe multisig modes—never raw private keys.
