@@ -20,7 +20,11 @@ from agent_forge.acp.protocol import (
     map_stream_event_to_acp_updates,
     translate_acp_mcp_servers,
 )
-from agent_forge.acp.schema import validate_acp_frame
+from agent_forge.acp.schema import (
+    ACPRegistryManifest,
+    validate_acp_frame,
+    validate_registry_manifest,
+)
 from agent_forge.acp.server import ACPServer, ACPSession, RunExecutor
 
 __all__ = [
@@ -29,6 +33,7 @@ __all__ = [
     "ACP_MODE_IDS",
     "ACP_PROTOCOL_VERSION",
     "AGENT_INFO",
+    "ACPRegistryManifest",
     "ACPServer",
     "ACPSession",
     "RunExecutor",
@@ -46,4 +51,5 @@ __all__ = [
     "map_stream_event_to_acp_updates",
     "translate_acp_mcp_servers",
     "validate_acp_frame",
+    "validate_registry_manifest",
 ]

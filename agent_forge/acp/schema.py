@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ACPBaseModel(BaseModel):
@@ -363,6 +363,48 @@ class FsReadTextFileParams(ACPBaseModel):
     path: str
     line: int | None = None
     limit: int | None = None
+
+
+class UvxDistribution(ACPBaseModel):
+    """Python ``uvx`` launch configuration in an ACP Registry manifest."""
+
+    package: str = Field(min_length=1)
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+
+
+class ACPRegistryDistribution(ACPBaseModel):
+    """Supported ACP Registry distribution mechanisms."""
+
+    uvx: UvxDistribution | None = None
+    npx: dict[str, Any] | None = None
+    binary: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _require_distribution(self) -> ACPRegistryDistribution:
+        if self.uvx is None and not self.npx and not self.binary:
+            msg = "Registry distribution must define at least one of uvx, npx, or binary"
+            raise ValueError(msg)
+        return self
+
+
+class ACPRegistryManifest(ACPBaseModel):
+    """Canonical ACP Registry ``agent.json`` manifest model."""
+
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    version: str = Field(pattern=r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
+    description: str = Field(min_length=1)
+    repository: str = Field(min_length=1)
+    authors: list[str] = Field(min_length=1)
+    license: str = Field(min_length=1)
+    icon: str | None = None
+    distribution: ACPRegistryDistribution
+
+
+def validate_registry_manifest(data: dict[str, Any]) -> ACPRegistryManifest:
+    """Validate an ACP Registry ``agent.json`` dictionary."""
+    return ACPRegistryManifest.model_validate(data)
 
 
 _RESULT_MODELS: dict[str, type[ACPBaseModel]] = {
