@@ -76,4 +76,5 @@ class ReadFileTool(Tool):
             output=content,
             exit_code=0,
             execution_time_ms=elapsed_ms,
+            metadata={"locations": [{"path": resolved, "line": 1}]},
         )

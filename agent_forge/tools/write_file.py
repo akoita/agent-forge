@@ -67,6 +67,15 @@ class WriteFileTool(Tool):
                     execution_time_ms=elapsed_ms,
                 )
 
+        # Capture previous content best-effort for structured diff emission
+        old_text: str | None = None
+        try:
+            prev = await sandbox.read_file(resolved)
+            if isinstance(prev, str):
+                old_text = prev
+        except (FileNotFoundError, OSError, RuntimeError):
+            old_text = None
+
         # Write the file
         await sandbox.write_file(resolved, content)
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -75,4 +84,12 @@ class WriteFileTool(Tool):
             output=f"Successfully wrote {len(content)} bytes to {resolved}",
             exit_code=0,
             execution_time_ms=elapsed_ms,
+            metadata={
+                "diff": {
+                    "path": resolved,
+                    "old_text": old_text,
+                    "new_text": content,
+                },
+                "locations": [{"path": resolved, "line": 1}],
+            },
         )

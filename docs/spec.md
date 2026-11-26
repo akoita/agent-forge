@@ -954,11 +954,11 @@ Before executing a tool call, `ApprovalGate` classifies destructive actions (`ap
 
 ##### Agent Client Protocol (ACP) Server
 
-`ACPServer` (`agent_forge/acp/`) exposes Agent Forge over newline-delimited JSON-RPC 2.0 on `stdin`/`stdout` via `agent-forge acp [--sessions-dir PATH]`:
+`ACPServer` (`agent_forge/acp/`) exposes Agent Forge over newline-delimited JSON-RPC 2.0 on `stdin`/`stdout` via `agent-forge acp [--sessions-dir PATH]` with Pydantic frame schemas in `agent_forge/acp/schema.py`:
 
-- Supports `initialize`, `session/new` (including `cwd` validation and ACP `mcpServers` translation), disk-backed `session/load` (restoring stored `DevSession` / `ContextEngine` state and replaying turns via `session/update`), multi-turn stateful `session/prompt`, and `session/cancel`.
-- Maps typed `StreamEvent` (`run-event-v1`) lifecycle events onto `session/update` notifications (`tool_call`, `tool_call_update`, `agent_thought_chunk`, `agent_message_chunk`), including `[code-mode]` bridged calls/approvals and `subagent.started`/`subagent.completed` status updates.
-- Bridges `ApprovalGate` evaluation requests to bidirectional `session/request_permission` editor prompts (`allow_once`, `allow_always`, `reject_once`).
+- Supports `initialize` (negotiating `loadSession`, `promptCapabilities.embeddedContext`, `mcpCapabilities`, `sessionCapabilities.list`, and `authMethods`), `authenticate`, `session/new` (including `cwd` validation, ACP `mcpServers` translation, `modes`, and `configOptions`), disk-backed `session/load` (restoring stored `DevSession` / `ContextEngine` state and replaying turns via `session/update`), paginated `session/list` (`cwd` + `cursor`), runtime `session/set_config_option` / `session/set_mode`, multi-turn stateful `session/prompt` (`text`, `resource`, and `resource_link` blocks), and `session/cancel`.
+- Maps typed `StreamEvent` (`run-event-v1`) lifecycle events onto `session/update` notifications: live token-by-token `agent_message_chunk` streaming, structured `tool_call` / `tool_call_update` frames carrying `diff` content blocks (`oldText`/`newText`) and file `locations`, `plan` updates, `available_commands_update`, `current_mode_update`, `config_option_update`, `[code-mode]` bridged calls/approvals, and `subagent.started`/`subagent.completed` status updates.
+- Bridges `ApprovalGate` evaluation requests to bidirectional `session/request_permission` editor prompts (`allow_once`, `allow_always`, `reject_once`) and optionally consults workspace-contained client `fs/read_text_file` buffers before falling back to sandbox `read_file`.
 
 ##### Interactive CLI Chat & Session Management
 

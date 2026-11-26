@@ -40,6 +40,7 @@ class EventType(Enum):
     BUDGET_EXCEEDED = "budget.exceeded"
     TOKEN_USAGE = "token.usage"  # noqa: S105 — not a password
     ASSISTANT_DELTA = "assistant.delta"
+    PLAN_UPDATED = "plan.updated"
     SUBAGENT_STARTED = "subagent.started"
     SUBAGENT_COMPLETED = "subagent.completed"
     WORKTREE_CREATED = "worktree.created"

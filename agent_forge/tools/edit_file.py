@@ -86,6 +86,7 @@ class EditFileTool(Tool):
             )
 
         # Replace first occurrence
+        start_line = content[: content.index(old_text)].count("\n") + 1
         new_content = content.replace(old_text, new_text, 1)
         await sandbox.write_file(resolved, new_content)
 
@@ -94,4 +95,12 @@ class EditFileTool(Tool):
             output=f"Successfully edited {resolved}",
             exit_code=0,
             execution_time_ms=elapsed_ms,
+            metadata={
+                "diff": {
+                    "path": resolved,
+                    "old_text": old_text,
+                    "new_text": new_text,
+                },
+                "locations": [{"path": resolved, "line": start_line}],
+            },
         )

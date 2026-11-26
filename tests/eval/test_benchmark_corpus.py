@@ -2321,7 +2321,8 @@ async def test_acp_multi_turn_stateful_session_and_disk_reload_replay(tmp_path: 
     )
     await r2.close()
     await t2
-    assert load_resp["result"] == {}
+    assert "modes" in load_resp["result"]
+    assert "configOptions" in load_resp["result"]
     replayed_texts = [
         item["params"]["update"]["content"]["text"]  # type: ignore[index]
         for item in replay

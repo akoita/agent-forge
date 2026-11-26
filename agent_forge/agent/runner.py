@@ -562,6 +562,7 @@ async def run_agent_task(
     sandbox_factory: Callable[[SandboxConfig], Sandbox] | None = None,
     provider_factory: Callable[[str, str], LLMProvider] | None = None,
     react_loop_fn: Any = None,
+    stream_tokens: bool = False,
 ) -> AgentRun:
     """Compose dependencies and execute an agent task via :func:`execute_agent_run`."""
     if tools_factory is None:
@@ -639,6 +640,7 @@ async def run_agent_task(
             on_sandbox_started=on_sandbox_started,
             post_run_hook=post_run_hook,
             react_loop_fn=react_loop_fn,
+            stream_tokens=stream_tokens,
         )
         if dev_session is not None:
             dev_session.record_turn(
