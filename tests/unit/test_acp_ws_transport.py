@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -92,18 +93,17 @@ def _auth_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
 class TestBaseDependencyIsolation:
     """Ensure importing agent_forge.acp never eagerly loads FastAPI."""
 
-    def test_importing_acp_package_does_not_load_fastapi(self) -> None:
-        proc = subprocess.run(  # noqa: S603 — fixed sys.executable test probe
-            [
-                sys.executable,
-                "-c",
-                "import sys, agent_forge.acp; assert 'fastapi' not in sys.modules",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
+    @pytest.mark.asyncio
+    async def test_importing_acp_package_does_not_load_fastapi(self) -> None:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            "import sys, agent_forge.acp; assert 'fastapi' not in sys.modules",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        assert proc.returncode == 0, proc.stderr
+        _out, err = await asyncio.wait_for(proc.communicate(), timeout=15)
+        assert proc.returncode == 0, err.decode("utf-8", errors="replace")
 
 
 class TestACPTransportSecurity:
