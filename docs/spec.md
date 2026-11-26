@@ -954,7 +954,9 @@ Before executing a tool call, `ApprovalGate` classifies destructive actions (`ap
 
 ##### Agent Client Protocol (ACP) Server
 
-`ACPServer` (`agent_forge/acp/`) exposes Agent Forge over newline-delimited JSON-RPC 2.0 on `stdin`/`stdout` via `agent-forge acp [--sessions-dir PATH]` with Pydantic frame schemas in `agent_forge/acp/schema.py`:
+`ACPServer` (`agent_forge/acp/`) exposes Agent Forge over newline-delimited JSON-RPC 2.0 on `stdin`/`stdout` via `agent-forge acp [--sessions-dir PATH]` or over loopback-default authenticated WebSocket/HTTP via `agent-forge acp --transport ws [--host 127.0.0.1] [--port 8765] [--workspace PATH]` (`agent-forge[service]`) with Pydantic frame schemas in `agent_forge/acp/schema.py`:
+
+- **WebSocket & Workspace Companion Bridge (`agent_forge/acp/ws_transport.py`, `workspace.py`, `terminal.py`):** Exposes `WS /ws/acp`, `POST /auth/session` / `/auth/logout` (`HttpOnly; SameSite=Strict` cookie + CSRF token), `GET /workspace/tree`, `GET`/`POST /workspace/file`, `GET /workspace/git/status|diff`, `WS /ws/workspace/watch`, and `WS /ws/terminal` with Bearer/cookie authentication, query-token rejection, `Origin` allowlisting, sliding-window rate limiting, sanitized PTY environments, and strict workspace-root containment.
 
 - Supports `initialize` (negotiating `loadSession`, `promptCapabilities.embeddedContext`, `mcpCapabilities`, `sessionCapabilities.list`, and `authMethods`), `authenticate`, `session/new` (including `cwd` validation, ACP `mcpServers` translation, `modes`, and `configOptions`), disk-backed `session/load` (restoring stored `DevSession` / `ContextEngine` state and replaying turns via `session/update`), paginated `session/list` (`cwd` + `cursor`), runtime `session/set_config_option` / `session/set_mode`, multi-turn stateful `session/prompt` (`text`, `resource`, and `resource_link` blocks), and `session/cancel`.
 - Maps typed `StreamEvent` (`run-event-v1`) lifecycle events onto `session/update` notifications: live token-by-token `agent_message_chunk` streaming, structured `tool_call` / `tool_call_update` frames carrying `diff` content blocks (`oldText`/`newText`) and file `locations`, `plan` updates, `available_commands_update`, `current_mode_update`, `config_option_update`, `[code-mode]` bridged calls/approvals, and `subagent.started`/`subagent.completed` status updates.
@@ -1401,6 +1403,7 @@ Format: `AGENT_FORGE_{SECTION}_{KEY}` (uppercase, underscored).
 | `AGENT_FORGE_MCP_ENABLED`          | `mcp.enabled`          |
 | `AGENT_FORGE_SERVICE_AUTH_ENABLED` | `service.auth_enabled` |
 | `AGENT_FORGE_SERVICE_PORT`         | `service.port`         |
+| `AGENT_FORGE_ACP_TOKEN`            | Default bearer token env for `agent-forge acp --transport ws` |
 | `GEMINI_API_KEY`                   | (direct, not prefixed) |
 | `OPENAI_API_KEY`                   | (direct, not prefixed) |
 | `OPENROUTER_API_KEY`               | (direct, not prefixed) |

@@ -283,6 +283,13 @@ Point any Agent Client Protocol (ACP) editor (Zed, Neovim, JetBrains ACP clients
 }
 ```
 
+For browser clients (`agent-forge[service]`), run the loopback-default authenticated WebSocket ACP and workspace companion bridge:
+
+```bash
+export AGENT_FORGE_ACP_TOKEN="replace-with-strong-token"
+agent-forge acp --transport ws --host 127.0.0.1 --port 8765 --workspace .
+```
+
 Run directly or probe what a live endpoint supports before benchmarking:
 
 ```bash
