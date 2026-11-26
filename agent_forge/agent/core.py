@@ -491,15 +491,19 @@ async def _invoke_llm(
 
     acc = _StreamAccumulator(llm_config.model)
     try:
-        async for chunk in llm.stream(prompt_messages, tools=tool_definitions, config=llm_config):
-            delta = acc.ingest(chunk)
-            if delta:
-                await _emit(
-                    event_bus,
-                    EventType.ASSISTANT_DELTA,
-                    run_id,
-                    {"delta": delta, "iteration": iteration},
-                )
+        stream_iter = llm.stream(prompt_messages, tools=tool_definitions, config=llm_config)
+        if inspect.iscoroutine(stream_iter):
+            stream_iter.close()
+        elif hasattr(stream_iter, "__aiter__"):
+            async for chunk in stream_iter:
+                delta = acc.ingest(chunk)
+                if delta:
+                    await _emit(
+                        event_bus,
+                        EventType.ASSISTANT_DELTA,
+                        run_id,
+                        {"delta": delta, "iteration": iteration},
+                    )
     except NotImplementedError:
         acc.saw_chunk = False
 
@@ -1425,16 +1429,25 @@ async def _record_tool_outcome(
         ),
         journal,
     )
+    completed_payload: dict[str, Any] = {
+        "tool_name": tool_call.name,
+        "duration_ms": duration_ms,
+        "exit_code": result.exit_code,
+        "output": result.output,
+        "error": result.error,
+        "has_error": result.error is not None,
+        "reused": reused,
+    }
+    if isinstance(result.metadata, dict):
+        if isinstance(result.metadata.get("diff"), dict):
+            completed_payload["diff"] = result.metadata["diff"]
+        if isinstance(result.metadata.get("locations"), list):
+            completed_payload["locations"] = result.metadata["locations"]
     await _emit(
         event_bus,
         EventType.TOOL_COMPLETED,
         run.id,
-        {
-            "tool_name": tool_call.name,
-            "duration_ms": duration_ms,
-            "has_error": result.error is not None,
-            "reused": reused,
-        },
+        completed_payload,
     )
 
 

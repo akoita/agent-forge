@@ -1,27 +1,49 @@
 """Agent Client Protocol (ACP) server for editor interop."""
 
 from agent_forge.acp.protocol import (
+    ACP_AVAILABLE_COMMANDS,
+    ACP_MODE_IDS,
+    ACP_MODES,
     ACP_PROTOCOL_VERSION,
     AGENT_INFO,
+    build_agent_capabilities,
+    build_available_commands_update,
+    build_config_option_update,
+    build_current_mode_update,
+    build_plan_update,
     build_replay_updates,
+    build_session_config_options,
+    build_session_modes,
     classify_tool_kind,
     extract_prompt_text,
     map_run_state_to_stop_reason,
     map_stream_event_to_acp_updates,
     translate_acp_mcp_servers,
 )
+from agent_forge.acp.schema import validate_acp_frame
 from agent_forge.acp.server import ACPServer, ACPSession, RunExecutor
 
 __all__ = [
+    "ACP_AVAILABLE_COMMANDS",
+    "ACP_MODES",
+    "ACP_MODE_IDS",
     "ACP_PROTOCOL_VERSION",
     "AGENT_INFO",
     "ACPServer",
     "ACPSession",
     "RunExecutor",
+    "build_agent_capabilities",
+    "build_available_commands_update",
+    "build_config_option_update",
+    "build_current_mode_update",
+    "build_plan_update",
     "build_replay_updates",
+    "build_session_config_options",
+    "build_session_modes",
     "classify_tool_kind",
     "extract_prompt_text",
     "map_run_state_to_stop_reason",
     "map_stream_event_to_acp_updates",
     "translate_acp_mcp_servers",
+    "validate_acp_frame",
 ]

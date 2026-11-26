@@ -92,6 +92,16 @@ async def _collect_until_id(
         updates.append(msg)
 
 
+def _has_agent_text(updates: list[dict[str, Any]], expected: str) -> bool:
+    for msg in updates:
+        upd = msg.get("params", {}).get("update", {})
+        if upd.get("sessionUpdate") == "agent_message_chunk":
+            content = upd.get("content")
+            if isinstance(content, dict) and content.get("text") == expected:
+                return True
+    return False
+
+
 class TestACPReplayAndStatefulSessions:
     """build_replay_updates, multi-turn prompt continuity, and disk-backed session/load."""
 
@@ -234,11 +244,7 @@ class TestACPReplayAndStatefulSessions:
         )
         t1_updates, t1_resp = await _collect_until_id(w1, 3)
         assert t1_resp["result"]["stopReason"] == "end_turn"
-        assert any(
-            u.get("params", {}).get("update", {}).get("content", {}).get("text")
-            == "Turn 1 observed X = 1."
-            for u in t1_updates
-        )
+        assert _has_agent_text(t1_updates, "Turn 1 observed X = 1.")
 
         # Second turn on the same server shares full conversation and skips redundant discovery
         await r1.feed(
@@ -259,11 +265,7 @@ class TestACPReplayAndStatefulSessions:
         assert "Inspect foo.py" in turn2_contents
         assert "Turn 1 observed X = 1." in turn2_contents
         assert turn2_contents[-1] == "Summarize"
-        assert any(
-            u.get("params", {}).get("update", {}).get("content", {}).get("text")
-            == "Turn 2 knows Turn 1 saw X = 1."
-            for u in t2_updates
-        )
+        assert _has_agent_text(t2_updates, "Turn 2 knows Turn 1 saw X = 1.")
 
         await r1.close()
         await srv1_task
@@ -291,7 +293,8 @@ class TestACPReplayAndStatefulSessions:
             }
         )
         replay_msgs, load_resp = await _collect_until_id(w2, 10)
-        assert load_resp["result"] == {}
+        assert "modes" in load_resp["result"]
+        assert "configOptions" in load_resp["result"]
         replay_kinds = [m["params"]["update"]["sessionUpdate"] for m in replay_msgs]
         assert replay_kinds == [
             "user_message_chunk",
@@ -323,11 +326,7 @@ class TestACPReplayAndStatefulSessions:
         mock_map.assert_not_called()
         assert t3_resp["result"]["stopReason"] == "end_turn"
         assert "Turn 2 knows Turn 1 saw X = 1." in [c for _r, c in seen_prompts[1]]
-        assert any(
-            u.get("params", {}).get("update", {}).get("content", {}).get("text")
-            == "Turn 3 resumed after restart."
-            for u in t3_updates
-        )
+        assert _has_agent_text(t3_updates, "Turn 3 resumed after restart.")
 
         # Invalid session ID rejected on session/load
         await r2.feed(

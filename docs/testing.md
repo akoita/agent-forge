@@ -122,7 +122,7 @@ When running parallel tasks or deterministic eval suites concurrently (`python -
 
 External MCP client integration (stdio + Streamable HTTP transports, `ApprovalGate` enforcement with no blanket trust, timeout isolation, and circuit breaking) is covered in `tests/unit/test_mcp_client.py` and `tests/eval/test_benchmark_corpus.py`. Core suites run with zero external MCP servers configured.
 
-ACP server JSON-RPC framing, `StreamEvent` -> `session/update` mapping, bidirectional `session/request_permission` approval handling, cancellation, and `agent-forge acp` stdio isolation are tested in `tests/unit/test_acp_server.py` and `tests/eval/test_benchmark_corpus.py`.
+ACP server JSON-RPC framing, `StreamEvent` -> `session/update` mapping, bidirectional `session/request_permission` approval handling, cancellation, `agent-forge acp` stdio isolation, and full ACP protocol conformance (`authenticate`, `session/list`, `session/set_config_option`, `session/set_mode`, live token streaming, structured `diff` + `locations`, `plan`, and workspace-contained `fs/read_text_file`) are tested in `tests/unit/test_acp_server.py`, `tests/unit/test_acp_stateful_sessions.py`, `tests/unit/test_acp_conformance.py`, and `tests/eval/test_benchmark_corpus.py`.
 
 Host service credential storage (`~/.agent-forge/credentials.json`), `agent-forge auth` CLI commands, `CreatePRTool`/`HttpMCPTransport` credential fallbacks, secret scrubbing, and offline-sandbox host-brokered `git_push` (with `ApprovalGate` enforcement) are covered in `tests/unit/test_auth_and_git_push.py` and `tests/eval/test_benchmark_corpus.py`.
 
@@ -182,6 +182,7 @@ tests/
 │       ├── test_app.py
 │       └── utils.py
 ├── unit/                               # Fast, isolated, no external deps
+│   ├── test_acp_conformance.py         # Full ACP schema conformance, streaming, diffs, fs/read
 │   ├── test_acp_server.py              # ACP server initialization, streaming, permissions
 │   ├── test_acp_stateful_sessions.py   # Stateful multi-turn ACP sessions & disk replay
 │   ├── test_agent_core.py              # ReAct loop with mocked LLM

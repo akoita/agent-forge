@@ -359,7 +359,10 @@ class TestACPServerBidirectionalSession:
         stdout_raw, stderr_raw = await asyncio.wait_for(proc.communicate(requests), timeout=15)
         assert proc.returncode == 0, stderr_raw.decode("utf-8", errors="replace")
         lines = [line for line in stdout_raw.decode("utf-8").splitlines() if line.strip()]
-        assert len(lines) == 2
+        assert len(lines) == 3
         parsed = [json.loads(line) for line in lines]
         assert parsed[0]["result"]["protocolVersion"] == ACP_PROTOCOL_VERSION
         assert parsed[1]["result"]["sessionId"].startswith("sess_")
+        assert parsed[1]["result"]["modes"]["currentModeId"] == "code"
+        assert parsed[2]["method"] == "session/update"
+        assert parsed[2]["params"]["update"]["sessionUpdate"] == "available_commands_update"

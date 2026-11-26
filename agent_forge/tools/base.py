@@ -143,9 +143,9 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
 
-    def register(self, tool: Tool) -> None:
-        """Register a tool. Raises ValueError if name is already taken."""
-        if tool.name in self._tools:
+    def register(self, tool: Tool, *, replace: bool = False) -> None:
+        """Register a tool. Raises ValueError if name is already taken unless *replace* is True."""
+        if not replace and tool.name in self._tools:
             msg = f"Tool '{tool.name}' already registered"
             raise ValueError(msg)
         self._tools[tool.name] = tool
