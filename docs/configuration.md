@@ -290,6 +290,8 @@ export AGENT_FORGE_ACP_TOKEN="replace-with-strong-token"
 agent-forge acp --transport ws --host 127.0.0.1 --port 8765 --workspace .
 ```
 
+See the [ACP IDE interop guide](acp-ide-interop.md) for Zed, JetBrains, Neovim, and `uvx` Registry configuration plus verification steps.
+
 Run directly or probe what a live endpoint supports before benchmarking:
 
 ```bash

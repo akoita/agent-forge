@@ -1,0 +1,15 @@
+{
+  "id": "agent-forge",
+  "name": "Agent Forge",
+  "version": "0.8.0",
+  "description": "Small, measurable, domain-agnostic coding harness with sandboxed execution, durable sessions, subagents, and Code Mode.",
+  "repository": "https://github.com/akoita/agent-forge",
+  "authors": ["Aboubakar Koïta"],
+  "license": "MIT",
+  "distribution": {
+    "uvx": {
+      "package": "agent-forge==0.8.0",
+      "args": ["acp", "--approval-mode", "prompt"]
+    }
+  }
+}
