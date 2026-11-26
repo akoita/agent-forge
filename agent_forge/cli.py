@@ -2302,6 +2302,69 @@ def mcp_inspect(server_name: str | None, output_format: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _build_acp_server_factory(
+    cfg: Any,
+    *,
+    approval_mode: str,
+    provider: str | None,
+    model: str | None,
+    sandbox_backend: str | None,
+    max_iterations: int | None,
+    sessions_dir: Path | None,
+) -> Any:
+    from agent_forge.acp import ACPServer
+    from agent_forge.agent.session import SessionStore
+
+    store = SessionStore(base_dir=sessions_dir) if sessions_dir is not None else None
+
+    def _factory() -> ACPServer:
+        return ACPServer(
+            config=cfg,
+            approval_mode=approval_mode.lower(),
+            provider_override=provider,
+            model_override=model,
+            sandbox_backend_override=sandbox_backend,
+            max_iterations_override=max_iterations,
+            session_store=store,
+        )
+
+    return _factory
+
+
+def _serve_acp_ws(
+    *,
+    server_factory: Any,
+    workspace_root: Path,
+    host: str,
+    port: int,
+    auth_token_env: str,
+    allowed_origins: tuple[str, ...],
+) -> None:
+    try:
+        import uvicorn
+
+        from agent_forge.acp.ws_transport import create_acp_ws_app
+    except ImportError as exc:
+        err_console.print(
+            "[red]Missing optional dependencies for ACP WebSocket transport.[/red]\n"
+            f"Install them with: pip install 'agent-forge[service]' ({exc})"
+        )
+        sys.exit(1)
+
+    origins = allowed_origins or None
+    app = create_acp_ws_app(
+        workspace_root=workspace_root,
+        server_factory=server_factory,
+        token_env_var=auth_token_env,
+        allowed_origins=origins,
+    )
+    err_console.print(
+        f"ACP WebSocket & workspace bridge listening on http://{host}:{port} "
+        f"(workspace={workspace_root}, token_env={auth_token_env})"
+    )
+    uvicorn.run(app, host=host, port=port)
+
+
 @main.command("acp")
 @click.option("--provider", default=None, help="Override configured LLM provider.")
 @click.option("--model", default=None, help="Override configured LLM model.")
@@ -2322,6 +2385,44 @@ def mcp_inspect(server_name: str | None, output_format: str) -> None:
     default=None,
     help="Directory for durable ACP session storage.",
 )
+@click.option(
+    "--transport",
+    default="stdio",
+    type=click.Choice(["stdio", "ws"], case_sensitive=False),
+    show_default=True,
+    help="ACP transport protocol (stdio for editors, ws for browser/Studio).",
+)
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    show_default=True,
+    help="Bind address when --transport ws is selected.",
+)
+@click.option(
+    "--port",
+    type=int,
+    default=8765,
+    show_default=True,
+    help="TCP port when --transport ws is selected.",
+)
+@click.option(
+    "--workspace",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Workspace root directory exposed over the --transport ws companion API.",
+)
+@click.option(
+    "--auth-token-env",
+    default="AGENT_FORGE_ACP_TOKEN",
+    show_default=True,
+    help="Environment variable holding the bearer token for --transport ws.",
+)
+@click.option(
+    "--allowed-origin",
+    "allowed_origins",
+    multiple=True,
+    help="Allowed browser Origin header(s) for --transport ws CORS and WebSocket upgrades.",
+)
 def acp_serve(
     provider: str | None,
     model: str | None,
@@ -2331,11 +2432,14 @@ def acp_serve(
     max_iterations: int | None,
     sandbox_backend: str | None,
     sessions_dir: Path | None,
+    transport: str,
+    host: str,
+    port: int,
+    workspace: Path | None,
+    auth_token_env: str,
+    allowed_origins: tuple[str, ...],
 ) -> None:
-    """Run Agent Forge as an Agent Client Protocol (ACP) stdio server for editors."""
-    from agent_forge.acp import ACPServer
-    from agent_forge.agent.session import SessionStore
-
+    """Run Agent Forge as an Agent Client Protocol (ACP) server for editors and Studio."""
     cfg = load_config(
         cli_overrides=_build_cli_overrides(
             model=model,
@@ -2349,16 +2453,26 @@ def acp_serve(
     if base_url is not None and active_provider in cfg.providers:
         cfg.providers[active_provider].base_url = base_url.strip()
 
-    server = ACPServer(
-        config=cfg,
-        approval_mode=approval_mode.lower(),
-        provider_override=provider,
-        model_override=model,
-        sandbox_backend_override=sandbox_backend,
-        max_iterations_override=max_iterations,
-        session_store=SessionStore(base_dir=sessions_dir) if sessions_dir is not None else None,
+    server_factory = _build_acp_server_factory(
+        cfg,
+        approval_mode=approval_mode,
+        provider=provider,
+        model=model,
+        sandbox_backend=sandbox_backend,
+        max_iterations=max_iterations,
+        sessions_dir=sessions_dir,
     )
-    asyncio.run(server.serve_stdio())
+    if transport.lower() == "ws":
+        _serve_acp_ws(
+            server_factory=server_factory,
+            workspace_root=(workspace or Path.cwd()).resolve(),
+            host=host,
+            port=port,
+            auth_token_env=auth_token_env,
+            allowed_origins=allowed_origins,
+        )
+        return
+    asyncio.run(server_factory().serve_stdio())
 
 
 # ---------------------------------------------------------------------------
