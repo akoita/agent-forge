@@ -306,7 +306,11 @@ def _attach_security_middleware(
         return response
 
 
-def _register_auth_and_health_routes(app: FastAPI, auth: ACPTransportAuth) -> None:
+def _register_auth_and_health_routes(
+    app: FastAPI,
+    auth: ACPTransportAuth,
+    workspace: WorkspaceBridge,
+) -> None:
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok", "version": __version__}
@@ -319,7 +323,11 @@ def _register_auth_and_health_routes(app: FastAPI, auth: ACPTransportAuth) -> No
             raise HTTPException(status_code=401, detail="Bearer token required")
         sid, csrf = auth.create_session()
         resp = JSONResponse(
-            {"csrfToken": csrf, "expiresIn": auth.session_ttl_seconds},
+            {
+                "csrfToken": csrf,
+                "expiresIn": auth.session_ttl_seconds,
+                "workspaceRoot": str(workspace.root),
+            },
             status_code=200,
         )
         resp.set_cookie(
@@ -572,7 +580,7 @@ def create_acp_ws_app(
     app.state.workspace = workspace
 
     _attach_security_middleware(app, auth, limiter)
-    _register_auth_and_health_routes(app, auth)
+    _register_auth_and_health_routes(app, auth, workspace)
     _register_workspace_file_routes(app, auth, workspace)
     _register_workspace_git_routes(app, auth, workspace)
     _register_websocket_routes(

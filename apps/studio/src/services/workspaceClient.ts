@@ -9,6 +9,7 @@ import type {
 interface SessionResponse {
   csrfToken: string;
   expiresIn: number;
+  workspaceRoot?: string;
 }
 
 async function parseErrorDetail(resp: Response): Promise<string> {
@@ -30,6 +31,7 @@ async function parseErrorDetail(resp: Response): Promise<string> {
 export class HttpWorkspaceClient implements WorkspaceTransport {
   private readonly baseUrl: string;
   private csrfToken = "";
+  private workspaceRoot = "";
 
   constructor(baseUrl = "") {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
@@ -37,6 +39,10 @@ export class HttpWorkspaceClient implements WorkspaceTransport {
 
   hasActiveCsrfToken(): boolean {
     return this.csrfToken.length > 0;
+  }
+
+  getWorkspaceRoot(): string {
+    return this.workspaceRoot;
   }
 
   private url(path: string): string {
@@ -63,6 +69,7 @@ export class HttpWorkspaceClient implements WorkspaceTransport {
       throw new Error("Server response did not include a CSRF token.");
     }
     this.csrfToken = data.csrfToken;
+    this.workspaceRoot = typeof data.workspaceRoot === "string" ? data.workspaceRoot : "";
   }
 
   async logout(): Promise<void> {
@@ -78,6 +85,7 @@ export class HttpWorkspaceClient implements WorkspaceTransport {
       });
     } finally {
       this.csrfToken = "";
+      this.workspaceRoot = "";
     }
   }
 

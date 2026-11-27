@@ -3,6 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { StudioApp } from "../App";
 import type { EditorRendererProps } from "../components/CodeEditorPane";
+import type {
+  ACPConnectionListener,
+  ACPPermissionListener,
+  ACPTransport,
+  ACPUpdateListener,
+} from "../types/acp";
 import type { TreeEntry, WorkspaceTransport } from "../types/workspace";
 
 function TestEditorWidget({ path: filePath, value, diagnostics, onChange, onSave }: EditorRendererProps) {
@@ -26,6 +32,54 @@ function TestEditorWidget({ path: filePath, value, diagnostics, onChange, onSave
   );
 }
 
+function createFakeAcpTransport(): ACPTransport {
+  const updateListeners = new Set<ACPUpdateListener>();
+  const permListeners = new Set<ACPPermissionListener>();
+  const connListeners = new Set<ACPConnectionListener>();
+  return {
+    connect: vi.fn(async () => {
+      for (const cb of connListeners) cb("connected");
+    }),
+    disconnect: vi.fn(() => {
+      for (const cb of connListeners) cb("disconnected");
+    }),
+    getConnectionState: () => "disconnected",
+    initialize: vi.fn(async () => ({
+      protocolVersion: 1,
+      agentCapabilities: { loadSession: true },
+    })),
+    listSessions: vi.fn(async () => ({ sessions: [] })),
+    newSession: vi.fn(async () => ({ sessionId: "sess_test", configOptions: [] })),
+    loadSession: vi.fn(async () => ({ configOptions: [] })),
+    sendPrompt: vi.fn(async (sessionId: string, text: string) => {
+      for (const cb of updateListeners) {
+        cb(sessionId, {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: `Reply to: ${text}` },
+        });
+      }
+      return { stopReason: "end_turn" as const };
+    }),
+    cancelSession: vi.fn(),
+    setConfigOption: vi.fn(async () => ({ configOptions: [] })),
+    setMode: vi.fn(async () => {}),
+    respondToPermission: vi.fn(),
+    onSessionUpdate: (cb) => {
+      updateListeners.add(cb);
+      return () => updateListeners.delete(cb);
+    },
+    onPermissionRequest: (cb) => {
+      permListeners.add(cb);
+      return () => permListeners.delete(cb);
+    },
+    onConnectionChange: (cb) => {
+      connListeners.add(cb);
+      return () => connListeners.delete(cb);
+    },
+    setReadFileHandler: vi.fn(),
+  };
+}
+
 function createFakeTransport(): WorkspaceTransport & { files: Map<string, string> } {
   const files = new Map<string, string>([
     ["src/main.py", "print('hello')\n"],
@@ -41,6 +95,7 @@ function createFakeTransport(): WorkspaceTransport & { files: Map<string, string
     files,
     connectWithToken: vi.fn(async () => {}),
     logout: vi.fn(async () => {}),
+    getWorkspaceRoot: () => "/tmp/repo",
     listTree: vi.fn(async () => tree),
     readFile: vi.fn(async (targetPath: string) => ({
       path: targetPath,
@@ -65,13 +120,15 @@ function createFakeTransport(): WorkspaceTransport & { files: Map<string, string
 }
 
 describe("StudioApp web code editor shell", () => {
-  it("connects, renders tree/git badges, edits multi-tab files, supports Quick Open and diagnostics", async () => {
+  it("connects, renders tree/git badges, edits multi-tab files, supports Quick Open, diagnostics, and ACP chat", async () => {
     const user = userEvent.setup();
     const transport = createFakeTransport();
+    const acpTransport = createFakeAcpTransport();
 
     render(
       <StudioApp
         transport={transport}
+        acpTransport={acpTransport}
         initialDiagnostics={[
           {
             path: "src/helper.py",
@@ -93,6 +150,12 @@ describe("StudioApp web code editor shell", () => {
     });
     expect(screen.getByRole("button", { name: /main\.py/i })).toHaveTextContent("M");
     expect(screen.getByRole("button", { name: /helper\.py/i })).toHaveTextContent("U");
+
+    // Agent Panel connected and responds to a prompt
+    const composer = await screen.findByLabelText("Agent prompt");
+    await waitFor(() => expect(composer).toBeEnabled());
+    await user.type(composer, "Explain main.py{Enter}");
+    expect(await screen.findByText("Reply to: Explain main.py")).toBeInTheDocument();
 
     // Open src/main.py and edit
     await user.click(screen.getByRole("button", { name: /main\.py/i }));
@@ -130,19 +193,24 @@ describe("StudioApp web code editor shell", () => {
     expect(screen.getByText("Expected two blank lines")).toBeInTheDocument();
   });
 
-  it("enforces zero browser token storage and zero raw HTML injection in source files", () => {
+  it("enforces zero browser token storage, native modals, or raw HTML injection in source files", () => {
     const sources = import.meta.glob<string>(
       ["../**/*.ts", "../**/*.tsx", "!../__tests__/**"],
       { query: "?raw", import: "default", eager: true },
     );
     const entries = Object.entries(sources);
-    expect(entries.length).toBeGreaterThan(5);
+    expect(entries.length).toBeGreaterThan(8);
     for (const [filePath, text] of entries) {
       expect(filePath).toBeTruthy();
       expect(text).not.toContain("localStorage");
       expect(text).not.toContain("sessionStorage");
       expect(text).not.toContain("dangerouslySetInnerHTML");
       expect(text).not.toContain(".innerHTML");
+      expect(text).not.toContain(".outerHTML");
+      expect(text).not.toContain("document.write");
+      expect(text).not.toContain("window.alert");
+      expect(text).not.toContain("window.confirm");
+      expect(text).not.toContain("window.prompt");
     }
   });
 });

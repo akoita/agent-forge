@@ -117,6 +117,7 @@ class TestACPTransportSecurity:
 
         health = client.get("/healthz")
         assert health.status_code == 200
+        assert "workspaceRoot" not in health.json()
         assert health.headers["x-content-type-options"] == "nosniff"
         assert health.headers["x-frame-options"] == "DENY"
         assert "default-src 'self'" in health.headers["content-security-policy"]
@@ -177,6 +178,7 @@ class TestACPTransportSecurity:
         )
         assert login.status_code == 200
         assert login.headers.get("access-control-allow-origin") == _TEST_ORIGIN
+        assert login.json()["workspaceRoot"] == str(repo.resolve())
         csrf_token = login.json()["csrfToken"]
         set_cookie = login.headers.get("set-cookie", "").lower()
         assert "httponly" in set_cookie

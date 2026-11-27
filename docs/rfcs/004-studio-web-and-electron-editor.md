@@ -21,7 +21,7 @@ flowchart LR
 
 1. **Monorepo layout (`apps/studio/` + `apps/desktop/`):** Keep TypeScript frontend and Electron packages alongside the Python harness so protocol schemas (`agent_forge/acp/schema.py`), TypeScript ACP types, and CI checks move in lockstep without weakening `scripts/check_boundaries.py`.
 2. **Lightweight React + Monaco + `xterm.js` shell:** Use `react`, `react-dom`, and locally bundled `monaco-editor` (Web Workers via Vite `?worker` imports, zero external CDN dependencies) instead of maintaining a heavy VS Code/Theia fork.
-3. **Single standard ACP protocol:** Studio communicates exclusively via ACP JSON-RPC 2.0 plus the workspace companion routes (`WorkspaceBridge`), avoiding any bespoke agent protocol.
+3. **Two-plane UI/backend protocol boundary:** Studio uses **ACP JSON-RPC 2.0** (`WS /ws/acp` on web, `stdio` on desktop) strictly for interactive 1-on-1 coding agent sessions (streaming deltas coalesced ~16 ms, tool diffs, `ApprovalGate` prompts, external ACP agents). Platform and orchestration workflows (Workspace/Git HTTP routes, Super-Agent Ticket DAG/Inbox in Milestone 17, `system.yaml` deploys/rollbacks/observability/kill-switch in Milestone 18) use **Typed REST (FastAPI/OpenAPI -> generated TS types) + SSE/Event WS**, and PTYs use dedicated byte streams (`/ws/terminal` / `node-pty`). Large artifacts (multi-MB diffs/logs) load on demand over REST rather than inline over ACP.
 4. **Milestone 6 alignment (`#28`, `#30`):** Reuse `apps/studio/` workspace explorer, diff viewer, and ACP timeline components for the hosted pilot UI rather than maintaining a separate Next.js frontend.
 
 ## Alternatives and Trade-offs
@@ -42,4 +42,5 @@ flowchart LR
 ## Verification Criteria
 
 - **Issue #237:** `npm run typecheck`, `npm run test`, `npm run build`, `npm audit --audit-level=high`, CI `Studio` job green, and `python scripts/check_boundaries.py` green (`baseline size 0`).
-- **Issues #238–#239:** Typed WebSocket ACP client, streaming tool/approval cards, Monaco DiffEditor, `xterm.js`, and Playwright E2E smoke tests in CI.
+- **Issue #238:** Typed `WebSocketACPClient` (`initialize`, `session/list`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, `session/set_config_option`, bidirectional `session/request_permission` + `fs/read_text_file`), pure JSX `SafeMarkdown`, collapsible `Code Mode`/`Subagent` tool cards, slash-command autocomplete, and interactive approval dialogs covered by Vitest unit/UI/security tests.
+- **Issue #239:** Monaco DiffEditor, `xterm.js`, memory panel, local launcher, and Playwright E2E smoke tests in CI.

@@ -57,6 +57,7 @@ export interface OpenTab {
 export interface WorkspaceTransport {
   connectWithToken(bearerToken: string): Promise<void>;
   logout(): Promise<void>;
+  getWorkspaceRoot?(): string;
   listTree(path?: string, maxDepth?: number): Promise<TreeEntry[]>;
   readFile(path: string): Promise<WorkspaceFile>;
   writeFile(path: string, content: string): Promise<{ path: string; size: number; mtime_ns: number }>;

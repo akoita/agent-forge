@@ -63,3 +63,4 @@ Thumbs.db
 node_modules/
 apps/studio/dist/
 apps/desktop/dist/
+*.tsbuildinfo

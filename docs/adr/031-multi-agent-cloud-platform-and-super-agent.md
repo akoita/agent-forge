@@ -53,7 +53,8 @@ flowchart TB
 1. **Supersede the scope cap, keep every quality gate:** Remove the moratorium on multi-agent specifications and managed cloud infrastructure in [ADR-002](002-harness-first-reset.md) and [ADR-003](003-local-agent-and-hosted-pilot.md). Retain mandatory verification contracts, deterministic eval gates (`make eval`), domain-agnostic core boundaries (`scripts/check_boundaries.py` at `0`), and standard MCP/ACP interop.
 2. **Adopt Router–Worker Super-Agent orchestration ([RFC-005](../rfcs/005-super-agent-project-orchestration.md)):** Introduce project-input repartition, durable Ticket state, explicit admission rules, and attention-budgeted escalation on top of `WorktreeManager` and `ApprovalGate`.
 3. **Adopt declarative multi-agent system definitions (`system.yaml` / SDK):** Support defining single-agent or multi-agent topologies declaratively with static validation (reachability, budgets, egress/secret policies) and local dry-run parity before cloud deployment.
-4. **Deliver four production cloud guarantees:**
+4. **Enforce a clean Two-Plane UI/Backend Protocol Boundary:** Keep ACP JSON-RPC 2.0 dedicated to interactive 1-on-1 coding agent sessions (plus third-party ACP agents), and expose platform/orchestration planes (Workspace/Git, Super-Agent Ticket DAGs, `system.yaml` deploys, OpenTelemetry traces, audit logs, and kill-switch admin) via Typed REST (OpenAPI) + SSE/Event WebSockets.
+5. **Deliver four production cloud guarantees:**
    - **Robust:** Immutable system revisions, canary promotion/rollback, durable queues/state across restarts, and verification-gated outputs.
    - **Secure:** Multi-tenant compute/network isolation, egress allowlists, host-brokered secrets, explicit approval gates, and RBAC.
    - **Monitored:** Distributed traces across agent hops, real-time event streams, cost/token attribution, and continuous eval metrics.
