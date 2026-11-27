@@ -58,3 +58,8 @@ Thumbs.db
 
 # Evaluation artifacts
 .eval-artifacts/
+
+# Node / Studio / Desktop apps
+node_modules/
+apps/studio/dist/
+apps/desktop/dist/
