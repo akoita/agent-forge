@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AgentPanel } from "./components/AgentPanel";
 import { CodeEditorPane, type EditorRenderer } from "./components/CodeEditorPane";
 import { ConnectBar } from "./components/ConnectBar";
 import { DiagnosticsBar } from "./components/DiagnosticsBar";
 import { FileExplorer } from "./components/FileExplorer";
 import { QuickOpenModal } from "./components/QuickOpenModal";
 import { TabBar } from "./components/TabBar";
+import { useAcpSession } from "./hooks/useAcpSession";
+import { WebSocketACPClient } from "./services/acpClient";
 import { HttpWorkspaceClient } from "./services/workspaceClient";
+import type { ACPTransport } from "./types/acp";
 import type {
   EditorDiagnostic,
   GitStatusEntry,
@@ -17,16 +21,31 @@ import { detectLanguage } from "./utils/fuzzy";
 
 export interface StudioAppProps {
   transport?: WorkspaceTransport;
+  acpTransport?: ACPTransport;
   initialDiagnostics?: EditorDiagnostic[];
   editorRenderer?: EditorRenderer;
 }
 
+function normalizeWorkspacePath(rawPath: string, workspaceRoot: string): string {
+  const cleaned = rawPath.replaceAll("\\", "/").trim();
+  if (cleaned.startsWith("/workspace/")) {
+    return cleaned.slice("/workspace/".length);
+  }
+  const normalizedRoot = workspaceRoot.replaceAll("\\", "/").replace(/\/+$/, "");
+  if (normalizedRoot && cleaned.startsWith(`${normalizedRoot}/`)) {
+    return cleaned.slice(normalizedRoot.length + 1);
+  }
+  return cleaned.replace(/^\/+/, "");
+}
+
 export function StudioApp({
   transport,
+  acpTransport,
   initialDiagnostics = [],
   editorRenderer,
 }: StudioAppProps) {
   const client = useMemo(() => transport ?? new HttpWorkspaceClient(), [transport]);
+  const acpClient = useMemo(() => acpTransport ?? new WebSocketACPClient(), [acpTransport]);
 
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -44,6 +63,11 @@ export function StudioApp({
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
   const [diagnostics] = useState<EditorDiagnostic[]>(initialDiagnostics);
 
+  const tabsRef = useRef<OpenTab[]>([]);
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
+
   const loadWorkspace = useCallback(async () => {
     const [treeEntries, gitStatus] = await Promise.all([
       client.listTree("", 6),
@@ -54,6 +78,22 @@ export function StudioApp({
     setGitEntries(gitStatus.entries);
   }, [client]);
 
+  const readFileBuffer = useCallback(
+    (rawPath: string): string | null => {
+      const root = client.getWorkspaceRoot?.() ?? "";
+      const relPath = normalizeWorkspacePath(rawPath, root);
+      const match = tabsRef.current.find((tab) => tab.path === relPath);
+      return match ? match.content : null;
+    },
+    [client],
+  );
+
+  const acpSession = useAcpSession({
+    acp: acpClient,
+    onTurnCompleted: loadWorkspace,
+    readFileBuffer,
+  });
+
   const handleConnect = useCallback(
     async (bearerToken: string) => {
       setConnecting(true);
@@ -62,7 +102,16 @@ export function StudioApp({
         await client.connectWithToken(bearerToken);
         await loadWorkspace();
         setConnected(true);
+        setAgentPanelOpen(true);
         setStatusMessage("Connected");
+        const workspaceRoot = client.getWorkspaceRoot?.() ?? "";
+        try {
+          await acpSession.startSessionFlow(workspaceRoot);
+        } catch (acpErr) {
+          acpSession.setAgentError(
+            acpErr instanceof Error ? acpErr.message : "Failed to connect ACP session.",
+          );
+        }
       } catch (err) {
         setErrorBanner(err instanceof Error ? err.message : "Failed to connect.");
         setStatusMessage("Connection failed");
@@ -70,19 +119,21 @@ export function StudioApp({
         setConnecting(false);
       }
     },
-    [client, loadWorkspace],
+    [acpSession, client, loadWorkspace],
   );
 
   const handleDisconnect = useCallback(async () => {
+    acpSession.reset();
     await client.logout();
     setConnected(false);
+    setAgentPanelOpen(false);
     setEntries([]);
     setBranch("");
     setGitEntries([]);
     setTabs([]);
     setActivePath(null);
     setStatusMessage("Disconnected");
-  }, [client]);
+  }, [acpSession, client]);
 
   const handleRefresh = useCallback(async () => {
     setErrorBanner("");
@@ -124,6 +175,17 @@ export function StudioApp({
       }
     },
     [client, tabs],
+  );
+
+  const handleOpenAgentLocation = useCallback(
+    (rawPath: string, lineNumber: number | null) => {
+      const root = client.getWorkspaceRoot?.() ?? "";
+      const normalized = normalizeWorkspacePath(rawPath, root);
+      if (normalized) {
+        void handleOpenFile(normalized, lineNumber);
+      }
+    },
+    [client, handleOpenFile],
   );
 
   const handleChangeActive = useCallback(
@@ -289,12 +351,29 @@ export function StudioApp({
         </main>
 
         {agentPanelOpen ? (
-          <aside className="studio-agent-slot" aria-label="ACP Agent Panel">
-            <div className="panel-header">Agent (ACP)</div>
-            <div className="empty-hint">
-              ACP streaming chat and interactive approvals connect here in Issue #238.
-            </div>
-          </aside>
+          <AgentPanel
+            connected={connected}
+            connectionState={acpSession.connectionState}
+            sessions={acpSession.sessions}
+            activeSessionId={acpSession.activeSessionId}
+            configOptions={acpSession.configOptions}
+            availableCommands={acpSession.availableCommands}
+            planEntries={acpSession.planEntries}
+            timeline={acpSession.timeline}
+            pendingPermission={acpSession.pendingPermission}
+            promptRunning={acpSession.promptRunning}
+            agentError={acpSession.agentError}
+            onDismissError={() => acpSession.setAgentError("")}
+            onSelectSession={(sessionId) => void acpSession.selectSession(sessionId)}
+            onNewSession={() => void acpSession.createNewSession()}
+            onChangeConfig={(configId, value) =>
+              void acpSession.changeConfigOption(configId, value)
+            }
+            onSendPrompt={(text) => void acpSession.submitPrompt(text)}
+            onCancelTurn={acpSession.cancelTurn}
+            onRespondPermission={acpSession.respondPermission}
+            onOpenLocation={handleOpenAgentLocation}
+          />
         ) : null}
       </div>
 
