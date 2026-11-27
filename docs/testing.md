@@ -169,6 +169,18 @@ pytest tests/unit/test_tools.py::TestReadFileTool::test_read_existing_file -v
 pytest --cov=agent_forge --cov-report=term-missing
 ```
 
+### Web Studio (`apps/studio/`)
+
+Run typechecking, Vitest + React Testing Library unit/security tests, and the Vite production bundle in `apps/studio/`:
+
+```bash
+cd apps/studio
+npm ci
+npm run typecheck
+npm run test
+npm run build
+```
+
 ## Test Structure
 
 ```
