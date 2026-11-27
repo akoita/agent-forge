@@ -59,6 +59,19 @@ worktree_branch_prefix = "agent-forge/run"
 auto_remove_unchanged_worktrees = true
 merge_strategy = "merge"        # "merge" or "rebase" for merge-time integration
 
+[super_agent]
+enabled = false                 # opt-in project-level Super-Agent router
+admission_mode = "guarded"      # "guarded", "strict", or "auto"
+max_concurrent_workers = 3
+max_tickets_per_input = 12
+max_active_interrupts = 3
+interrupt_window_seconds = 300.0
+max_interrupts_per_window = 5
+max_total_tokens = 400000
+default_ticket_max_iterations = 12
+default_ticket_max_tokens = 80000
+ledger_dir = ""
+
 [logging]
 level = "INFO"
 format = "text"                 # "text" or "json"

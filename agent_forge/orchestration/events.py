@@ -47,6 +47,9 @@ class EventType(Enum):
     WORKTREE_CLEANED = "worktree.cleaned"
     WORKTREE_INTEGRATED = "worktree.integrated"
     WORKTREE_CONFLICT = "worktree.conflict"
+    SUPER_INPUT_RECEIVED = "super.input.received"
+    SUPER_TICKET_UPDATED = "super.ticket.updated"
+    SUPER_INBOX_UPDATED = "super.inbox.updated"
 
 
 @dataclass

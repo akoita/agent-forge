@@ -211,6 +211,25 @@ class RoutingSettings(BaseModel):
     escalate_on_failures: int = 2
 
 
+class SuperAgentSettings(BaseModel):
+    """Settings for project-level Super-Agent orchestration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    admission_mode: Literal["guarded", "strict", "auto"] = "guarded"
+    max_concurrent_workers: int = Field(default=3, ge=1, le=16)
+    max_tickets_per_input: int = Field(default=12, ge=1, le=64)
+    max_active_interrupts: int = Field(default=3, ge=1, le=20)
+    interrupt_window_seconds: float = Field(default=300.0, gt=0.0)
+    max_interrupts_per_window: int = Field(default=5, ge=1, le=50)
+    max_total_tokens: int = Field(default=400_000, ge=10_000)
+    max_total_cost_usd: float | None = Field(default=None, ge=0.0)
+    default_ticket_max_iterations: int = Field(default=12, ge=1, le=50)
+    default_ticket_max_tokens: int = Field(default=80_000, ge=1_000)
+    ledger_dir: str = ""
+
+
 class MCPServerSettings(BaseModel):
     """Configuration for a single external MCP tool server."""
 
@@ -297,6 +316,7 @@ class ForgeConfig(BaseModel):
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     queue: QueueSettings = Field(default_factory=QueueSettings)
     subagents: SubagentSettings = Field(default_factory=SubagentSettings)
+    super_agent: SuperAgentSettings = Field(default_factory=SuperAgentSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     service: ServiceSettings = Field(default_factory=ServiceSettings)
     model_profiles: dict[str, ModelProfileSettings] = Field(default_factory=dict)
