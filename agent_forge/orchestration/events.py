@@ -50,6 +50,12 @@ class EventType(Enum):
     SUPER_INPUT_RECEIVED = "super.input.received"
     SUPER_TICKET_UPDATED = "super.ticket.updated"
     SUPER_INBOX_UPDATED = "super.inbox.updated"
+    SUPER_TICKET_DISPATCHED = "super.ticket.dispatched"
+    SUPER_TICKET_VERIFIED = "super.ticket.verified"
+    SUPER_TICKET_INTEGRATED = "super.ticket.integrated"
+    SUPER_TICKET_CONFLICT = "super.ticket.conflict"
+    SUPER_TICKET_FAILED = "super.ticket.failed"
+    SUPER_RUN_COMPLETED = "super.run.completed"
 
 
 @dataclass
