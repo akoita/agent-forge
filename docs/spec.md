@@ -282,11 +282,11 @@ class LLMProvider(ABC):
 
 | Provider      | Module                      | Auth                        | Protocol & Model Default                          |
 | ------------- | --------------------------- | --------------------------- | ------------------------------------------------- |
-| **Gemini**    | `agent_forge.llm.gemini`    | `GEMINI_API_KEY` env var    | `generateContent`, `gemini-3.1-flash-lite-preview` |
-| **OpenAI**    | `agent_forge.llm.openai`    | `OPENAI_API_KEY` env var    | `/v1/responses` (auto fallback to `/v1/chat/completions`), `gpt-4o` / `gpt-5.4` |
+| **Gemini**    | `agent_forge.llm.gemini`    | `GEMINI_API_KEY` env var    | `generateContent`, `gemini-4-hydrogen` |
+| **OpenAI**    | `agent_forge.llm.openai`    | `OPENAI_API_KEY` env var    | `/v1/responses` (auto fallback to `/v1/chat/completions`), `gpt-6.2-sol` / `gpt-6.2-astra` |
 | **OpenAI-Compatible** | `agent_forge.llm.openai` (`openai-compatible`) | Optional (`api_key_required`) | `/v1/chat/completions` on `base_url` (Ollama, vLLM, `llama.cpp`, gateways) |
-| **OpenRouter** | `agent_forge.llm.openrouter` (`openrouter`) | `OPENROUTER_API_KEY` env var | `/v1/chat/completions` on `https://openrouter.ai/api/v1`, `anthropic/claude-sonnet-4-6` |
-| **Anthropic** | `agent_forge.llm.anthropic` | `ANTHROPIC_API_KEY` env var | `/v1/messages`, `claude-sonnet-4-20250514`        |
+| **OpenRouter** | `agent_forge.llm.openrouter` (`openrouter`) | `OPENROUTER_API_KEY` env var | `/v1/chat/completions` on `https://openrouter.ai/api/v1`, `anthropic/claude-sonnet-5-5` |
+| **Anthropic** | `agent_forge.llm.anthropic` | `ANTHROPIC_API_KEY` env var | `/v1/messages`, `claude-sonnet-5-5` / `claude-opus-5-5` |
 | **Router**    | `agent_forge.llm.router`    | Profile credentials         | Data-driven per-turn selection across configured profiles |
 
 #### Provider-Specific Mapping Rules
@@ -1279,16 +1279,16 @@ recovery_interval_seconds = 5.0
 
 [providers.gemini]
 api_key_env = "GEMINI_API_KEY"
-default_model = "gemini-3.1-flash-lite-preview"
+default_model = "gemini-4-hydrogen"
 
 [providers.openai]
 api_key_env = "OPENAI_API_KEY"
-default_model = "gpt-4o"
+default_model = "gpt-6.2-sol"
 api_mode = "auto"                # "auto", "responses", or "chat_completions"
 
 [providers.anthropic]
 api_key_env = "ANTHROPIC_API_KEY"
-default_model = "claude-sonnet-4-20250514"
+default_model = "claude-sonnet-5-5"
 
 [providers.openai-compatible]
 base_url = ""

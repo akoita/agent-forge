@@ -21,7 +21,7 @@ Both project and user configs use TOML:
 max_iterations = 25
 max_tokens_per_run = 200000
 default_provider = "gemini"
-default_model = "gemini-3.1-flash-lite-preview"
+default_model = "gemini-4-hydrogen"
 temperature = 0.0
 system_prompt_path = ""
 approval_mode = "auto"          # "auto", "prompt", or "deny"
@@ -77,15 +77,15 @@ max_source_size_bytes = 50_000_000
 
 [providers.gemini]
 api_key_env = "GEMINI_API_KEY"
-default_model = "gemini-3.1-flash-lite-preview"
+default_model = "gemini-4-hydrogen"
 
 [providers.openai]
 api_key_env = "OPENAI_API_KEY"
-default_model = "gpt-4o"
+default_model = "gpt-6.2-sol"
 
 [providers.anthropic]
 api_key_env = "ANTHROPIC_API_KEY"
-default_model = "claude-sonnet-4-20250514"
+default_model = "claude-sonnet-5-5"
 
 [providers.openai-compatible]
 base_url = ""
@@ -97,7 +97,7 @@ api_key_required = false
 [providers.openrouter]
 base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
-default_model = "anthropic/claude-sonnet-4-6"
+default_model = "anthropic/claude-sonnet-5-5"
 api_mode = "chat_completions"
 fallback_models = []
 # Optional: allow_fallbacks, require_parameters, data_collection ("allow"|"deny"), zdr,
@@ -148,7 +148,7 @@ agent-forge run \
   --task "Fix the bug in auth.py" \
   --repo ./my-project \
   --provider gemini \
-  --model gemini-3.1-flash-lite-preview \
+  --model gemini-4-hydrogen \
   --max-iterations 25 \
   --max-cost 1.00 \                 # optional USD cap per run
   --max-duration 300 \              # optional wall-clock seconds cap

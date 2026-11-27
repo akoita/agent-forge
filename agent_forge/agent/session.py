@@ -129,7 +129,7 @@ class DevSession:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     title: str = ""
     provider: str = "gemini"
-    model: str = "gemini-3.1-flash-lite-preview"
+    model: str = "gemini-4-hydrogen"
     profile_id: str | None = None
     approval_mode: str = "auto"
     sandbox_backend: str = "docker"
@@ -371,7 +371,7 @@ class SessionStore:
             id=str(meta["id"]),
             title=str(meta.get("title", "")),
             provider=str(meta.get("provider", "gemini")),
-            model=str(meta.get("model", "gemini-3.1-flash-lite-preview")),
+            model=str(meta.get("model", "gemini-4-hydrogen")),
             profile_id=meta.get("profile_id"),
             approval_mode=str(meta.get("approval_mode", "auto")),
             sandbox_backend=str(meta.get("sandbox_backend", "docker")),

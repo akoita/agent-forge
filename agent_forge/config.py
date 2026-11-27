@@ -35,7 +35,7 @@ class AgentSettings(BaseModel):
     max_iterations: int = 25
     max_tokens_per_run: int = 200_000
     default_provider: str = "gemini"
-    default_model: str = "gemini-3.1-flash-lite-preview"
+    default_model: str = "gemini-4-hydrogen"
     temperature: float = 0.0
     system_prompt_path: str = ""
     approval_mode: Literal["auto", "prompt", "deny"] = "auto"
@@ -249,15 +249,15 @@ def _default_providers() -> dict[str, ProviderSettings]:
     return {
         "gemini": ProviderSettings(
             api_key_env="GEMINI_API_KEY",
-            default_model="gemini-3.1-flash-lite-preview",
+            default_model="gemini-4-hydrogen",
         ),
         "openai": ProviderSettings(
             api_key_env="OPENAI_API_KEY",
-            default_model="gpt-4o",
+            default_model="gpt-6.2-sol",
         ),
         "anthropic": ProviderSettings(
             api_key_env="ANTHROPIC_API_KEY",
-            default_model="claude-sonnet-4-20250514",
+            default_model="claude-sonnet-5-5",
         ),
         "openai-compatible": ProviderSettings(
             api_key_env="",
@@ -268,7 +268,7 @@ def _default_providers() -> dict[str, ProviderSettings]:
         ),
         "openrouter": ProviderSettings(
             api_key_env="OPENROUTER_API_KEY",
-            default_model="anthropic/claude-sonnet-4-6",
+            default_model="anthropic/claude-sonnet-5-5",
             base_url="https://openrouter.ai/api/v1",
             api_mode="chat_completions",
         ),
