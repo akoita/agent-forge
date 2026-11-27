@@ -36,6 +36,7 @@ TERMINAL_STREAM_EVENTS: frozenset[str] = frozenset(
         EventType.RUN_FAILED.value,
         EventType.RUN_CANCELLED.value,
         EventType.RUN_PAUSED.value,
+        EventType.SUPER_RUN_COMPLETED.value,
     }
 )
 

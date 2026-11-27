@@ -108,6 +108,7 @@ VALID_TICKET_TRANSITIONS: dict[TicketState, frozenset[TicketState]] = {
     TicketState.VERIFYING: frozenset(
         {
             TicketState.READY_FOR_REVIEW,
+            TicketState.DISPATCHED,
             TicketState.BLOCKED_ON_HUMAN,
             TicketState.FAILED,
             TicketState.CANCELLED,
@@ -635,6 +636,7 @@ class TicketLedger:
         branch: str | None = None,
         verification_summary: str | None = None,
         attempts: int | None = None,
+        metadata_update: dict[str, Any] | None = None,
     ) -> Ticket:
         """Validate and persist a legal ticket state transition."""
         current = self.get_ticket(ticket_id)
@@ -656,6 +658,8 @@ class TicketLedger:
             updates["verification_summary"] = verification_summary
         if attempts is not None:
             updates["attempts"] = attempts
+        if metadata_update is not None:
+            updates["metadata"] = {**current.metadata, **metadata_update}
         updated = current.model_copy(update=updates)
         self._tickets[ticket_id] = updated
         self._append_record("ticket", updated.model_dump(mode="json"), idempotency_key)

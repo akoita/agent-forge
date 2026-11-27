@@ -228,6 +228,14 @@ class SuperAgentSettings(BaseModel):
     default_ticket_max_iterations: int = Field(default=12, ge=1, le=50)
     default_ticket_max_tokens: int = Field(default=80_000, ge=1_000)
     ledger_dir: str = ""
+    verify_command: str = ""
+    max_verification_retries: int = Field(default=1, ge=0, le=5)
+    max_conflict_remediations: int = Field(default=1, ge=0, le=3)
+    merge_strategy: Literal["merge", "rebase"] = "merge"
+    worktree_root: str = ""
+    worktree_branch_prefix: str = "agent-forge/super"
+    auto_integrate: bool = True
+    approval_mode: Literal["auto", "prompt", "deny"] = "prompt"
 
 
 class MCPServerSettings(BaseModel):

@@ -69,6 +69,14 @@ max_total_tokens = 400000
 default_ticket_max_iterations = 12
 default_ticket_max_tokens = 80000
 ledger_dir = ""
+verify_command = ""
+max_verification_retries = 1
+max_conflict_remediations = 1
+merge_strategy = "merge"         # "merge" or "rebase"
+worktree_root = ""
+worktree_branch_prefix = "agent-forge/super"
+auto_integrate = true
+approval_mode = "prompt"         # "auto", "prompt", or "deny"
 
 [logging]
 level = "INFO"                   # DEBUG, INFO, WARNING, ERROR

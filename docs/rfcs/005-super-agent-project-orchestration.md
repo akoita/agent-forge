@@ -1,6 +1,6 @@
 # RFC 005 — Super-Agent Project Orchestration (Router–Worker & Input Repartition)
 
-**Status:** Accepted (Phase 1 — #248 landed) · 2026-11-27  
+**Status:** Accepted (Phase 1 #248 & Phase 2 #249 landed) · 2026-11-27  
 **Issues:** [#251](https://github.com/akoita/agent-forge/issues/251) (Epic), [#248](https://github.com/akoita/agent-forge/issues/248)–[#250](https://github.com/akoita/agent-forge/issues/250) (Milestone 17) · Related: [ADR-011](../adr/011-worktree-isolated-parallel-execution.md), [ADR-019](../adr/019-declarative-tool-approvals-and-egress-proxy.md), [ADR-026](../adr/026-hierarchical-subagent-delegation.md), [ADR-030](../adr/030-full-acp-conformance-and-remote-transport.md), [ADR-031](../adr/031-multi-agent-cloud-platform-and-super-agent.md)
 
 ## Problem
@@ -11,7 +11,7 @@ As highlighted in DeepSeek's Super-Agent design (*Exploring Super-agent Design: 
 
 ## Proposal
 
-Introduce a domain-agnostic **Router–Worker Super-Agent** engine (`agent_forge/orchestration/super_agent.py`) layered cleanly over Agent Forge's existing worktree, sandbox, session, journal, and approval primitives.
+Introduce a domain-agnostic **Router–Worker Super-Agent** engine (`agent_forge/orchestration/super_agent.py` and `agent_forge/orchestration/super_agent_dispatcher.py`) layered cleanly over Agent Forge's existing worktree, sandbox, session, journal, and approval primitives.
 
 ```mermaid
 flowchart LR
