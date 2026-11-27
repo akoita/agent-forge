@@ -3,6 +3,7 @@ import type { TimelineEntry } from "../hooks/useAcpSession";
 import type {
   ACPConnectionState,
   AvailableCommand,
+  DiffToolCallContent,
   PermissionRequest,
   PlanEntry,
   SessionConfigOption,
@@ -10,7 +11,7 @@ import type {
 } from "../types/acp";
 import { ApprovalDialog } from "./ApprovalDialog";
 import { SafeMarkdown } from "./SafeMarkdown";
-import { ToolCallCard } from "./ToolCallCard";
+import { ToolCallCard, type ToolCallEntry } from "./ToolCallCard";
 
 interface AgentPanelProps {
   connected: boolean;
@@ -32,6 +33,7 @@ interface AgentPanelProps {
   onCancelTurn: () => void;
   onRespondPermission: (requestId: number, optionId: string) => void;
   onOpenLocation: (path: string, line: number | null) => void;
+  onReviewDiff?: (diff: DiffToolCallContent, entry: ToolCallEntry) => void;
 }
 
 export function AgentPanel({
@@ -54,6 +56,7 @@ export function AgentPanel({
   onCancelTurn,
   onRespondPermission,
   onOpenLocation,
+  onReviewDiff,
 }: AgentPanelProps) {
   const [draft, setDraft] = useState("");
   const [selectedCmdIndex, setSelectedCmdIndex] = useState(0);
@@ -241,7 +244,12 @@ export function AgentPanel({
               );
             }
             return (
-              <ToolCallCard key={entry.id} entry={entry} onOpenLocation={onOpenLocation} />
+              <ToolCallCard
+                key={entry.id}
+                entry={entry}
+                onOpenLocation={onOpenLocation}
+                onReviewDiff={onReviewDiff}
+              />
             );
           })
         )}

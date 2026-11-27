@@ -3,17 +3,23 @@ import { AgentPanel } from "./components/AgentPanel";
 import { CodeEditorPane, type EditorRenderer } from "./components/CodeEditorPane";
 import { ConnectBar } from "./components/ConnectBar";
 import { DiagnosticsBar } from "./components/DiagnosticsBar";
+import { DiffReviewPane, type DiffRenderer } from "./components/DiffReviewPane";
 import { FileExplorer } from "./components/FileExplorer";
+import { MemoryPanel } from "./components/MemoryPanel";
 import { QuickOpenModal } from "./components/QuickOpenModal";
 import { TabBar } from "./components/TabBar";
+import { TerminalPanel } from "./components/TerminalPanel";
+import type { ToolCallEntry } from "./components/ToolCallCard";
 import { useAcpSession } from "./hooks/useAcpSession";
-import { WebSocketACPClient } from "./services/acpClient";
+import { WebSocketACPClient, type WebSocketConstructor } from "./services/acpClient";
 import { HttpWorkspaceClient } from "./services/workspaceClient";
-import type { ACPTransport } from "./types/acp";
+import type { ACPTransport, DiffToolCallContent } from "./types/acp";
 import type {
   EditorDiagnostic,
   GitStatusEntry,
+  MemoryEntry,
   OpenTab,
+  PendingDiffItem,
   TreeEntry,
   WorkspaceTransport,
 } from "./types/workspace";
@@ -24,6 +30,8 @@ export interface StudioAppProps {
   acpTransport?: ACPTransport;
   initialDiagnostics?: EditorDiagnostic[];
   editorRenderer?: EditorRenderer;
+  diffRenderer?: DiffRenderer;
+  terminalWsFactory?: WebSocketConstructor;
 }
 
 function normalizeWorkspacePath(rawPath: string, workspaceRoot: string): string {
@@ -43,6 +51,8 @@ export function StudioApp({
   acpTransport,
   initialDiagnostics = [],
   editorRenderer,
+  diffRenderer,
+  terminalWsFactory,
 }: StudioAppProps) {
   const client = useMemo(() => transport ?? new HttpWorkspaceClient(), [transport]);
   const acpClient = useMemo(() => acpTransport ?? new WebSocketACPClient(), [acpTransport]);
@@ -50,6 +60,7 @@ export function StudioApp({
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [applyingDiff, setApplyingDiff] = useState(false);
   const [errorBanner, setErrorBanner] = useState("");
   const [statusMessage, setStatusMessage] = useState("Disconnected");
 
@@ -61,6 +72,13 @@ export function StudioApp({
   const [focusLine, setFocusLine] = useState<number | null>(null);
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
+  const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [activeDiffId, setActiveDiffId] = useState<string | null>(null);
+  const [reviewingDiff, setReviewingDiff] = useState(false);
+  const [memoryPath, setMemoryPath] = useState(".agent-forge/memory.md");
+  const [memoryEntries, setMemoryEntries] = useState<MemoryEntry[]>([]);
+  const [memoryLoading, setMemoryLoading] = useState(false);
   const [diagnostics] = useState<EditorDiagnostic[]>(initialDiagnostics);
 
   const tabsRef = useRef<OpenTab[]>([]);
@@ -94,6 +112,76 @@ export function StudioApp({
     readFileBuffer,
   });
 
+  const loadMemory = useCallback(async () => {
+    if (!client.listMemory) {
+      return;
+    }
+    setMemoryLoading(true);
+    try {
+      const resp = await client.listMemory();
+      setMemoryPath(resp.path || ".agent-forge/memory.md");
+      setMemoryEntries(resp.entries);
+    } catch (err) {
+      setErrorBanner(err instanceof Error ? err.message : "Failed to load repository memory.");
+    } finally {
+      setMemoryLoading(false);
+    }
+  }, [client]);
+
+  const handleAddMemory = useCallback(
+    async (text: string, category: string) => {
+      if (!client.addMemory) {
+        return;
+      }
+      setMemoryLoading(true);
+      try {
+        const resp = await client.addMemory(text, category);
+        setMemoryEntries(resp.entries);
+        await loadWorkspace();
+      } catch (err) {
+        setErrorBanner(err instanceof Error ? err.message : "Failed to add memory entry.");
+      } finally {
+        setMemoryLoading(false);
+      }
+    },
+    [client, loadWorkspace],
+  );
+
+  const handleRemoveMemory = useCallback(
+    async (entryId: string) => {
+      if (!client.removeMemory) {
+        return;
+      }
+      setMemoryLoading(true);
+      try {
+        const resp = await client.removeMemory(entryId);
+        setMemoryEntries(resp.entries);
+        await loadWorkspace();
+      } catch (err) {
+        setErrorBanner(err instanceof Error ? err.message : "Failed to remove memory entry.");
+      } finally {
+        setMemoryLoading(false);
+      }
+    },
+    [client, loadWorkspace],
+  );
+
+  const handleClearMemory = useCallback(async () => {
+    if (!client.clearMemory) {
+      return;
+    }
+    setMemoryLoading(true);
+    try {
+      const resp = await client.clearMemory();
+      setMemoryEntries(resp.entries);
+      await loadWorkspace();
+    } catch (err) {
+      setErrorBanner(err instanceof Error ? err.message : "Failed to clear memory.");
+    } finally {
+      setMemoryLoading(false);
+    }
+  }, [client, loadWorkspace]);
+
   const handleConnect = useCallback(
     async (bearerToken: string) => {
       setConnecting(true);
@@ -104,6 +192,7 @@ export function StudioApp({
         setConnected(true);
         setAgentPanelOpen(true);
         setStatusMessage("Connected");
+        void loadMemory();
         const workspaceRoot = client.getWorkspaceRoot?.() ?? "";
         try {
           await acpSession.startSessionFlow(workspaceRoot);
@@ -119,7 +208,7 @@ export function StudioApp({
         setConnecting(false);
       }
     },
-    [acpSession, client, loadWorkspace],
+    [acpSession, client, loadMemory, loadWorkspace],
   );
 
   const handleDisconnect = useCallback(async () => {
@@ -127,6 +216,11 @@ export function StudioApp({
     await client.logout();
     setConnected(false);
     setAgentPanelOpen(false);
+    setMemoryPanelOpen(false);
+    setTerminalOpen(false);
+    setReviewingDiff(false);
+    setActiveDiffId(null);
+    setMemoryEntries([]);
     setEntries([]);
     setBranch("");
     setGitEntries([]);
@@ -182,10 +276,68 @@ export function StudioApp({
       const root = client.getWorkspaceRoot?.() ?? "";
       const normalized = normalizeWorkspacePath(rawPath, root);
       if (normalized) {
+        setReviewingDiff(false);
         void handleOpenFile(normalized, lineNumber);
       }
     },
     [client, handleOpenFile],
+  );
+
+  const handleReviewDiff = useCallback(
+    (diffBlock: DiffToolCallContent, entry: ToolCallEntry) => {
+      const root = client.getWorkspaceRoot?.() ?? "";
+      const normalized = normalizeWorkspacePath(diffBlock.path, root);
+      const targetId = `${entry.toolCallId}:${normalized}`;
+      setActiveDiffId(targetId);
+      setReviewingDiff(true);
+    },
+    [client],
+  );
+
+  const syncTabAfterDiffWrite = useCallback((filePath: string, nextContent: string) => {
+    setTabs((prev) =>
+      prev.map((tab) =>
+        tab.path === filePath ? { ...tab, content: nextContent, savedContent: nextContent, dirty: false } : tab,
+      ),
+    );
+  }, []);
+
+  const handleApplyDiff = useCallback(
+    async (diff: PendingDiffItem) => {
+      setApplyingDiff(true);
+      setErrorBanner("");
+      try {
+        await client.writeFile(diff.path, diff.newText);
+        acpSession.markDiffApplied(diff.id, true);
+        syncTabAfterDiffWrite(diff.path, diff.newText);
+        await loadWorkspace();
+        setStatusMessage(`Applied diff to ${diff.path}`);
+      } catch (err) {
+        setErrorBanner(err instanceof Error ? err.message : `Failed to apply diff to ${diff.path}`);
+      } finally {
+        setApplyingDiff(false);
+      }
+    },
+    [acpSession, client, loadWorkspace, syncTabAfterDiffWrite],
+  );
+
+  const handleUndoDiff = useCallback(
+    async (diff: PendingDiffItem) => {
+      setApplyingDiff(true);
+      setErrorBanner("");
+      try {
+        await client.writeFile(diff.path, diff.oldText);
+        acpSession.markDiffApplied(diff.id, false);
+        syncTabAfterDiffWrite(diff.path, diff.oldText);
+        await loadWorkspace();
+        setStatusMessage(`Reverted diff on ${diff.path}`);
+      } catch (err) {
+        setErrorBanner(err instanceof Error ? err.message : `Failed to undo diff on ${diff.path}`);
+      } finally {
+        setApplyingDiff(false);
+      }
+    },
+    [acpSession, client, loadWorkspace, syncTabAfterDiffWrite],
   );
 
   const handleChangeActive = useCallback(
@@ -305,6 +457,18 @@ export function StudioApp({
         onOpenQuickSearch={() => setQuickOpenVisible(true)}
         agentPanelOpen={agentPanelOpen}
         onToggleAgentPanel={() => setAgentPanelOpen((prev) => !prev)}
+        memoryPanelOpen={memoryPanelOpen}
+        onToggleMemoryPanel={() => {
+          setMemoryPanelOpen((prev) => {
+            const next = !prev;
+            if (next) {
+              void loadMemory();
+            }
+            return next;
+          });
+        }}
+        terminalOpen={terminalOpen}
+        onToggleTerminal={() => setTerminalOpen((prev) => !prev)}
       />
 
       {errorBanner ? (
@@ -322,7 +486,10 @@ export function StudioApp({
           activePath={activePath}
           dirtyPaths={dirtyPaths}
           gitStatusMap={gitStatusMap}
-          onSelectFile={(filePath) => void handleOpenFile(filePath)}
+          onSelectFile={(filePath) => {
+            setReviewingDiff(false);
+            void handleOpenFile(filePath);
+          }}
         />
 
         <main className="studio-editor-column">
@@ -331,6 +498,7 @@ export function StudioApp({
             activePath={activePath}
             saving={saving}
             onSelectTab={(filePath) => {
+              setReviewingDiff(false);
               setActivePath(filePath);
               setFocusLine(null);
             }}
@@ -338,17 +506,53 @@ export function StudioApp({
             onSaveActive={() => void handleSaveActive()}
             onRevertActive={handleRevertActive}
           />
-          <CodeEditorPane
-            path={activeTab?.path ?? null}
-            value={activeTab?.content ?? ""}
-            language={activeTab?.language ?? "plaintext"}
-            diagnostics={activeDiagnostics}
-            focusLine={focusLine}
-            onChange={handleChangeActive}
-            onSave={() => void handleSaveActive()}
-            editorRenderer={editorRenderer}
+          {reviewingDiff && acpSession.diffs.length > 0 ? (
+            <DiffReviewPane
+              diffs={acpSession.diffs}
+              activeDiffId={activeDiffId}
+              applying={applyingDiff}
+              onSelectDiff={(id) => setActiveDiffId(id)}
+              onApplyDiff={handleApplyDiff}
+              onUndoDiff={handleUndoDiff}
+              onClose={() => setReviewingDiff(false)}
+              diffRenderer={diffRenderer}
+            />
+          ) : (
+            <CodeEditorPane
+              path={activeTab?.path ?? null}
+              value={activeTab?.content ?? ""}
+              language={activeTab?.language ?? "plaintext"}
+              diagnostics={activeDiagnostics}
+              focusLine={focusLine}
+              onChange={handleChangeActive}
+              onSave={() => void handleSaveActive()}
+              editorRenderer={editorRenderer}
+            />
+          )}
+          <TerminalPanel
+            open={terminalOpen}
+            connected={connected}
+            webSocketFactory={terminalWsFactory}
+            onClose={() => setTerminalOpen(false)}
           />
         </main>
+
+        <MemoryPanel
+          open={memoryPanelOpen}
+          connected={connected}
+          memoryPath={memoryPath}
+          entries={memoryEntries}
+          loading={memoryLoading}
+          onAdd={handleAddMemory}
+          onRemove={handleRemoveMemory}
+          onClear={handleClearMemory}
+          onRefresh={loadMemory}
+          onOpenRawFile={(filePath) => {
+            setReviewingDiff(false);
+            void handleOpenFile(filePath);
+          }}
+          onClose={() => setMemoryPanelOpen(false)}
+        />
 
         {agentPanelOpen ? (
           <AgentPanel
@@ -373,6 +577,7 @@ export function StudioApp({
             onCancelTurn={acpSession.cancelTurn}
             onRespondPermission={acpSession.respondPermission}
             onOpenLocation={handleOpenAgentLocation}
+            onReviewDiff={handleReviewDiff}
           />
         ) : null}
       </div>
@@ -383,7 +588,13 @@ export function StudioApp({
         dirty={activeTab?.dirty ?? false}
         diagnostics={diagnostics}
         statusMessage={statusMessage}
-        onSelectDiagnostic={(diag) => void handleOpenFile(diag.path, diag.line)}
+        verification={acpSession.verification}
+        terminalOpen={terminalOpen}
+        onToggleTerminal={() => setTerminalOpen((prev) => !prev)}
+        onSelectDiagnostic={(diag) => {
+          setReviewingDiff(false);
+          void handleOpenFile(diag.path, diag.line);
+        }}
       />
 
       <QuickOpenModal

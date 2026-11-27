@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { EditorDiagnostic } from "../types/workspace";
+import type { EditorDiagnostic, VerificationSummary } from "../types/workspace";
 
 interface DiagnosticsBarProps {
   activePath: string | null;
@@ -7,6 +7,9 @@ interface DiagnosticsBarProps {
   dirty: boolean;
   diagnostics: EditorDiagnostic[];
   statusMessage: string;
+  verification?: VerificationSummary;
+  terminalOpen?: boolean;
+  onToggleTerminal?: () => void;
   onSelectDiagnostic: (diag: EditorDiagnostic) => void;
 }
 
@@ -16,6 +19,9 @@ export function DiagnosticsBar({
   dirty,
   diagnostics,
   statusMessage,
+  verification,
+  terminalOpen = false,
+  onToggleTerminal,
   onSelectDiagnostic,
 }: DiagnosticsBarProps) {
   const [expanded, setExpanded] = useState(false);
@@ -54,6 +60,19 @@ export function DiagnosticsBar({
             <span>Errors: {errors}</span>
             <span>Warnings: {warnings}</span>
           </button>
+          {verification ? (
+            <span
+              className={`verification-pill verification-${verification.status}`}
+              title={verification.detail}
+            >
+              Verify: {verification.status}
+            </span>
+          ) : null}
+          {onToggleTerminal ? (
+            <button type="button" className="statusbar-btn" onClick={onToggleTerminal}>
+              {terminalOpen ? "Terminal: Open" : "Terminal"}
+            </button>
+          ) : null}
           {statusMessage ? <span className="statusbar-note">{statusMessage}</span> : null}
         </div>
         <div className="statusbar-right">

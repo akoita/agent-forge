@@ -11,6 +11,7 @@ import type {
   SessionInfo,
   SessionUpdate,
 } from "../types/acp";
+import type { PendingDiffItem, VerificationSummary } from "../types/workspace";
 
 export type TimelineEntry =
   | { kind: "user"; id: string; text: string }
@@ -22,6 +23,18 @@ interface UseAcpSessionOptions {
   acp: ACPTransport;
   onTurnCompleted?: () => Promise<void> | void;
   readFileBuffer?: ACPReadFileHandler;
+}
+
+function normalizeDiffPath(rawPath: string, workspaceRoot: string): string {
+  const cleaned = rawPath.replaceAll("\\", "/").trim();
+  if (cleaned.startsWith("/workspace/")) {
+    return cleaned.slice("/workspace/".length);
+  }
+  const normalizedRoot = workspaceRoot.replaceAll("\\", "/").replace(/\/+$/, "");
+  if (normalizedRoot && cleaned.startsWith(`${normalizedRoot}/`)) {
+    return cleaned.slice(normalizedRoot.length + 1);
+  }
+  return cleaned.replace(/^\/+/, "");
 }
 
 export function useAcpSession({
@@ -38,6 +51,11 @@ export function useAcpSession({
   const [availableCommands, setAvailableCommands] = useState<AvailableCommand[]>([]);
   const [planEntries, setPlanEntries] = useState<PlanEntry[]>([]);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
+  const [diffs, setDiffs] = useState<PendingDiffItem[]>([]);
+  const [verification, setVerification] = useState<VerificationSummary>({
+    status: "idle",
+    detail: "No verification run yet",
+  });
   const [permissionQueue, setPermissionQueue] = useState<PermissionRequest[]>([]);
   const [promptRunning, setPromptRunning] = useState(false);
   const [agentError, setAgentError] = useState("");
@@ -45,6 +63,8 @@ export function useAcpSession({
   const activeSessionRef = useRef<string | null>(null);
   const entryCounterRef = useRef(0);
   const workspaceRootRef = useRef("");
+  const turnFailedExecuteRef = useRef(false);
+  const toolTitlesRef = useRef<Map<string, { title: string; kind: string }>>(new Map());
 
   useEffect(() => {
     activeSessionRef.current = activeSessionId;
@@ -100,6 +120,10 @@ export function useAcpSession({
           break;
         }
         case "tool_call": {
+          toolTitlesRef.current.set(update.toolCallId, {
+            title: update.title,
+            kind: update.kind,
+          });
           setTimeline((prev) => {
             const existingIdx = prev.findIndex(
               (item) => item.kind === "tool" && item.toolCallId === update.toolCallId,
@@ -125,6 +149,42 @@ export function useAcpSession({
           break;
         }
         case "tool_call_update": {
+          const meta = toolTitlesRef.current.get(update.toolCallId);
+          if (meta?.kind === "execute" && update.status === "failed") {
+            turnFailedExecuteRef.current = true;
+            setVerification({
+              status: "failed",
+              detail: `${meta.title} failed`,
+            });
+          }
+          const incomingDiffs = (update.content ?? []).filter(
+            (block): block is Extract<typeof block, { type: "diff" }> => block.type === "diff",
+          );
+          if (incomingDiffs.length > 0) {
+            setDiffs((prev) => {
+              const next = [...prev];
+              for (const diffBlock of incomingDiffs) {
+                const normPath = normalizeDiffPath(diffBlock.path, workspaceRootRef.current);
+                const diffId = `${update.toolCallId}:${normPath}`;
+                const existingIdx = next.findIndex((item) => item.id === diffId);
+                const record: PendingDiffItem = {
+                  id: diffId,
+                  toolCallId: update.toolCallId,
+                  title: meta?.title ?? "Edit",
+                  path: normPath,
+                  oldText: diffBlock.oldText ?? "",
+                  newText: diffBlock.newText,
+                  applied: false,
+                };
+                if (existingIdx >= 0) {
+                  next[existingIdx] = record;
+                } else {
+                  next.push(record);
+                }
+              }
+              return next;
+            });
+          }
           setTimeline((prev) =>
             prev.map((item) => {
               if (item.kind !== "tool" || item.toolCallId !== update.toolCallId) {
@@ -217,8 +277,11 @@ export function useAcpSession({
       }
       setAgentError("");
       setTimeline([]);
+      setDiffs([]);
       setPlanEntries([]);
       setPermissionQueue([]);
+      toolTitlesRef.current.clear();
+      setVerification({ status: "idle", detail: "Session loaded" });
       activeSessionRef.current = sessionId;
       setActiveSessionId(sessionId);
       try {
@@ -239,8 +302,11 @@ export function useAcpSession({
     }
     setAgentError("");
     setTimeline([]);
+    setDiffs([]);
     setPlanEntries([]);
     setPermissionQueue([]);
+    toolTitlesRef.current.clear();
+    setVerification({ status: "idle", detail: "New session ready" });
     try {
       const created = await acp.newSession(cwd);
       activeSessionRef.current = created.sessionId;
@@ -261,17 +327,31 @@ export function useAcpSession({
         return;
       }
       setAgentError("");
+      turnFailedExecuteRef.current = false;
+      setVerification({ status: "running", detail: "Running agent turn" });
       setTimeline((prev) => [...prev, { kind: "user", id: nextId("usr"), text: trimmed }]);
       setPromptRunning(true);
       try {
-        await acp.sendPrompt(sessionId, trimmed);
+        const res = await acp.sendPrompt(sessionId, trimmed);
+        if (!turnFailedExecuteRef.current) {
+          if (res.stopReason === "end_turn") {
+            setVerification({ status: "passed", detail: "Turn completed cleanly" });
+          } else {
+            setVerification({
+              status: "failed",
+              detail: `Turn ended (${res.stopReason})`,
+            });
+          }
+        }
         if (workspaceRootRef.current) {
           const listResp = await acp.listSessions(workspaceRootRef.current);
           setSessions(listResp.sessions);
         }
         await onTurnCompleted?.();
       } catch (err) {
-        setAgentError(err instanceof Error ? err.message : "ACP prompt failed.");
+        const msg = err instanceof Error ? err.message : "ACP prompt failed.";
+        setVerification({ status: "failed", detail: msg });
+        setAgentError(msg);
       } finally {
         setPromptRunning(false);
         setPermissionQueue((prev) => prev.filter((item) => item.sessionId !== sessionId));
@@ -313,16 +393,26 @@ export function useAcpSession({
     [acp],
   );
 
+  const markDiffApplied = useCallback((diffId: string, applied: boolean) => {
+    setDiffs((prev) =>
+      prev.map((item) => (item.id === diffId ? { ...item, applied } : item)),
+    );
+  }, []);
+
   const reset = useCallback(() => {
     acp.disconnect();
     workspaceRootRef.current = "";
     activeSessionRef.current = null;
+    toolTitlesRef.current.clear();
+    turnFailedExecuteRef.current = false;
     setActiveSessionId(null);
     setSessions([]);
     setConfigOptions([]);
     setAvailableCommands([]);
     setPlanEntries([]);
     setTimeline([]);
+    setDiffs([]);
+    setVerification({ status: "idle", detail: "No verification run yet" });
     setPermissionQueue([]);
     setPromptRunning(false);
     setAgentError("");
@@ -336,10 +426,13 @@ export function useAcpSession({
     availableCommands,
     planEntries,
     timeline,
+    diffs,
+    verification,
     pendingPermission: permissionQueue[0] ?? null,
     promptRunning,
     agentError,
     setAgentError,
+    markDiffApplied,
     startSessionFlow,
     selectSession,
     createNewSession,

@@ -1,6 +1,7 @@
 import type {
   GitDiffResponse,
   GitStatusResponse,
+  MemoryResponse,
   TreeEntry,
   WorkspaceFile,
   WorkspaceTransport,
@@ -164,5 +165,64 @@ export class HttpWorkspaceClient implements WorkspaceTransport {
       throw new Error(await parseErrorDetail(resp));
     }
     return (await resp.json()) as GitDiffResponse;
+  }
+
+  private postHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (this.csrfToken) {
+      headers["X-CSRF-Token"] = this.csrfToken;
+    }
+    return headers;
+  }
+
+  async listMemory(): Promise<MemoryResponse> {
+    const resp = await fetch(this.url("/workspace/memory"), {
+      method: "GET",
+      credentials: "include",
+    });
+    if (!resp.ok) {
+      throw new Error(await parseErrorDetail(resp));
+    }
+    return (await resp.json()) as MemoryResponse;
+  }
+
+  async addMemory(text: string, category = "general"): Promise<MemoryResponse> {
+    const resp = await fetch(this.url("/workspace/memory/add"), {
+      method: "POST",
+      credentials: "include",
+      headers: this.postHeaders(),
+      body: JSON.stringify({ text, category }),
+    });
+    if (!resp.ok) {
+      throw new Error(await parseErrorDetail(resp));
+    }
+    return (await resp.json()) as MemoryResponse;
+  }
+
+  async removeMemory(entryId: string): Promise<MemoryResponse> {
+    const resp = await fetch(this.url("/workspace/memory/remove"), {
+      method: "POST",
+      credentials: "include",
+      headers: this.postHeaders(),
+      body: JSON.stringify({ entry_id: entryId }),
+    });
+    if (!resp.ok) {
+      throw new Error(await parseErrorDetail(resp));
+    }
+    return (await resp.json()) as MemoryResponse;
+  }
+
+  async clearMemory(): Promise<MemoryResponse> {
+    const resp = await fetch(this.url("/workspace/memory/clear"), {
+      method: "POST",
+      credentials: "include",
+      headers: this.postHeaders(),
+    });
+    if (!resp.ok) {
+      throw new Error(await parseErrorDetail(resp));
+    }
+    return (await resp.json()) as MemoryResponse;
   }
 }

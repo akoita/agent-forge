@@ -43,4 +43,4 @@ flowchart LR
 
 - **Issue #237:** `npm run typecheck`, `npm run test`, `npm run build`, `npm audit --audit-level=high`, CI `Studio` job green, and `python scripts/check_boundaries.py` green (`baseline size 0`).
 - **Issue #238:** Typed `WebSocketACPClient` (`initialize`, `session/list`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, `session/set_config_option`, bidirectional `session/request_permission` + `fs/read_text_file`), pure JSX `SafeMarkdown`, collapsible `Code Mode`/`Subagent` tool cards, slash-command autocomplete, and interactive approval dialogs covered by Vitest unit/UI/security tests.
-- **Issue #239:** Monaco DiffEditor, `xterm.js`, memory panel, local launcher, and Playwright E2E smoke tests in CI.
+- **Issue #239:** Side-by-side Monaco `DiffEditor` review with Apply/Undo, `@xterm/xterm` PTY terminal (`WS /ws/terminal`), verification status pill, `.agent-forge/memory.md` CRUD routes + Memory panel, `agent-forge studio` local browser launcher serving built `apps/studio/dist/`, and Playwright Chromium E2E smoke tests (`CI/Studio (Web UI)`).

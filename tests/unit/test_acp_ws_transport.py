@@ -504,3 +504,105 @@ class TestACPWebSocketLifecycleAndPTY:
         assert called["host"] == "127.0.0.1"
         assert called["port"] == 9876
         assert called["app"].state.acp_auth.bearer_token == _TEST_TOKEN
+
+    def test_workspace_memory_endpoints_require_auth_and_csrf(self, tmp_path: Path) -> None:
+        app, repo = _make_app(tmp_path)
+        client = TestClient(app)
+
+        assert client.get("/workspace/memory").status_code == 401
+        login = client.post("/auth/session", headers=_auth_headers({"Origin": _TEST_ORIGIN}))
+        csrf_token = login.json()["csrfToken"]
+
+        initial = client.get("/workspace/memory")
+        assert initial.status_code == 200
+        assert initial.json()["entries"] == []
+
+        # POST without CSRF token fails with 403
+        assert (
+            client.post(
+                "/workspace/memory/add",
+                json={"text": "Run pytest before push", "category": "testing"},
+            ).status_code
+            == 403
+        )
+
+        added = client.post(
+            "/workspace/memory/add",
+            json={"text": "Run pytest before push", "category": "testing"},
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert added.status_code == 200
+        payload = added.json()
+        assert payload["added"] is True
+        entry_id = payload["entry"]["id"]
+        assert (repo / ".agent-forge" / "memory.md").is_file()
+
+        removed = client.post(
+            "/workspace/memory/remove",
+            json={"entry_id": entry_id},
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert removed.status_code == 200
+        assert removed.json()["entries"] == []
+
+        client.post(
+            "/workspace/memory/add",
+            json={"text": "Keep diffs small", "category": "workflow"},
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        cleared = client.post("/workspace/memory/clear", headers={"X-CSRF-Token": csrf_token})
+        assert cleared.status_code == 200
+        assert cleared.json()["cleared"] == 1
+        assert cleared.json()["entries"] == []
+
+    def test_studio_static_serving_and_cli_launcher(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dist = tmp_path / "dist"
+        assets = dist / "assets"
+        assets.mkdir(parents=True)
+        (dist / "index.html").write_text("<html><body>Studio</body></html>", encoding="utf-8")
+        (assets / "main.js").write_text("console.log('studio');", encoding="utf-8")
+        (tmp_path / "secret.txt").write_text("NO_LEAK", encoding="utf-8")
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        called: dict[str, Any] = {}
+        fake_uvicorn = types.ModuleType("uvicorn")
+
+        def _fake_run(app: Any, *, host: str, port: int) -> None:
+            called["app"] = app
+            called["host"] = host
+            called["port"] = port
+
+        fake_uvicorn.run = _fake_run  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+        monkeypatch.setenv("CUSTOM_STUDIO_TOKEN", _TEST_TOKEN)
+
+        with patch("agent_forge.cli.load_config", return_value=ForgeConfig()):
+            runner = CliRunner()
+            result = runner.invoke(
+                main,
+                [
+                    "studio",
+                    "--workspace",
+                    str(repo),
+                    "--studio-dist",
+                    str(dist),
+                    "--auth-token-env",
+                    "CUSTOM_STUDIO_TOKEN",
+                    "--no-open",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert _TEST_TOKEN not in result.output
+        assert called["host"] == "127.0.0.1"
+        assert called["port"] == 8765
+
+        client = TestClient(called["app"])
+        index_resp = client.get("/")
+        assert index_resp.status_code == 200
+        assert "worker-src 'self' blob:" in index_resp.headers["content-security-policy"]
+        assert client.get("/assets/main.js").status_code == 200
+        assert client.get("/assets/..%2fsecret.txt").status_code == 404
+        assert client.get("/assets/../secret.txt").status_code == 404
