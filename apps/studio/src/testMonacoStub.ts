@@ -24,6 +24,14 @@ export const editor = {
     focus: () => {},
     dispose: () => {},
   }),
+  createModel: (value = "") => ({
+    getValue: () => value,
+    dispose: () => {},
+  }),
+  createDiffEditor: () => ({
+    setModel: () => {},
+    dispose: () => {},
+  }),
   setModelLanguage: () => {},
   setModelMarkers: () => {},
 };

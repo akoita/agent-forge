@@ -315,8 +315,9 @@ Runs on every push/PR to `main`:
 
 1. **Lint** — `ruff check` + `mypy`
 2. **Code Quality** — additional static analysis
-3. **Test** — Unit tests on Python 3.11, 3.12, 3.13
+3. **Test** — Unit tests on Python 3.13 + deterministic smoke eval
 4. **Integration** — Tools in Docker sandbox
+5. **Studio (Web UI)** — `apps/studio/` typecheck, Vitest unit/UI tests, production Vite build, and Playwright Chromium E2E smoke suite (`npm run test:e2e`)
 
 ### Manual (`e2e-tests.yml`)
 

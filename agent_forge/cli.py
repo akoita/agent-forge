@@ -2365,6 +2365,144 @@ def _serve_acp_ws(
     uvicorn.run(app, host=host, port=port)
 
 
+def _resolve_studio_dist_dir(explicit: Path | None) -> Path | None:
+    if explicit is not None:
+        resolved = explicit.expanduser().resolve()
+        return resolved if (resolved / "index.html").is_file() else None
+    repo_dist = Path(__file__).resolve().parent.parent / "apps" / "studio" / "dist"
+    return repo_dist if (repo_dist / "index.html").is_file() else None
+
+
+def _build_studio_allowed_origins(host: str, port: int, extra: tuple[str, ...]) -> tuple[str, ...]:
+    origins = [
+        f"http://{host}:{port}",
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ]
+    if host == "127.0.0.1":
+        origins.append(f"http://localhost:{port}")
+    elif host == "localhost":
+        origins.append(f"http://127.0.0.1:{port}")
+    for item in extra:
+        if item.strip() and item not in origins:
+            origins.append(item.strip())
+    return tuple(origins)
+
+
+@main.command("studio")
+@click.option(
+    "--workspace",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Workspace root directory opened in Agent Forge Studio.",
+)
+@click.option("--host", default="127.0.0.1", show_default=True, help="Bind host address.")
+@click.option("--port", type=int, default=8765, show_default=True, help="Bind TCP port.")
+@click.option("--provider", default=None, help="Override configured LLM provider.")
+@click.option("--model", default=None, help="Override configured LLM model.")
+@click.option(
+    "--approval-mode",
+    default="prompt",
+    type=click.Choice(["prompt", "auto", "deny"], case_sensitive=False),
+    show_default=True,
+    help="Approval policy for gated operations in ACP sessions.",
+)
+@click.option(
+    "--sessions-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory for durable ACP session storage.",
+)
+@click.option(
+    "--auth-token-env",
+    default="AGENT_FORGE_ACP_TOKEN",
+    show_default=True,
+    help="Environment variable holding the bearer token.",
+)
+@click.option(
+    "--studio-dist",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Optional built Studio dist/ directory (defaults to apps/studio/dist if present).",
+)
+@click.option(
+    "--open/--no-open",
+    "open_browser",
+    default=True,
+    show_default=True,
+    help="Open Studio in the default local browser.",
+)
+@click.option(
+    "--allowed-origin",
+    "allowed_origins",
+    multiple=True,
+    help="Additional allowed browser Origin header(s).",
+)
+def studio_launch(
+    workspace: Path | None,
+    host: str,
+    port: int,
+    provider: str | None,
+    model: str | None,
+    approval_mode: str,
+    sessions_dir: Path | None,
+    auth_token_env: str,
+    studio_dist: Path | None,
+    open_browser: bool,
+    allowed_origins: tuple[str, ...],
+) -> None:
+    """Launch Agent Forge Studio and its authenticated ACP/workspace bridge locally."""
+    import webbrowser
+
+    try:
+        import uvicorn
+
+        from agent_forge.acp.ws_transport import create_acp_ws_app
+    except ImportError as exc:
+        err_console.print(
+            "[red]Agent Forge Studio bridge requires optional dependencies.[/red]\n"
+            f"Install them with: pip install 'agent-forge[service]' ({exc})"
+        )
+        sys.exit(1)
+
+    cfg = load_config(
+        cli_overrides=_build_cli_overrides(
+            model=model,
+            provider=provider,
+            max_iterations=None,
+            sandbox_backend=None,
+        )
+    )
+    server_factory = _build_acp_server_factory(
+        cfg,
+        approval_mode=approval_mode,
+        provider=provider,
+        model=model,
+        sandbox_backend=None,
+        max_iterations=None,
+        sessions_dir=sessions_dir,
+    )
+    resolved_workspace = (workspace or Path.cwd()).resolve()
+    resolved_dist = _resolve_studio_dist_dir(studio_dist)
+    origins = _build_studio_allowed_origins(host, port, allowed_origins)
+    app = create_acp_ws_app(
+        workspace_root=resolved_workspace,
+        server_factory=server_factory,
+        token_env_var=auth_token_env,
+        allowed_origins=origins,
+        studio_dist_dir=resolved_dist,
+    )
+    url = f"http://{host}:{port}"
+    ui_note = f"static_ui={resolved_dist}" if resolved_dist else "static_ui=none (API/dev proxy)"
+    console.print(
+        f"[bold green]Agent Forge Studio[/bold green] -> {url} "
+        f"(workspace={resolved_workspace}, {ui_note}, token_env={auth_token_env})"
+    )
+    if open_browser:
+        webbrowser.open(url)
+    uvicorn.run(app, host=host, port=port)
+
+
 @main.command("acp")
 @click.option("--provider", default=None, help="Override configured LLM provider.")
 @click.option("--model", default=None, help="Override configured LLM model.")

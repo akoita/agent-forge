@@ -11,11 +11,12 @@ import secrets
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 try:
     from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import FileResponse, JSONResponse
 except ImportError as exc:
     msg = (
         "ACP WebSocket/HTTP transport requires optional dependencies. "
@@ -28,10 +29,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_forge import __version__
 from agent_forge.acp.terminal import WorkspaceTerminalSession
 from agent_forge.acp.workspace import PayloadTooLargeError, WorkspaceBridge
+from agent_forge.agent.memory import RepoMemoryStore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     from agent_forge.acp.server import ACPServer
 
@@ -47,6 +48,11 @@ _CSP_POLICY = (
     "default-src 'self'; script-src 'self'; object-src 'none'; "
     "frame-ancestors 'none'; base-uri 'self'"
 )
+_STUDIO_CSP_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; worker-src 'self' blob:; connect-src 'self' ws: wss:; "
+    "object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
+)
 
 
 class WriteFileBody(BaseModel):
@@ -56,6 +62,23 @@ class WriteFileBody(BaseModel):
 
     path: str = Field(min_length=1, max_length=1024)
     content: str
+
+
+class MemoryAddBody(BaseModel):
+    """Request body for adding a persistent repository memory entry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=2000)
+    category: str = Field(default="general", max_length=64)
+
+
+class MemoryRemoveBody(BaseModel):
+    """Request body for removing a repository memory entry by ID or prefix."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    entry_id: str = Field(min_length=1, max_length=64)
 
 
 @dataclass
@@ -280,6 +303,8 @@ def _attach_security_middleware(
     app: FastAPI,
     auth: ACPTransportAuth,
     limiter: SlidingWindowRateLimiter,
+    *,
+    has_studio_ui: bool = False,
 ) -> None:
     @app.middleware("http")
     async def _security_and_rate_limit(request: Request, call_next: Any) -> Any:
@@ -290,7 +315,12 @@ def _attach_security_middleware(
         if not limiter.allow(client_key):
             return JSONResponse({"detail": "Rate limit exceeded"}, status_code=429)
         response = await call_next(request)
-        response.headers["Content-Security-Policy"] = _CSP_POLICY
+        is_ui_route = has_studio_ui and (
+            request.url.path == "/" or request.url.path.startswith("/assets/")
+        )
+        response.headers["Content-Security-Policy"] = (
+            _STUDIO_CSP_POLICY if is_ui_route else _CSP_POLICY
+        )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
@@ -412,6 +442,97 @@ def _register_workspace_git_routes(
             return await workspace.git_diff(path, staged=staged)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _serialize_memory_snapshot(store: RepoMemoryStore) -> dict[str, Any]:
+    entries = [
+        {
+            "id": item.id,
+            "category": item.category,
+            "text": item.text,
+            "created_at": item.created_at,
+        }
+        for item in store.load_entries()
+    ]
+    raw = store.path.read_text(encoding="utf-8") if store.path.is_file() else ""
+    return {"path": store.relative_path, "entries": entries, "raw": raw}
+
+
+def _register_workspace_memory_routes(
+    app: FastAPI,
+    auth: ACPTransportAuth,
+    workspace: WorkspaceBridge,
+) -> None:
+    store = RepoMemoryStore(workspace.root)
+
+    @app.get("/workspace/memory")
+    async def workspace_memory_list(request: Request) -> dict[str, Any]:
+        auth.authenticate_http(request)
+        return await asyncio.to_thread(_serialize_memory_snapshot, store)
+
+    @app.post("/workspace/memory/add")
+    async def workspace_memory_add(request: Request, body: MemoryAddBody) -> dict[str, Any]:
+        auth.authenticate_http(request, require_csrf=True)
+        try:
+            entry, added = await asyncio.to_thread(store.add, body.text, category=body.category)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        snapshot = await asyncio.to_thread(_serialize_memory_snapshot, store)
+        return {
+            "added": added,
+            "entry": {
+                "id": entry.id,
+                "category": entry.category,
+                "text": entry.text,
+                "created_at": entry.created_at,
+            },
+            **snapshot,
+        }
+
+    @app.post("/workspace/memory/remove")
+    async def workspace_memory_remove(request: Request, body: MemoryRemoveBody) -> dict[str, Any]:
+        auth.authenticate_http(request, require_csrf=True)
+        removed = await asyncio.to_thread(store.remove, body.entry_id)
+        if not removed:
+            raise HTTPException(status_code=404, detail=f"Memory entry not found: {body.entry_id}")
+        snapshot = await asyncio.to_thread(_serialize_memory_snapshot, store)
+        return {"removed": True, **snapshot}
+
+    @app.post("/workspace/memory/clear")
+    async def workspace_memory_clear(request: Request) -> dict[str, Any]:
+        auth.authenticate_http(request, require_csrf=True)
+        cleared = await asyncio.to_thread(store.clear)
+        snapshot = await asyncio.to_thread(_serialize_memory_snapshot, store)
+        return {"cleared": cleared, **snapshot}
+
+
+def _resolve_studio_asset(assets_root: Path, asset_path: str) -> Path:
+    if "\x00" in asset_path or "\\" in asset_path or asset_path.startswith("/"):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    parts = [p for p in asset_path.split("/") if p and p != "."]
+    if not parts or any(p == ".." for p in parts):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    assets_prefix = str(assets_root) + os.sep
+    candidate = (assets_root / Path(*parts)).resolve()
+    if not str(candidate).startswith(assets_prefix) or not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return candidate
+
+
+def _register_studio_static_routes(app: FastAPI, dist_root: Path) -> None:
+    index_file = (dist_root / "index.html").resolve()
+    assets_root = (dist_root / "assets").resolve()
+
+    @app.get("/")
+    async def studio_index() -> FileResponse:
+        return FileResponse(index_file, media_type="text/html")
+
+    @app.get("/assets/{asset_path:path}")
+    async def studio_asset(asset_path: str) -> FileResponse:
+        if not assets_root.is_dir():
+            raise HTTPException(status_code=404, detail="Assets directory unavailable")
+        target = _resolve_studio_asset(assets_root, asset_path)
+        return FileResponse(target)
 
 
 async def _reject_ws_if_needed(
@@ -557,6 +678,7 @@ def create_acp_ws_app(
     session_ttl_seconds: int = 3600,
     tls_enabled: bool = False,
     watch_interval_seconds: float = 0.25,
+    studio_dist_dir: str | Path | None = None,
 ) -> FastAPI:
     """Create the authenticated FastAPI app hosting ACP WebSocket and workspace routes."""
     origins = tuple(allowed_origins) if allowed_origins is not None else DEFAULT_ALLOWED_ORIGINS
@@ -572,6 +694,11 @@ def create_acp_ws_app(
         window_seconds=rate_limit_window_seconds,
     )
     workspace = WorkspaceBridge(workspace_root)
+    dist_root: Path | None = None
+    if studio_dist_dir is not None:
+        candidate_dist = Path(studio_dist_dir).resolve()
+        if (candidate_dist / "index.html").is_file():
+            dist_root = candidate_dist
 
     app = FastAPI(
         title="Agent Forge ACP Bridge", version=__version__, docs_url=None, redoc_url=None
@@ -579,10 +706,13 @@ def create_acp_ws_app(
     app.state.acp_auth = auth
     app.state.workspace = workspace
 
-    _attach_security_middleware(app, auth, limiter)
+    _attach_security_middleware(app, auth, limiter, has_studio_ui=dist_root is not None)
     _register_auth_and_health_routes(app, auth, workspace)
     _register_workspace_file_routes(app, auth, workspace)
     _register_workspace_git_routes(app, auth, workspace)
+    _register_workspace_memory_routes(app, auth, workspace)
+    if dist_root is not None:
+        _register_studio_static_routes(app, dist_root)
     _register_websocket_routes(
         app, auth, limiter, workspace, server_factory, watch_interval_seconds
     )

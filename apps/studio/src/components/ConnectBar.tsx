@@ -10,6 +10,10 @@ interface ConnectBarProps {
   onOpenQuickSearch: () => void;
   agentPanelOpen: boolean;
   onToggleAgentPanel: () => void;
+  memoryPanelOpen?: boolean;
+  onToggleMemoryPanel?: () => void;
+  terminalOpen?: boolean;
+  onToggleTerminal?: () => void;
 }
 
 export function ConnectBar({
@@ -22,6 +26,10 @@ export function ConnectBar({
   onOpenQuickSearch,
   agentPanelOpen,
   onToggleAgentPanel,
+  memoryPanelOpen = false,
+  onToggleMemoryPanel,
+  terminalOpen = false,
+  onToggleTerminal,
 }: ConnectBarProps) {
   const [tokenInput, setTokenInput] = useState("");
 
@@ -51,6 +59,16 @@ export function ConnectBar({
             <button type="button" className="btn-secondary" onClick={onToggleAgentPanel}>
               {agentPanelOpen ? "Hide Agent" : "Show Agent"}
             </button>
+            {onToggleMemoryPanel ? (
+              <button type="button" className="btn-secondary" onClick={onToggleMemoryPanel}>
+                {memoryPanelOpen ? "Hide Memory" : "Memory"}
+              </button>
+            ) : null}
+            {onToggleTerminal ? (
+              <button type="button" className="btn-secondary" onClick={onToggleTerminal}>
+                {terminalOpen ? "Hide Terminal" : "Terminal"}
+              </button>
+            ) : null}
             <button type="button" className="btn-danger" onClick={() => void onDisconnect()}>
               Disconnect
             </button>

@@ -9,6 +9,14 @@ export default defineConfig({
         find: /^monaco-editor$/,
         replacement: "/src/testMonacoStub.ts",
       },
+      {
+        find: /^@xterm\/xterm$/,
+        replacement: "/src/testXtermStub.ts",
+      },
+      {
+        find: /^@xterm\/addon-fit$/,
+        replacement: "/src/testXtermFitStub.ts",
+      },
     ],
   },
   test: {

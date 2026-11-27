@@ -54,6 +54,38 @@ export interface OpenTab {
   loading?: boolean;
 }
 
+export interface MemoryEntry {
+  id: string;
+  category: string;
+  text: string;
+  created_at: string;
+}
+
+export interface MemoryResponse {
+  path: string;
+  entries: MemoryEntry[];
+  raw: string;
+  added?: boolean;
+  cleared?: number;
+}
+
+export type VerificationStatus = "idle" | "running" | "passed" | "failed";
+
+export interface VerificationSummary {
+  status: VerificationStatus;
+  detail: string;
+}
+
+export interface PendingDiffItem {
+  id: string;
+  toolCallId: string;
+  title: string;
+  path: string;
+  oldText: string;
+  newText: string;
+  applied: boolean;
+}
+
 export interface WorkspaceTransport {
   connectWithToken(bearerToken: string): Promise<void>;
   logout(): Promise<void>;
@@ -63,4 +95,8 @@ export interface WorkspaceTransport {
   writeFile(path: string, content: string): Promise<{ path: string; size: number; mtime_ns: number }>;
   getGitStatus(): Promise<GitStatusResponse>;
   getGitDiff(path?: string, staged?: boolean): Promise<GitDiffResponse>;
+  listMemory?(): Promise<MemoryResponse>;
+  addMemory?(text: string, category?: string): Promise<MemoryResponse>;
+  removeMemory?(entryId: string): Promise<MemoryResponse>;
+  clearMemory?(): Promise<MemoryResponse>;
 }

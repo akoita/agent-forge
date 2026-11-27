@@ -3,13 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { StudioApp } from "../App";
 import type { EditorRendererProps } from "../components/CodeEditorPane";
+import type { DiffRendererProps } from "../components/DiffReviewPane";
+import type { WebSocketLike } from "../services/acpClient";
 import type {
   ACPConnectionListener,
   ACPPermissionListener,
   ACPTransport,
   ACPUpdateListener,
 } from "../types/acp";
-import type { TreeEntry, WorkspaceTransport } from "../types/workspace";
+import type { MemoryEntry, TreeEntry, WorkspaceTransport } from "../types/workspace";
 
 function TestEditorWidget({ path: filePath, value, diagnostics, onChange, onSave }: EditorRendererProps) {
   return (
@@ -30,6 +32,28 @@ function TestEditorWidget({ path: filePath, value, diagnostics, onChange, onSave
       />
     </div>
   );
+}
+
+function TestDiffWidget({ diff }: DiffRendererProps) {
+  return (
+    <div data-testid="mock-monaco-diff">
+      {diff.oldText} -&gt; {diff.newText}
+    </div>
+  );
+}
+
+class FakeTerminalSocket implements WebSocketLike {
+  readyState = 1;
+  sent: string[] = [];
+  addEventListener(type: "open" | "message" | "close" | "error", cb: (...args: never[]) => void): void {
+    if (type === "open") {
+      setTimeout(() => (cb as () => void)(), 0);
+    }
+  }
+  send(data: string): void {
+    this.sent.push(data);
+  }
+  close(): void {}
 }
 
 function createFakeAcpTransport(): ACPTransport {
@@ -53,6 +77,26 @@ function createFakeAcpTransport(): ACPTransport {
     loadSession: vi.fn(async () => ({ configOptions: [] })),
     sendPrompt: vi.fn(async (sessionId: string, text: string) => {
       for (const cb of updateListeners) {
+        cb(sessionId, {
+          sessionUpdate: "tool_call",
+          toolCallId: "call-edit-1",
+          title: "edit_file",
+          kind: "edit",
+          status: "completed",
+        });
+        cb(sessionId, {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "call-edit-1",
+          status: "completed",
+          content: [
+            {
+              type: "diff",
+              path: "/workspace/src/main.py",
+              oldText: "print('hello')\n",
+              newText: "print('from diff')\n",
+            },
+          ],
+        });
         cb(sessionId, {
           sessionUpdate: "agent_message_chunk",
           content: { type: "text", text: `Reply to: ${text}` },
@@ -85,6 +129,7 @@ function createFakeTransport(): WorkspaceTransport & { files: Map<string, string
     ["src/main.py", "print('hello')\n"],
     ["src/helper.py", "VALUE = 1\n"],
   ]);
+  const memory: MemoryEntry[] = [];
   const tree: TreeEntry[] = [
     { path: "src", name: "src", kind: "directory", size: 0, mtime_ns: 1 },
     { path: "src/main.py", name: "main.py", kind: "file", size: 15, mtime_ns: 1 },
@@ -116,11 +161,32 @@ function createFakeTransport(): WorkspaceTransport & { files: Map<string, string
       ],
     })),
     getGitDiff: vi.fn(async () => ({ diff: "", truncated: false })),
+    listMemory: vi.fn(async () => ({ path: ".agent-forge/memory.md", entries: [...memory], raw: "" })),
+    addMemory: vi.fn(async (text: string, category = "general") => {
+      const item: MemoryEntry = {
+        id: `mem-0000000${memory.length + 1}`,
+        category,
+        text,
+        created_at: "2026-11-27",
+      };
+      memory.push(item);
+      return { path: ".agent-forge/memory.md", entries: [...memory], raw: "", added: true };
+    }),
+    removeMemory: vi.fn(async (entryId: string) => {
+      const idx = memory.findIndex((m) => m.id === entryId);
+      if (idx >= 0) memory.splice(idx, 1);
+      return { path: ".agent-forge/memory.md", entries: [...memory], raw: "" };
+    }),
+    clearMemory: vi.fn(async () => {
+      const count = memory.length;
+      memory.length = 0;
+      return { path: ".agent-forge/memory.md", entries: [], raw: "", cleared: count };
+    }),
   };
 }
 
 describe("StudioApp web code editor shell", () => {
-  it("connects, renders tree/git badges, edits multi-tab files, supports Quick Open, diagnostics, and ACP chat", async () => {
+  it("connects, edits files, reviews/applies/undoes diffs, opens terminal and memory, and tracks verification", async () => {
     const user = userEvent.setup();
     const transport = createFakeTransport();
     const acpTransport = createFakeAcpTransport();
@@ -138,6 +204,8 @@ describe("StudioApp web code editor shell", () => {
           },
         ]}
         editorRenderer={(props) => <TestEditorWidget {...props} />}
+        diffRenderer={(props) => <TestDiffWidget {...props} />}
+        terminalWsFactory={FakeTerminalSocket as unknown as new (url: string) => WebSocketLike}
       />,
     );
 
@@ -151,11 +219,35 @@ describe("StudioApp web code editor shell", () => {
     expect(screen.getByRole("button", { name: /main\.py/i })).toHaveTextContent("M");
     expect(screen.getByRole("button", { name: /helper\.py/i })).toHaveTextContent("U");
 
-    // Agent Panel connected and responds to a prompt
+    // Agent Panel connected and responds to a prompt with diff + passed verification
     const composer = await screen.findByLabelText("Agent prompt");
     await waitFor(() => expect(composer).toBeEnabled());
     await user.type(composer, "Explain main.py{Enter}");
     expect(await screen.findByText("Reply to: Explain main.py")).toBeInTheDocument();
+    expect(screen.getByText("Verify: passed")).toBeInTheDocument();
+
+    // Open inline Diff Review, apply diff, undo diff, then close diff
+    await user.click(screen.getByRole("button", { name: "Review Diff" }));
+    expect(await screen.findByTestId("mock-monaco-diff")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Apply Diff" }));
+    await waitFor(() => {
+      expect(transport.writeFile).toHaveBeenCalledWith("src/main.py", "print('from diff')\n");
+    });
+    await user.click(screen.getByRole("button", { name: "Undo Diff" }));
+    await waitFor(() => {
+      expect(transport.writeFile).toHaveBeenCalledWith("src/main.py", "print('hello')\n");
+    });
+    await user.click(screen.getByRole("button", { name: "Close Diff" }));
+
+    // Open Memory Panel and add a note
+    await user.click(screen.getByRole("button", { name: "Memory" }));
+    await user.type(screen.getByLabelText("Memory learning note"), "Always review diffs");
+    await user.click(screen.getByRole("button", { name: "Add" }));
+    expect(await screen.findByText("Always review diffs")).toBeInTheDocument();
+
+    // Open Terminal Drawer
+    await user.click(screen.getAllByRole("button", { name: "Terminal" })[0]);
+    expect(await screen.findByText("Terminal (PTY)")).toBeInTheDocument();
 
     // Open src/main.py and edit
     await user.click(screen.getByRole("button", { name: /main\.py/i }));

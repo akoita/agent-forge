@@ -63,4 +63,6 @@ Thumbs.db
 node_modules/
 apps/studio/dist/
 apps/desktop/dist/
+apps/studio/test-results/
+apps/studio/playwright-report/
 *.tsbuildinfo

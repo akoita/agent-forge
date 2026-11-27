@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type {
+  DiffToolCallContent,
   ToolCallContentBlock,
   ToolCallKind,
   ToolCallLocation,
@@ -22,6 +23,7 @@ export interface ToolCallEntry {
 interface ToolCallCardProps {
   entry: ToolCallEntry;
   onOpenLocation: (path: string, line: number | null) => void;
+  onReviewDiff?: (diff: DiffToolCallContent, entry: ToolCallEntry) => void;
 }
 
 function formatJson(value: unknown): string {
@@ -46,9 +48,12 @@ function detectBadge(title: string): "Code Mode" | "Subagent" | null {
   return null;
 }
 
-export function ToolCallCard({ entry, onOpenLocation }: ToolCallCardProps) {
+export function ToolCallCard({ entry, onOpenLocation, onReviewDiff }: ToolCallCardProps) {
   const [expanded, setExpanded] = useState(false);
   const badge = detectBadge(entry.title);
+  const firstDiff = entry.content.find(
+    (block): block is DiffToolCallContent => block.type === "diff",
+  );
 
   return (
     <div className={`tool-card tool-status-${entry.status}`}>
@@ -69,7 +74,7 @@ export function ToolCallCard({ entry, onOpenLocation }: ToolCallCardProps) {
         </span>
       </button>
 
-      {entry.locations.length > 0 ? (
+      {entry.locations.length > 0 || (firstDiff && onReviewDiff) ? (
         <div className="tool-locations">
           {entry.locations.map((loc, idx) => (
             <button
@@ -82,6 +87,15 @@ export function ToolCallCard({ entry, onOpenLocation }: ToolCallCardProps) {
               {loc.line ? `:${loc.line}` : ""}
             </button>
           ))}
+          {firstDiff && onReviewDiff ? (
+            <button
+              type="button"
+              className="tool-location-link diff-jump-btn"
+              onClick={() => onReviewDiff(firstDiff, entry)}
+            >
+              Review Diff
+            </button>
+          ) : null}
         </div>
       ) : null}
 
@@ -97,7 +111,18 @@ export function ToolCallCard({ entry, onOpenLocation }: ToolCallCardProps) {
           {entry.content.map((block, idx) =>
             block.type === "diff" ? (
               <div key={`diff-${idx}`} className="tool-section">
-                <div className="tool-section-label">Diff: {block.path}</div>
+                <div className="tool-diff-header-row">
+                  <span className="tool-section-label">Diff: {block.path}</span>
+                  {onReviewDiff ? (
+                    <button
+                      type="button"
+                      className="tool-location-link"
+                      onClick={() => onReviewDiff(block, entry)}
+                    >
+                      Open in DiffEditor
+                    </button>
+                  ) : null}
+                </div>
                 <pre className="tool-pre">
                   {block.oldText ? `--- ${block.path}\n${block.oldText}\n` : ""}
                   {`+++ ${block.path}\n${block.newText}`}
