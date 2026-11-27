@@ -124,8 +124,11 @@ class TestFrontierCapabilitiesAndContextSizing:
     """Generalized long-context patterns and ContextEngine auto-sizing."""
 
     def test_frontier_long_context_heuristics_and_overrides(self) -> None:
-        assert resolve_capabilities("openai", "gpt-6.2-sol").max_context_tokens == 200_000
-        assert resolve_capabilities("openai", "openai/gpt-6.2-astra").max_context_tokens == 200_000
+        assert resolve_capabilities("openai", "gpt-5.4").max_context_tokens == 200_000
+        assert resolve_capabilities("openai", "gpt-6.2-sol").max_context_tokens == 1_050_000
+        assert (
+            resolve_capabilities("openai", "openai/gpt-6.2-astra").max_context_tokens == 1_050_000
+        )
         assert resolve_capabilities("openai", "o5-mini").max_context_tokens == 200_000
         assert resolve_capabilities("openai", "gpt-6.2-1m").max_context_tokens == 1_000_000
 

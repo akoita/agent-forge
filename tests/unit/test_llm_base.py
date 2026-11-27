@@ -64,7 +64,7 @@ class TestLLMConfig:
 
     def test_defaults(self) -> None:
         cfg = LLMConfig()
-        assert cfg.model == "gemini-3.1-flash-lite-preview"
+        assert cfg.model == "gemini-4-hydrogen"
         assert cfg.temperature == 0.0
         assert cfg.max_tokens == 4096
         assert cfg.top_p == 1.0

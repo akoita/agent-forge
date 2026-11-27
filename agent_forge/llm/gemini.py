@@ -41,7 +41,7 @@ from agent_forge.observability import get_logger
 logger = get_logger("gemini")
 
 _GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
-_DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
+_DEFAULT_MODEL = "gemini-4-hydrogen"
 
 # Retry config per spec § 7.2
 _MAX_RETRIES = 5

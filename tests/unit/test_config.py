@@ -183,7 +183,7 @@ class TestDefaults:
         assert cfg.agent.max_iterations == 25
         assert cfg.agent.max_tokens_per_run == 200_000
         assert cfg.agent.default_provider == "gemini"
-        assert cfg.agent.default_model == "gemini-3.1-flash-lite-preview"
+        assert cfg.agent.default_model == "gemini-4-hydrogen"
         assert cfg.agent.temperature == 0.0
         assert cfg.sandbox.backend == "docker"
         assert cfg.sandbox.image == "agent-forge-sandbox:latest"
@@ -209,8 +209,10 @@ class TestDefaults:
         )
         assert "gemini" in cfg.providers
         assert cfg.providers["gemini"].api_key_env == "GEMINI_API_KEY"
-        assert cfg.providers["openai"].default_model == "gpt-4o"
+        assert cfg.providers["gemini"].default_model == "gemini-4-hydrogen"
+        assert cfg.providers["openai"].default_model == "gpt-6.2-sol"
         assert cfg.providers["anthropic"].api_key_env == "ANTHROPIC_API_KEY"
+        assert cfg.providers["anthropic"].default_model == "claude-sonnet-5-5"
 
 
 # ---------------------------------------------------------------------------

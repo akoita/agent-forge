@@ -236,8 +236,17 @@ class TestCapabilityModel:
         assert anthropic_caps.api_protocol == "anthropic_messages"
         assert anthropic_caps.context_editing is True
         assert anthropic_caps.stateful_response_ids is False
+        assert anthropic_caps.max_context_tokens == 200_000
 
-        gemini_caps = GeminiProvider(api_key="k").capabilities("gemini-3.1-flash-lite-preview")
+        claude5_caps = resolve_capabilities("anthropic", "claude-sonnet-5-5")
+        assert claude5_caps.max_context_tokens == 1_000_000
+        assert resolve_capabilities("anthropic", "claude-fable-5-2").max_context_tokens == 1_000_000
+
+        gpt6_caps = resolve_capabilities("openai", "gpt-6.2-sol")
+        assert gpt6_caps.max_context_tokens == 1_050_000
+        assert gpt6_caps.stateful_response_ids is True
+
+        gemini_caps = GeminiProvider(api_key="k").capabilities("gemini-4-hydrogen")
         assert gemini_caps.api_protocol == "gemini_generate_content"
         assert gemini_caps.max_context_tokens == 1_000_000
         assert gemini_caps.reasoning_continuity is True

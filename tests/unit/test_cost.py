@@ -84,18 +84,35 @@ class TestCostTable:
         [
             "gemini-2.0-flash",
             "gemini-3.1-flash-lite-preview",
+            "gemini-3.8-flash",
+            "gemini-4-hydrogen",
+            "gemini-4-neon",
+            "gemini-4-carbon",
+            "gemini-4-argon",
             "gpt-4o",
             "gpt-5.4",
+            "gpt-6.2-sol",
+            "gpt-6.2-astra",
             "claude-sonnet-4-20250514",
             "claude-sonnet-4-6",
             "claude-opus-4-6",
+            "claude-sonnet-5-5",
+            "claude-opus-5-5",
+            "claude-fable-5-2",
+            "claude-haiku-5-5",
         ],
     )
     def test_model_present(self, model: str) -> None:
         assert model in COST_TABLE
 
     def test_all_prices_have_required_keys(self) -> None:
-        for model in ["gemini-2.0-flash", "gpt-5.4", "claude-sonnet-4-6"]:
+        for model in [
+            "gemini-2.0-flash",
+            "gemini-4-hydrogen",
+            "gemini-4-carbon",
+            "gpt-6.2-sol",
+            "claude-sonnet-5-5",
+        ]:
             prices = COST_TABLE[model]
             assert prices["input_cost_per_token"] > 0, f"{model} input price should be > 0"
             assert prices["output_cost_per_token"] > 0, f"{model} output price should be > 0"

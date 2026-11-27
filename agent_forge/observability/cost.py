@@ -42,6 +42,26 @@ _FALLBACK_PRICES: dict[str, dict[str, float]] = {
         "input_cost_per_token": 2.5e-07,
         "output_cost_per_token": 1.5e-06,
     },
+    "gemini-3.8-flash": {
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 3e-06,
+    },
+    "gemini-4-hydrogen": {
+        "input_cost_per_token": 7.5e-07,
+        "output_cost_per_token": 3.75e-06,
+    },
+    "gemini-4-neon": {
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+    },
+    "gemini-4-carbon": {
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 1e-05,
+    },
+    "gemini-4-argon": {
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 1e-05,
+    },
     "gpt-4o": {
         "input_cost_per_token": 2.5e-06,
         "output_cost_per_token": 1e-05,
@@ -49,6 +69,14 @@ _FALLBACK_PRICES: dict[str, dict[str, float]] = {
     "gpt-5.4": {
         "input_cost_per_token": 2.5e-06,
         "output_cost_per_token": 1.5e-05,
+    },
+    "gpt-6.2-sol": {
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 1.5e-05,
+    },
+    "gpt-6.2-astra": {
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 2.5e-05,
     },
     "claude-sonnet-4-20250514": {
         "input_cost_per_token": 3e-06,
@@ -61,6 +89,22 @@ _FALLBACK_PRICES: dict[str, dict[str, float]] = {
     "claude-opus-4-6": {
         "input_cost_per_token": 5e-06,
         "output_cost_per_token": 2.5e-05,
+    },
+    "claude-sonnet-5-5": {
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+    },
+    "claude-opus-5-5": {
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 2.5e-05,
+    },
+    "claude-fable-5-2": {
+        "input_cost_per_token": 6e-06,
+        "output_cost_per_token": 3e-05,
+    },
+    "claude-haiku-5-5": {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 5e-06,
     },
 }
 

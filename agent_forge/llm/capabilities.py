@@ -20,9 +20,11 @@ _CAPABILITY_BOOL_FIELDS: tuple[str, ...] = (
     "stateful_response_ids",
     "native_tools",
 )
+_OPENAI_MILLION_CONTEXT_RE = re.compile(r"^gpt-[6-9]\d*(?:[.\-_]|$)")
 _OPENAI_LONG_CONTEXT_RE = re.compile(
     r"^(?:gpt-(?:4\.1|[5-9]\d*(?:[.\-_]|$))|o[3-9](?:[.\-_]|$)|codex-)"
 )
+_ANTHROPIC_MILLION_CONTEXT_RE = re.compile(r"^claude-(?:opus|sonnet|haiku|fable)-[5-9](?:[.\-_]|$)")
 _MILLION_CONTEXT_RE = re.compile(r"(?:^|[-_.:/])1m(?:$|[-_.:/])")
 _LOCAL_ENDPOINT_HOSTS: frozenset[str] = frozenset(
     {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"}  # noqa: S104
@@ -108,6 +110,8 @@ def _resolve_openai_max_context(model: str) -> int:
     short = _strip_provider_prefix(model).lower()
     if _MILLION_CONTEXT_RE.search(short):
         return 1_000_000
+    if _OPENAI_MILLION_CONTEXT_RE.match(short):
+        return 1_050_000
     if _OPENAI_LONG_CONTEXT_RE.match(short):
         return 200_000
     vendored = _lookup_vendored_context_window(model)
@@ -209,7 +213,14 @@ def resolve_capabilities(
         )
     elif normalized == "anthropic":
         short_anthropic = _strip_provider_prefix(model).lower()
-        anthropic_ctx = 1_000_000 if _MILLION_CONTEXT_RE.search(short_anthropic) else 200_000
+        anthropic_ctx = (
+            1_000_000
+            if (
+                _ANTHROPIC_MILLION_CONTEXT_RE.match(short_anthropic)
+                or _MILLION_CONTEXT_RE.search(short_anthropic)
+            )
+            else 200_000
+        )
         base = ProviderCapabilities(
             reasoning_continuity=True,
             parallel_tool_calls=True,
