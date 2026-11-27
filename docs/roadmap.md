@@ -1,8 +1,8 @@
 # Agent Forge roadmap
 
-Agent Forge will deliver a verified local coding workflow, measure its quality, and offer the same workflow through a hosted pilot. The [vision](vision.md) describes the user experience. The [strategy](strategy.md) sets the engineering priorities and measures.
+Agent Forge delivers a verified coding harness, scales project execution through a Router–Worker **Super-Agent**, and exposes single and complex multi-agent topologies through a **managed multi-agent cloud infrastructure** and **Agent Forge Studio**. The [vision](vision.md) describes the user outcomes, and the [strategy](strategy.md) defines how progress is measured.
 
-[ADR-002](adr/002-harness-first-reset.md) established independent evaluation and a domain-agnostic core. [Proposed ADR-003](adr/003-local-agent-and-hosted-pilot.md) records the staged local and hosted direction for review.
+[ADR-002](adr/002-harness-first-reset.md) established independent evaluation and a domain-agnostic core. [Proposed ADR-003](adr/003-local-agent-and-hosted-pilot.md) staged the local and hosted pilot path. [ADR-031](adr/031-multi-agent-cloud-platform-and-super-agent.md) evolves the platform scope to include managed multi-agent cloud infrastructure and Super-Agent orchestration while retaining every quality and boundary gate.
 
 ## Delivery milestones
 
@@ -24,6 +24,8 @@ Agent Forge will deliver a verified local coding workflow, measure its quality, 
 | [14. Full ACP Compliance, Remote Transport & Registry Distribution](https://github.com/akoita/agent-forge/milestone/14) | Full [ACP](https://agentclientprotocol.com/get-started/introduction) conformance + schema tests ([#234](https://github.com/akoita/agent-forge/issues/234)), authenticated WebSocket/HTTP transport + workspace bridge ([#235](https://github.com/akoita/agent-forge/issues/235)), and ACP Registry `agent.json` + [IDE interop guide](acp-ide-interop.md) + [ADR-030](adr/030-full-acp-conformance-and-remote-transport.md) ([#236](https://github.com/akoita/agent-forge/issues/236)). |
 | [15. Agent Forge Studio: Web Code Editor](https://github.com/akoita/agent-forge/milestone/15) | [RFC-004](rfcs/004-studio-web-and-electron-editor.md) + React/Monaco editor shell under `apps/studio/` ([#237](https://github.com/akoita/agent-forge/issues/237)); *planned:* ACP WebSocket client + approvals UX ([#238](https://github.com/akoita/agent-forge/issues/238)), and inline diff review + `xterm.js` terminal + local launcher ([#239](https://github.com/akoita/agent-forge/issues/239)). |
 | [16. Agent Forge Studio: Electron Desktop App & Packaging](https://github.com/akoita/agent-forge/milestone/16) | *Planned:* hardened Electron shell under `apps/desktop/` wrapping `apps/studio/` ([#240](https://github.com/akoita/agent-forge/issues/240)), direct `stdio` ACP hosting + `node-pty` + multi-agent Registry launch ([#241](https://github.com/akoita/agent-forge/issues/241)), and cross-platform CI packaging ([#242](https://github.com/akoita/agent-forge/issues/242)). |
+| [17. Super-Agent Coding Orchestrator (Router–Worker & Input Repartition)](https://github.com/akoita/agent-forge/milestone/17) | *Planned ([RFC-005](rfcs/005-super-agent-project-orchestration.md), Epic [#251](https://github.com/akoita/agent-forge/issues/251)):* Ticket ledger + intake repartition + admission matrix + attention budget ([#248](https://github.com/akoita/agent-forge/issues/248)), parallel worktree worker dispatcher + conflict remediation ([#249](https://github.com/akoita/agent-forge/issues/249)), and CLI/ACP/Studio Inbox UX + multi-ticket eval suite ([#250](https://github.com/akoita/agent-forge/issues/250)). |
+| [18. Managed Multi-Agent System Cloud Infrastructure & Declarative DX](https://github.com/akoita/agent-forge/milestone/18) | *Planned ([ADR-031](adr/031-multi-agent-cloud-platform-and-super-agent.md), Epic [#255](https://github.com/akoita/agent-forge/issues/255)):* declarative `system.yaml`/SDK spec + topology validator + dry-run ([#252](https://github.com/akoita/agent-forge/issues/252)), versioned multi-tenant control plane ([#253](https://github.com/akoita/agent-forge/issues/253) with [#41](https://github.com/akoita/agent-forge/issues/41), [#142](https://github.com/akoita/agent-forge/issues/142), [#35](https://github.com/akoita/agent-forge/issues/35)–[#38](https://github.com/akoita/agent-forge/issues/38)), and observability/audit/kill-switch Admin Console ([#254](https://github.com/akoita/agent-forge/issues/254) with [#39](https://github.com/akoita/agent-forge/issues/39), [#28](https://github.com/akoita/agent-forge/issues/28), [#30](https://github.com/akoita/agent-forge/issues/30)). |
 
 The [delivery plan](delivery-plan.md) records prerequisites, issue order, and exit criteria. GitHub tracks current assignments. Use the documented criteria and observed evidence to close a milestone.
 
@@ -32,19 +34,27 @@ The [delivery plan](delivery-plan.md) records prerequisites, issue order, and ex
 ```mermaid
 flowchart LR
     IDE["External IDEs\n(Zed, JetBrains, Neovim)"] -->|"ACP JSON-RPC / stdio"| ACP["agent-forge acp\n(stdio + authenticated WebSocket)"]
-    Web["Web Editor (planned)\napps/studio/ (React + Monaco + xterm.js)"] -->|"ACP JSON-RPC / WebSocket\n+ Workspace API"| ACP
-    Desktop["Electron Desktop (planned)\napps/desktop/ (wraps apps/studio/)"] -->|"IPC -> ACP stdio\n(Agent Forge or any ACP agent)"| ACP
-    ACP --> Core["Agent Forge Core\n(DevSession, ReAct, Code Mode, Subagents, Sandbox, Memory)"]
+    Web["Web Editor & Console\napps/studio/ (Editor, Super-Agent Inbox, Admin)"] -->|"ACP WS + Companion APIs"| ACP
+    Desktop["Electron Desktop (planned)\napps/desktop/ (wraps apps/studio/)"] -->|"IPC -> ACP stdio"| ACP
+    Sys["Declarative Multi-Agent Spec\n(system.yaml / SDK, Milestone 18)"] -->|"Validated Topologies"| Cloud["Managed Cloud Control Plane\n(RBAC, Deploy, Traces, Kill-Switch)"]
+    Web -->|"Deploy & Monitor"| Cloud
+    Cloud -->|"Runs & Quotas"| Super["Super-Agent Router–Worker Engine\n(Ticket Ledger, Admission, Attention Budget)"]
+    ACP --> Super
+    Super --> Core["Agent Forge Core\n(DevSession, ReAct, Code Mode, Worktrees, Sandbox, Memory)"]
 ```
 
 - The core owns the agent loop, tools, configuration, policies, context, events, sandbox interface, and runner contract. Keep it portable and enforce the extension boundary with `scripts/check_boundaries.py`.
 - Extensions own domain profiles, prompts, tools, and schemas. Deliver cloud/blockchain workflows via extension packs (`plugins/cloud-deploy/`, `plugins/evm-foundry/`).
-- The hosted application owns identity, tenancy, queues, artifacts, deployment, and UI. Its release work is tracked in [#142](https://github.com/akoita/agent-forge/issues/142), with pilot UI issues ([#28](https://github.com/akoita/agent-forge/issues/28), [#30](https://github.com/akoita/agent-forge/issues/30)) aligned to share `apps/studio/` primitives once scaffolded.
-- Planned editor packages (`apps/studio/` and `apps/desktop/`) live outside `agent_forge/*` in the monorepo, use standard ACP JSON-RPC as the sole agent protocol, and ship as a lightweight React + Monaco + `xterm.js` shell rather than a VS Code/Theia fork.
-- Measure the effect of harness changes on task success, cost, latency, and tool failures. Add complexity when evidence shows it solves a user problem.
+- The hosted application and control plane own identity, tenancy, system versioning, quotas, queues, artifacts, observability, audit logs, and kill-switch governance. Release work spans [#142](https://github.com/akoita/agent-forge/issues/142), [#253](https://github.com/akoita/agent-forge/issues/253), and [#254](https://github.com/akoita/agent-forge/issues/254), sharing `apps/studio/` UI primitives.
+- Studio packages (`apps/studio/` and `apps/desktop/`) live outside `agent_forge/*` in the monorepo, use standard ACP JSON-RPC for coding sessions, and ship as a lightweight React + Monaco + `xterm.js` shell rather than a VS Code/Theia fork.
+- Measure the effect of harness, Super-Agent, and multi-agent system changes on task success, cost, latency, human interruptions, and tool failures.
 
 ## Later work
 
-Milestones 11–14 (`v0.8.0` SOTA harness, extension packs, `.agent-forge/memory.md`, and full ACP conformance + WebSocket/Registry distribution in [#234](https://github.com/akoita/agent-forge/issues/234)–[#236](https://github.com/akoita/agent-forge/issues/236)) have landed. Planned engineering tracks cover Agent Forge Studio Web/Electron in Milestones 15–16 ([#237](https://github.com/akoita/agent-forge/issues/237)–[#242](https://github.com/akoita/agent-forge/issues/242)) alongside the Milestone 6 hosted pilot ([#142](https://github.com/akoita/agent-forge/issues/142)).
+Milestones 11–14 (`v0.8.0` SOTA harness, extension packs, `.agent-forge/memory.md`, and full ACP conformance + WebSocket/Registry distribution in [#234](https://github.com/akoita/agent-forge/issues/234)–[#236](https://github.com/akoita/agent-forge/issues/236)) have landed. Planned engineering tracks cover:
 
-Fund fleet scaling, warm pools, and capacity dashboards when pilot measurements identify a bottleneck. The planned interfaces are the CLI, API, ACP, Agent Forge Studio (Web and Electron desktop), and the pilot UI. Custom agent protocols, orchestration DSLs, vector memory by default, bespoke per-IDE plugins, and a tool marketplace remain out of scope.
+- **Agent Forge Studio (Web & Electron):** Milestones 15–16 ([#237](https://github.com/akoita/agent-forge/issues/237)–[#242](https://github.com/akoita/agent-forge/issues/242)) alongside Milestone 6 ([#142](https://github.com/akoita/agent-forge/issues/142)).
+- **Coding Super-Agent Orchestrator:** Milestone 17 ([#251](https://github.com/akoita/agent-forge/issues/251): [#248](https://github.com/akoita/agent-forge/issues/248)–[#250](https://github.com/akoita/agent-forge/issues/250)).
+- **Managed Multi-Agent Cloud Infrastructure:** Milestone 18 ([#255](https://github.com/akoita/agent-forge/issues/255): [#252](https://github.com/akoita/agent-forge/issues/252)–[#254](https://github.com/akoita/agent-forge/issues/254)).
+
+The planned interfaces are the CLI, declarative `system.yaml`/SDK, ACP, Agent Forge Studio (Web, Electron desktop, Inbox, and Admin Console), and the managed cloud APIs. Custom non-ACP/non-MCP wire protocols, vector memory by default, bespoke per-IDE plugins, and an open third-party tool marketplace remain out of scope.

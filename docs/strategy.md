@@ -12,7 +12,17 @@ Use a shared provider factory for the CLI and service. Keep protocol details and
 
 ## Deploy in stages
 
-Extract a shared runner and preserve existing extension compatibility. Deploy an owner-operated GCP workflow with durable status, an authenticated canary, and private artifacts. Before inviting users, verify isolation, ownership, quotas, cancellation, and cleanup. The cloud application owns these operating concerns.
+Extract a shared runner and preserve existing extension compatibility. Deploy an owner-operated GCP workflow with durable status, an authenticated canary, and private artifacts, then validate isolation, ownership, quotas, cancellation, and cleanup in the invite-only pilot.
+
+Extend that verified foundation into the **Managed Multi-Agent System Cloud Infrastructure**:
+
+- **Declarative DX first:** Validate single- and multi-agent topologies (`system.yaml` / SDK) locally with dry-run parity before cloud deployment.
+- **Controlled rollout:** Version every multi-agent system revision with canary promotion, rollback, and multi-tenant isolation.
+- **Operational governance:** Ship OpenTelemetry traces, cost/eval telemetry, immutable approval audit logs, and kill-switch/pause controls in the same control plane.
+
+## Scale from single agents to verified multi-agent systems
+
+Introduce project-level **Super-Agent** orchestration ([RFC-005](rfcs/005-super-agent-project-orchestration.md)) to break multi-part project inputs into dependency-ordered, worktree-isolated tickets under an explicit admission matrix and human attention budget. Measure multi-agent and Super-Agent orchestrations against single-session baselines on verified completion rate, merge-conflict rate, human-interruption count, and token cost before promoting defaults.
 
 ## Maintain the references
 

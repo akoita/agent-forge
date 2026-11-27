@@ -8,13 +8,14 @@
 
 ## 1. Mission & direction
 
-Agent Forge is a **small, measurable, high-correctness coding harness** — not a
-broad agent platform. Every change should make the harness more correct or
-better measured, not merely broader.
+Agent Forge is a **small, measurable, high-correctness coding harness** powering a
+**managed multi-agent system cloud platform** and project-level **Super-Agent**
+orchestration. Every change must preserve the compact, domain-agnostic core and
+improve correctness, measurability, safety, or operability.
 
 - **Product references:** [vision](docs/vision.md) and [strategy](docs/strategy.md).
 - **Canonical roadmap:** `docs/roadmap.md`
-- **Pivot decision:** `docs/adr/002-harness-first-reset.md`
+- **Architecture direction:** `docs/adr/002-harness-first-reset.md` (harness baseline) and `docs/adr/031-multi-agent-cloud-platform-and-super-agent.md` (multi-agent cloud & Super-Agent evolution)
 
 For a substantive change, link the vision or strategy objective and its
 verification evidence in the issue or PR. Update the reference when an
